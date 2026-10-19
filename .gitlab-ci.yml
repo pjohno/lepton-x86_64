@@ -348,7 +348,7 @@ trigger-depot-upload-job:
   variables:
     GIT_STRATEGY: none
   script:
-    - apt-get -qq update && apt-get install -y --no-install-recommends curl
+    - apt-get -qq update && apt-get install -y --no-install-recommends curl ca-certificates
     - >
       curl --fail --location --request POST
       --form "token=${LEPTON_DEPOT_TRIGGER_TOKEN}"
