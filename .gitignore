@@ -18,3 +18,6 @@ compat_tool.tar.zst
 /image-14/patches/snapshots/
 
 /docs/
+
+# Local build environment (machine-specific)
+/.build-env
