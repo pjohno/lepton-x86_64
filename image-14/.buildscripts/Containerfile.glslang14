@@ -1,0 +1,11 @@
+# Extend the existing Ubuntu 22.04 Lepton builder for glslang 14.
+# Build with:
+# podman build -f image-14/.buildscripts/Containerfile.glslang14 \
+#   -t lepton-builder-glslang14:latest .
+
+FROM lepton-builder:latest
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+       --no-install-recommends cmake \
+    && rm -rf /var/lib/apt/lists/*
