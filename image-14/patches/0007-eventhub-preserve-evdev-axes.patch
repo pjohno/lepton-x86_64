@@ -1,0 +1,48 @@
+diff --git a/services/inputflinger/reader/EventHub.cpp b/services/inputflinger/reader/EventHub.cpp
+index fa508f270ad4dac2fe2bf38098c781b5fcb6e0c6..d3e51dcec8480411f905d0e4eba0a4b8417576f1 100644
+--- a/services/inputflinger/reader/EventHub.cpp
++++ b/services/inputflinger/reader/EventHub.cpp
+@@ -647,13 +647,13 @@ void EventHub::Device::populateAbsoluteAxisStates() {
+         }
+ 
+         struct input_absinfo info {};
+-#if 0
+-        if (ioctl(fd, EVIOCGABS(axis), &info)) {
+-            ALOGE("Error reading absolute controller %d for device %s fd %d: %s", axis,
+-                  identifier.name.c_str(), fd, strerror(errno));
+-            continue;
+-        }
+-#endif
++        if (identifier.location != "wayland") {
++            if (ioctl(fd, EVIOCGABS(axis), &info)) {
++                ALOGE("Error reading absolute controller %d for device %s fd %d: %s", axis,
++                      identifier.name.c_str(), fd, strerror(errno));
++                continue;
++            }
++        } else {
+         if (property_get("waydroid.display_width", property, nullptr) > 0) {
+             width = atoi(property);
+         }
+@@ -695,6 +695,7 @@ void EventHub::Device::populateAbsoluteAxisStates() {
+         info.flat = 0;
+         info.fuzz = 0;
+         info.resolution = 1;
++        }
+ 
+         auto& [axisInfo, value] = absState[axis];
+         axisInfo.valid = true;
+@@ -1106,13 +1107,7 @@ status_t EventHub::getAbsoluteAxisInfo(int32_t deviceId, int axis,
+     info.fuzz = outAxisInfo->fuzz;
+     info.resolution = outAxisInfo->resolution;
+ 
+-    if (device->identifier.location != "wayland") {
+-        if (ioctl(device->fd, EVIOCGABS(axis), &info)) {
+-            ALOGW("Error reading absolute controller %d for device %s fd %d, errno=%d", axis,
+-                  device->identifier.name.c_str(), device->fd, errno);
+-            return -errno;
+-        }
+-    } else {
++    if (device->identifier.location == "wayland") {
+     if (property_get("waydroid.display_width", property, nullptr) > 0) {
+         width = atoi(property);
+     }

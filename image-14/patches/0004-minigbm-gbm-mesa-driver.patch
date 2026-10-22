@@ -1,0 +1,1334 @@
+diff --git a/cros_gralloc/cros_gralloc_driver.cc b/cros_gralloc/cros_gralloc_driver.cc
+index 550f75adc0c335ab9914e718488ff56cc5eec30e..b84e2127e976cc6d602af3ecab68c9ba78b001e4 100644
+--- a/cros_gralloc/cros_gralloc_driver.cc
++++ b/cros_gralloc/cros_gralloc_driver.cc
+@@ -91,6 +91,7 @@ std::shared_ptr<cros_gralloc_driver> cros_gralloc_driver::get_instance()
+ 	return s_instance;
+ }
+ 
++#ifndef DRV_EXTERNAL
+ static struct driver *init_try_node(int idx, char const *str)
+ {
+ 	int fd;
+@@ -148,6 +149,13 @@ static struct driver *init_try_nodes()
+ 	return nullptr;
+ }
+ 
++#else
++static struct driver *init_try_nodes()
++{
++        return drv_create(-1);
++}
++#endif
++
+ static void drv_destroy_and_close(struct driver *drv)
+ {
+ 	int fd = drv_get_fd(drv);
+diff --git a/drv.c b/drv.c
+index e3a71cb08db25cea0e5002eb120aa92474d0477c..c3b7957290f046797e384975d5f324a342aefd18 100644
+--- a/drv.c
++++ b/drv.c
+@@ -84,8 +84,16 @@ void drv_preload(bool load)
+ 	}
+ }
+ 
++#ifdef DRV_EXTERNAL
++extern struct backend *init_external_backend(void);
++#endif
++
+ static const struct backend *drv_get_backend(int fd)
+ {
++#ifdef DRV_EXTERNAL
++    (void)fd;
++    return init_external_backend();
++#else
+ 	drmVersionPtr drm_version;
+ 	unsigned int i;
+ 
+@@ -104,6 +112,7 @@ static const struct backend *drv_get_backend(int fd)
+ 
+ 	drmFreeVersion(drm_version);
+ 	return NULL;
++#endif
+ }
+ 
+ struct driver *drv_create(int fd)
+@@ -655,7 +664,10 @@ int drv_bo_get_plane_fd(struct bo *bo, size_t plane)
+ 	if (bo->is_test_buffer)
+ 		return -EINVAL;
+ 
+-	ret = drmPrimeHandleToFD(bo->drv->fd, bo->handle.u32, DRM_CLOEXEC | DRM_RDWR, &fd);
++	if (bo->drv->backend->bo_get_plane_fd)
++            return bo->drv->backend->bo_get_plane_fd(bo, plane);
++
++        ret = drmPrimeHandleToFD(bo->drv->fd, bo->handle.u32, DRM_CLOEXEC | DRM_RDWR, &fd);
+ 
+ 	// Older DRM implementations blocked DRM_RDWR, but gave a read/write mapping anyways
+ 	if (ret)
+diff --git a/drv_priv.h b/drv_priv.h
+index d9888d0c215b74f8312c3598d7effa43d1431b21..73405947666cac913fdceace1d36805800909ef7 100644
+--- a/drv_priv.h
++++ b/drv_priv.h
+@@ -91,6 +91,7 @@ struct backend {
+ 	/* Called on free if this bo is the last object referencing the contained GEM BOs */
+ 	int (*bo_destroy)(struct bo *bo);
+ 	int (*bo_import)(struct bo *bo, struct drv_import_fd_data *data);
++    int (*bo_get_plane_fd)(struct bo *bo, size_t plane);
+ 	void *(*bo_map)(struct bo *bo, struct vma *vma, uint32_t map_flags);
+ 	int (*bo_unmap)(struct bo *bo, struct vma *vma);
+ 	int (*bo_invalidate)(struct bo *bo, struct mapping *mapping);
+diff --git a/gbm_mesa_driver/Android.bp b/gbm_mesa_driver/Android.bp
+new file mode 100644
+index 0000000000000000000000000000000000000000..62ae13c464f780eea91458f34530714be9e79ddc
+--- /dev/null
++++ b/gbm_mesa_driver/Android.bp
+@@ -0,0 +1,63 @@
++filegroup {
++    name: "minigbm_gbm_mesa_internal_files",
++    srcs: ["gbm_mesa_internals.cpp"],
++}
++
++filegroup {
++    name: "minigbm_gbm_mesa_backend_files",
++    srcs: ["gbm_mesa_driver.cpp"],
++}
++
++cc_library_shared {
++    name: "libminigbm_gralloc_gbm_mesa",
++    defaults: ["minigbm_cros_gralloc_library_defaults"],
++    cflags: [
++        "-DDRV_EXTERNAL",
++    ],
++    srcs: [
++        ":minigbm_gbm_mesa_internal_files",
++        ":minigbm_gbm_mesa_backend_files",
++    ],
++
++    cpp_std: "c++17",
++}
++
++
++cc_binary {
++    name: "android.hardware.graphics.allocator@4.0-service.minigbm_gbm_mesa",
++    required: ["gbm_mesa.allocator@4.0.xml"],
++    init_rc: ["android.hardware.graphics.allocator@4.0-service.minigbm_gbm_mesa.rc"],
++    defaults: ["minigbm_gralloc4_allocator_defaults"],
++    shared_libs: ["libminigbm_gralloc_gbm_mesa"],
++}
++
++cc_library_shared {
++    name: "android.hardware.graphics.mapper@4.0-impl.minigbm_gbm_mesa",
++    required: ["gbm_mesa.mapper@4.0.xml"],
++    defaults: ["minigbm_gralloc4_common_defaults"],
++    shared_libs: ["libminigbm_gralloc_gbm_mesa"],
++
++    srcs: [
++        ":minigbm_gralloc4_mapper_files",
++    ],
++}
++
++cc_library_shared {
++    name: "gralloc.minigbm_gbm_mesa",
++    defaults: ["minigbm_cros_gralloc0_defaults"],
++    shared_libs: ["libminigbm_gralloc_gbm_mesa"],
++}
++
++prebuilt_etc {
++    name: "gbm_mesa.allocator@4.0.xml",
++    src: "gbm_mesa.allocator@4.0.xml",
++    vendor: true,
++    sub_dir: "vintf/manifest",
++}
++
++prebuilt_etc {
++    name: "gbm_mesa.mapper@4.0.xml",
++    src: "gbm_mesa.mapper@4.0.xml",
++    vendor: true,
++    sub_dir: "vintf/manifest",
++}
+diff --git a/gbm_mesa_driver/Android.mk b/gbm_mesa_driver/Android.mk
+new file mode 100644
+index 0000000000000000000000000000000000000000..c4a4c02c84b008fc312b8aaca4b429c837d93825
+--- /dev/null
++++ b/gbm_mesa_driver/Android.mk
+@@ -0,0 +1,38 @@
++# Permission is hereby granted, free of charge, to any person obtaining a
++# copy of this software and associated documentation files (the "Software"),
++# to deal in the Software without restriction, including without limitation
++# the rights to use, copy, modify, merge, publish, distribute, sublicense,
++# and/or sell copies of the Software, and to permit persons to whom the
++# Software is furnished to do so, subject to the following conditions:
++#
++# The above copyright notice and this permission notice shall be included
++# in all copies or substantial portions of the Software.
++#
++# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++# DEALINGS IN THE SOFTWARE.
++
++LOCAL_PATH := $(call my-dir)
++
++ifneq ($(filter true, $(BOARD_MESA3D_BUILD_LIBGBM)),)
++include $(CLEAR_VARS)
++
++LOCAL_SRC_FILES := \
++    gbm_mesa_wrapper.cpp  \
++
++LOCAL_SHARED_LIBRARIES := \
++    libcutils             \
++    libdrm                \
++    libgbm_mesa           \
++    liblog                \
++
++LOCAL_MODULE := libgbm_mesa_wrapper
++LOCAL_MODULE_TAGS := optional
++LOCAL_VENDOR_MODULE := true
++
++include $(BUILD_SHARED_LIBRARY)
++endif
+diff --git a/gbm_mesa_driver/UniqueFd.h b/gbm_mesa_driver/UniqueFd.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..d2de5fbfe99f7e30240903f3a87189a3b98681b8
+--- /dev/null
++++ b/gbm_mesa_driver/UniqueFd.h
+@@ -0,0 +1,115 @@
++/*
++ * Copyright (C) 2021 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef UNIQUEFD_H_
++#define UNIQUEFD_H_
++
++#include <unistd.h>
++
++#include <memory>
++
++/*
++ * Using UniqueFd:
++ * 1. Create UniqueFd object:
++ *    auto fd_obj = UniqueFd(open("SomeFile", xxx));
++ *
++ * 2. Check whether the fd_obj is empty:
++ *    if (!fd_obj) { return -errno; }
++ *
++ * 3. Accessing the file descriptor:
++ *    int ret = read(fd_obj.Get(), buf, buf_size);
++ *
++ * 4. Closing the file:
++ *    FD will be closed once execution leaves fd_obj scope (on any return,
++ *    exception, destruction of class/struct where object is member, etc.).
++ *    User can also force closing the fd_obj by calling:
++ *      fd_obj = UniqueFd();
++ *      // fd is closed and fd_obj is empty now.
++ *
++ * 5. File descriptor may be transferred to the code, which will close it after
++ *    using. This can be done in 2 ways:
++ *    a. Duplicate the fd, in this case both fds should be closed separately:
++ *      int out_fd = dup(fd_obj.Get();
++ *      ...
++ *      close(out_fd);
++ *    b. Transfer ownership, use this method if you do not need the fd anymore.
++ *      int out_fd = fd_obj.Release();
++ *      // fd_obj is empty now.
++ *      ...
++ *      close(out_fd);
++ *
++ * 6. Transferring fd into another UniqueFD object:
++ *    UniqueFd fd_obj_2 = std::move(fd_obj);
++ *    // fd_obj empty now
++ */
++
++constexpr int kEmptyFd = -1;
++
++class UniqueFd
++{
++      public:
++	UniqueFd() = default;
++	explicit UniqueFd(int fd) : fd_(fd){};
++
++	auto Release [[nodiscard]] () -> int
++	{
++		return std::exchange(fd_, kEmptyFd);
++	}
++
++	auto Get [[nodiscard]] () const -> int
++	{
++		return fd_;
++	}
++
++	explicit operator bool() const
++	{
++		return fd_ != kEmptyFd;
++	}
++
++	~UniqueFd()
++	{
++		Set(kEmptyFd);
++	}
++
++	/* Allow move semantics */
++	UniqueFd(UniqueFd &&rhs) noexcept
++	{
++		Set(rhs.Release());
++	}
++
++	auto operator=(UniqueFd &&rhs) noexcept -> UniqueFd &
++	{
++		Set(rhs.Release());
++		return *this;
++	}
++
++	/* Disable copy semantics */
++	UniqueFd(const UniqueFd &) = delete;
++	auto operator=(const UniqueFd &) = delete;
++
++      private:
++	void Set(int new_fd)
++	{
++		if (fd_ != kEmptyFd) {
++			close(fd_);
++		}
++		fd_ = new_fd;
++	}
++
++	int fd_ = kEmptyFd;
++};
++
++#endif
+diff --git a/gbm_mesa_driver/android.hardware.graphics.allocator@4.0-service.minigbm_gbm_mesa.rc b/gbm_mesa_driver/android.hardware.graphics.allocator@4.0-service.minigbm_gbm_mesa.rc
+new file mode 100644
+index 0000000000000000000000000000000000000000..f2d956f56046d3062ddf2dc99411ecf19ee097fb
+--- /dev/null
++++ b/gbm_mesa_driver/android.hardware.graphics.allocator@4.0-service.minigbm_gbm_mesa.rc
+@@ -0,0 +1,29 @@
++#
++# Copyright 2020 The Android Open Source Project
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#
++
++service vendor.graphics.allocator-4-0 /vendor/bin/hw/android.hardware.graphics.allocator@4.0-service.minigbm_gbm_mesa
++    interface android.hardware.graphics.allocator@4.0::IAllocator default
++    class hal animation
++    user system
++    group graphics drmrpc
++    capabilities SYS_NICE
++    onrestart restart surfaceflinger
++    task_profiles ServiceCapacityLow
++    disabled
++
++on early-init && property:ro.hardware.gralloc=minigbm_gbm_mesa
++    stop vendor.gralloc-2-0
++    enable vendor.graphics.allocator-4-0
+diff --git a/gbm_mesa_driver/gbm_mesa.allocator@4.0.xml b/gbm_mesa_driver/gbm_mesa.allocator@4.0.xml
+new file mode 100644
+index 0000000000000000000000000000000000000000..04695efc2165ad6013043099dad61a851dc8454d
+--- /dev/null
++++ b/gbm_mesa_driver/gbm_mesa.allocator@4.0.xml
+@@ -0,0 +1,11 @@
++<manifest version="1.0" type="device">
++    <hal format="hidl">
++        <name>android.hardware.graphics.allocator</name>
++        <transport>hwbinder</transport>
++        <version>4.0</version>
++        <interface>
++            <name>IAllocator</name>
++            <instance>default</instance>
++        </interface>
++    </hal>
++</manifest>
+diff --git a/gbm_mesa_driver/gbm_mesa.mapper@4.0.xml b/gbm_mesa_driver/gbm_mesa.mapper@4.0.xml
+new file mode 100644
+index 0000000000000000000000000000000000000000..3160c7727a09565dfb9b064939259f86a1517c46
+--- /dev/null
++++ b/gbm_mesa_driver/gbm_mesa.mapper@4.0.xml
+@@ -0,0 +1,11 @@
++<manifest version="1.0" type="device">
++    <hal format="hidl">
++        <name>android.hardware.graphics.mapper</name>
++        <transport arch="32+64">passthrough</transport>
++        <version>4.0</version>
++        <interface>
++            <name>IMapper</name>
++            <instance>default</instance>
++        </interface>
++    </hal>
++</manifest>
+diff --git a/gbm_mesa_driver/gbm_mesa_driver.cpp b/gbm_mesa_driver/gbm_mesa_driver.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..a0d4b1960b2162b53bbcd792b6cda52be05a5575
+--- /dev/null
++++ b/gbm_mesa_driver/gbm_mesa_driver.cpp
+@@ -0,0 +1,48 @@
++/*
++ * Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include "gbm_mesa_internals.h"
++
++#include "drv_priv.h"
++#include "util.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++static char gbm_mesa_name[] = "gbm_mesa";
++
++struct backend gbm_mesa_backend = {
++	.name = gbm_mesa_name,
++	.init = gbm_mesa_driver_init,
++	.close = gbm_mesa_driver_close,
++	.bo_create = gbm_mesa_bo_create,
++	.bo_destroy = gbm_mesa_bo_destroy,
++	.bo_import = gbm_mesa_bo_import,
++        .bo_get_plane_fd = gbm_mesa_bo_get_plane_fd,
++	.bo_map = gbm_mesa_bo_map,
++	.bo_unmap = gbm_mesa_bo_unmap,
++	.resolve_format_and_use_flags = gbm_mesa_resolve_format_and_use_flags,
++};
++
++struct backend *init_external_backend()
++{
++	return &gbm_mesa_backend;
++}
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/gbm_mesa_driver/gbm_mesa_internals.cpp b/gbm_mesa_driver/gbm_mesa_internals.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..78890bfa72d727f6ba00fa13d83528d3a1136dd6
+--- /dev/null
++++ b/gbm_mesa_driver/gbm_mesa_internals.cpp
+@@ -0,0 +1,507 @@
++/*
++ * Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#define LOG_TAG "GBM-MESA-GRALLOC"
++
++extern "C" {
++#include "drv_helpers.h"
++}
++
++#include "../drv.h"
++#include "gbm_mesa_wrapper.h"
++
++#include "UniqueFd.h"
++#include "drv_priv.h"
++#include "util.h"
++#include <algorithm>
++#include <array>
++#include <cutils/properties.h>
++#include <dlfcn.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <gbm.h>
++#include <glob.h>
++#include <iterator>
++#include <linux/dma-buf.h>
++#include <log/log.h>
++#include <stdlib.h>
++#include <string.h>
++#include <string>
++#include <sys/mman.h>
++#include <sys/stat.h>
++#include <sys/sysmacros.h>
++#include <sys/types.h>
++#include <unistd.h>
++#include <vector>
++#include <xf86drm.h>
++#include <xf86drmMode.h>
++
++#define GBM_WRAPPER_NAME "libgbm_mesa_wrapper.so"
++#define GBM_GET_OPS_SYMBOL "get_gbm_ops"
++
++void gbm_mesa_resolve_format_and_use_flags(struct driver *drv, uint32_t format, uint64_t use_flags,
++					   uint32_t *out_format, uint64_t *out_use_flags)
++{
++	*out_format = format;
++	*out_use_flags = use_flags;
++	switch (format) {
++	case DRM_FORMAT_FLEX_IMPLEMENTATION_DEFINED:
++		/* Camera subsystem requires NV12. */
++		if (use_flags & (BO_USE_CAMERA_READ | BO_USE_CAMERA_WRITE)) {
++			*out_format = DRM_FORMAT_NV12;
++		} else {
++			/*HACK: See b/28671744 */
++			*out_format = DRM_FORMAT_XBGR8888;
++		}
++		break;
++	case DRM_FORMAT_FLEX_YCbCr_420_888:
++		*out_format = DRM_FORMAT_NV12;
++		break;
++	case DRM_FORMAT_BGR565:
++		/* mesa3d doesn't support BGR565 */
++		*out_format = DRM_FORMAT_RGB565;
++		break;
++	}
++}
++
++static const uint32_t scanout_render_formats[] = { DRM_FORMAT_ARGB8888, DRM_FORMAT_XRGB8888,
++						   DRM_FORMAT_ABGR8888, DRM_FORMAT_XBGR8888,
++						   DRM_FORMAT_RGB565 };
++
++static const uint32_t texture_only_formats[] = { DRM_FORMAT_NV12, DRM_FORMAT_NV21,
++						 DRM_FORMAT_YVU420, DRM_FORMAT_YVU420_ANDROID };
++
++static struct format_metadata linear_metadata = { 1, 0, DRM_FORMAT_MOD_LINEAR };
++
++int gbm_mesa_driver_init(struct driver *drv)
++{
++	drv_add_combinations(drv, scanout_render_formats, ARRAY_SIZE(scanout_render_formats),
++			     &linear_metadata, BO_USE_RENDER_MASK | BO_USE_SCANOUT);
++
++	drv_add_combinations(drv, texture_only_formats, ARRAY_SIZE(texture_only_formats),
++			     &linear_metadata, BO_USE_TEXTURE_MASK | BO_USE_SCANOUT);
++
++	drv_add_combination(drv, DRM_FORMAT_R8, &linear_metadata, BO_USE_SW_MASK | BO_USE_LINEAR);
++
++	// Fixes android.hardware.cts.HardwareBufferTest#testCreate CTS test
++	drv_add_combination(drv, DRM_FORMAT_BGR888, &linear_metadata, BO_USE_SW_MASK);
++
++	drv_modify_combination(drv, DRM_FORMAT_NV12, &linear_metadata,
++			       BO_USE_HW_VIDEO_ENCODER | BO_USE_HW_VIDEO_DECODER |
++				   BO_USE_CAMERA_READ | BO_USE_CAMERA_WRITE);
++	drv_modify_combination(drv, DRM_FORMAT_NV21, &linear_metadata, BO_USE_HW_VIDEO_ENCODER);
++
++	/*
++	 * R8 format is used for Android's HAL_PIXEL_FORMAT_BLOB and is used for JPEG snapshots
++	 * from camera and input/output from hardware decoder/encoder.
++	 */
++	drv_modify_combination(drv, DRM_FORMAT_R8, &linear_metadata,
++			       BO_USE_CAMERA_READ | BO_USE_CAMERA_WRITE | BO_USE_HW_VIDEO_DECODER |
++				   BO_USE_HW_VIDEO_ENCODER);
++
++	/*
++	 * Android also frequently requests YV12 formats for some camera implementations
++	 * (including the external provider implmenetation).
++	 */
++	drv_modify_combination(drv, DRM_FORMAT_YVU420_ANDROID, &linear_metadata,
++			       BO_USE_CAMERA_READ | BO_USE_CAMERA_WRITE);
++
++	return drv_modify_linear_combinations(drv);
++}
++
++struct GbmMesaDriver {
++	~GbmMesaDriver()
++	{
++		if (gbm_dev)
++			wrapper->dev_destroy(gbm_dev);
++
++		if (dl_handle)
++			dlclose(dl_handle);
++	}
++
++	struct gbm_ops *wrapper = nullptr;
++	struct gbm_device *gbm_dev = nullptr;
++	void *dl_handle = nullptr;
++
++	UniqueFd gbm_node_fd;
++	UniqueFd gpu_node_fd;
++};
++
++struct GbmMesaDriverPriv {
++	std::shared_ptr<GbmMesaDriver> gbm_mesa_drv;
++};
++
++/*
++ * Check if target device has KMS.
++ */
++int is_kms_dev(int fd)
++{
++	auto res = drmModeGetResources(fd);
++	if (!res)
++		return false;
++
++	bool is_kms = res->count_crtcs > 0 && res->count_connectors > 0 && res->count_encoders > 0;
++
++	drmModeFreeResources(res);
++
++	return is_kms;
++}
++
++/*
++ * Search for a KMS device. Return opened file descriptor on success.
++ */
++int open_drm_dev(bool card_node, std::function<bool(int, bool, std::string)> found)
++{
++	glob_t glob_buf;
++	memset(&glob_buf, 0, sizeof(glob_buf));
++	int fd;
++	const char *pattern = card_node ? "/dev/dri/card*" : "/dev/dri/renderD*";
++
++	int ret = glob(pattern, 0, NULL, &glob_buf);
++	if (ret) {
++		globfree(&glob_buf);
++		return -EINVAL;
++	}
++
++	for (size_t i = 0; i < glob_buf.gl_pathc; ++i) {
++		fd = open(glob_buf.gl_pathv[i], O_RDWR | O_CLOEXEC);
++		if (fd < 0) {
++			drv_loge("Unable to open %s with error %s", glob_buf.gl_pathv[i],
++				 strerror(errno));
++			continue;
++		}
++
++		drmVersionPtr drm_version;
++		drm_version = drmGetVersion(fd);
++		std::string drm_name(drm_version->name);
++		drmFreeVersion(drm_version);
++
++		if (found(fd, is_kms_dev(fd), drm_name))
++			continue;
++
++		close(fd);
++		fd = 0;
++	}
++
++	globfree(&glob_buf);
++
++	return 0;
++}
++
++static std::shared_ptr<GbmMesaDriver> gbm_mesa_get_or_init_driver(struct driver *drv,
++								  bool mapper_sphal)
++{
++	std::shared_ptr<GbmMesaDriver> gbm_mesa_drv;
++
++	if (!drv->priv) {
++		gbm_mesa_drv = std::make_unique<GbmMesaDriver>();
++
++		char path[PROPERTY_VALUE_MAX];
++		if (property_get("gralloc.gbm.device", path, NULL) > 0) {
++			drv_logi("Using device %s as requested by gralloc.gbm.device\n", path);
++			gbm_mesa_drv->gbm_node_fd = UniqueFd(open(path, O_RDWR | O_CLOEXEC));
++		}
++
++		open_drm_dev(false, [&](int fd, bool is_kms, std::string drm_name) -> bool {
++			if (gbm_mesa_drv->gbm_node_fd)
++				return false;
++
++			drv_logi("Found GPU %s\n", drm_name.c_str());
++			gbm_mesa_drv->gbm_node_fd = UniqueFd(fd);
++			return true;
++		});
++
++		if (!gbm_mesa_drv->gbm_node_fd) {
++			drv_loge("Unable to find or open DRM node");
++			return nullptr;
++		}
++
++		gbm_mesa_drv->dl_handle = dlopen(GBM_WRAPPER_NAME, RTLD_NOW);
++		if (gbm_mesa_drv->dl_handle == nullptr) {
++			drv_loge("%s", dlerror());
++			drv_loge("Unable to open '%s' shared library", GBM_WRAPPER_NAME);
++			return nullptr;
++		}
++
++		auto get_gbm_ops =
++		    (struct gbm_ops * (*)(void)) dlsym(gbm_mesa_drv->dl_handle, GBM_GET_OPS_SYMBOL);
++		if (get_gbm_ops == nullptr) {
++			drv_loge("Unable to find '%s' symbol", GBM_GET_OPS_SYMBOL);
++			return nullptr;
++		}
++
++		gbm_mesa_drv->wrapper = get_gbm_ops();
++		if (gbm_mesa_drv->wrapper == nullptr) {
++			drv_loge("Unable to get wrapper ops");
++			return nullptr;
++		}
++
++		gbm_mesa_drv->gbm_dev =
++		    gbm_mesa_drv->wrapper->dev_create(gbm_mesa_drv->gbm_node_fd.Get());
++		if (!gbm_mesa_drv->gbm_dev) {
++			drv_loge("Unable to create gbm_mesa driver");
++			return nullptr;
++		}
++
++		auto priv = new GbmMesaDriverPriv();
++		priv->gbm_mesa_drv = gbm_mesa_drv;
++		drv->priv = priv;
++	} else {
++		gbm_mesa_drv = ((GbmMesaDriverPriv *)drv->priv)->gbm_mesa_drv;
++	}
++
++	return gbm_mesa_drv;
++}
++
++void gbm_mesa_driver_close(struct driver *drv)
++{
++	if (drv->priv) {
++		delete (GbmMesaDriverPriv *)(drv->priv);
++		drv->priv = nullptr;
++	}
++}
++
++struct GbmMesaBoPriv {
++	~GbmMesaBoPriv()
++	{
++		if (gbm_bo) {
++			auto wr = drv->wrapper;
++			wr->free(gbm_bo);
++		}
++	}
++
++	std::shared_ptr<GbmMesaDriver> drv;
++	uint32_t map_stride = 0;
++	UniqueFd fds[DRV_MAX_PLANES];
++	struct gbm_bo *gbm_bo = nullptr;
++};
++
++static void gbm_mesa_inode_to_handle(struct bo *bo)
++{
++	// DRM handles are used as unique buffer keys
++	// Since we are not relying on DRM, provide fstat->inode instead
++	auto priv = (GbmMesaBoPriv *)bo->priv;
++
++	for (size_t plane = 0; plane < bo->meta.num_planes; plane++) {
++		struct stat sb;
++		fstat(priv->fds[plane].Get(), &sb);
++		if (plane == 0)
++                    bo->handle.u32 = (uint32_t)sb.st_ino;
++	}
++}
++
++int gbm_mesa_bo_create(struct bo *bo, uint32_t width, uint32_t height, uint32_t format,
++		       uint64_t use_flags)
++{
++	/* For some ARM SOCs, if no more free CMA available, buffer can be allocated in VRAM but HWC
++	 * won't be able to display it directly, using GPU for compositing */
++	bool scanout_strong = false;
++	bool bo_layout_ready = false;
++	uint32_t size_align = 1;
++	int err = 0;
++
++	auto drv = gbm_mesa_get_or_init_driver(bo->drv, false);
++	if (drv == nullptr) {
++		drv_loge("Failed to init gbm driver");
++		return -EINVAL;
++	}
++
++	auto wr = drv->wrapper;
++
++	struct alloc_args alloc_args = {
++		.gbm = drv->gbm_dev,
++		.width = width,
++		.height = height,
++		.drm_format = wr->get_gbm_format(format) ? format : 0,
++		.force_linear = (use_flags & BO_USE_SW_MASK) != 0,
++		.needs_map_stride = (use_flags & BO_USE_SW_MASK) != 0,
++		.use_scanout = (use_flags & BO_USE_SCANOUT) != 0,
++	};
++
++	if (alloc_args.drm_format == 0) {
++		/* Always use linear for spoofed format allocations. */
++		drv_bo_from_format(bo, alloc_args.width, 1, alloc_args.height, format);
++		bo_layout_ready = true;
++		bo->meta.total_size = ALIGN(bo->meta.total_size, size_align);
++		alloc_args.drm_format = DRM_FORMAT_R8;
++		alloc_args.width = bo->meta.total_size;
++		alloc_args.height = 1;
++		alloc_args.force_linear = true;
++
++		drv_logv("Unable to allocate 0x%08x format, allocate as 1D buffer", format);
++	}
++
++	if (alloc_args.drm_format == DRM_FORMAT_R8 && alloc_args.height == 1) {
++		/* Some mesa drivers may not support 1D allocations.
++		 * Use 2D texture with 4096 width instead.
++		 */
++		alloc_args.height = DIV_ROUND_UP(alloc_args.width, 4096);
++		alloc_args.width = 4096;
++		drv_logv("Allocate 1D buffer as %dx%d R8 2D texture", alloc_args.width,
++			 alloc_args.height);
++	}
++
++	if (format == DRM_FORMAT_YVU420_ANDROID) {
++		alloc_args.width /= 2;
++		alloc_args.height += height / 2;
++		alloc_args.width = ALIGN(alloc_args.width, 512);
++		bo->meta.num_planes = drv_num_planes_from_format(DRM_FORMAT_R8);
++	}
++
++	err = wr->alloc(&alloc_args);
++
++	if (err && !scanout_strong) {
++		drv_loge("Failed to allocate for scanout, trying non-scanout");
++		alloc_args.use_scanout = false;
++		err = wr->alloc(&alloc_args);
++	}
++
++	if (err) {
++		drv_loge("Failed to allocate buffer");
++		return err;
++	}
++
++	if (!bo_layout_ready)
++		drv_bo_from_format(bo, alloc_args.out_stride, 1, alloc_args.height, (format == DRM_FORMAT_YVU420_ANDROID) ? DRM_FORMAT_R8 : format);
++
++	drv_logv("Allocated: %dx%d, stride: %d, map_stride: %d", width, height,
++		 alloc_args.out_stride, alloc_args.out_map_stride);
++
++	auto priv = new GbmMesaBoPriv();
++	for (size_t plane = 0; plane < bo->meta.num_planes; plane++) {
++		priv->fds[plane] = UniqueFd(alloc_args.out_fd);
++	}
++
++	priv->map_stride = alloc_args.out_map_stride;
++	bo->meta.format_modifier = alloc_args.out_modifier;
++
++	bo->priv = priv;
++	priv->drv = drv;
++
++	gbm_mesa_inode_to_handle(bo);
++
++	return 0;
++}
++
++int gbm_mesa_bo_import(struct bo *bo, struct drv_import_fd_data *data)
++{
++	if (bo->priv) {
++		drv_loge("%s bo isn't empty", __func__);
++		return -EINVAL;
++	}
++	auto priv = new GbmMesaBoPriv();
++
++	if (data->format == DRM_FORMAT_YVU420_ANDROID) {
++		bo->meta.num_planes = drv_num_planes_from_format(DRM_FORMAT_R8);
++	}
++	for (size_t plane = 0; plane < bo->meta.num_planes; plane++) {
++		priv->fds[plane] = UniqueFd(dup(data->fds[plane]));
++	}
++
++	if (data->use_flags & BO_USE_SW_MASK) {
++		// Mapping require importing by gbm_mesa
++		auto drv = gbm_mesa_get_or_init_driver(bo->drv, true);
++		auto wr = drv->wrapper;
++
++		uint32_t s_format = data->format;
++		int s_height = data->height;
++		int s_width = data->width;
++		if (wr->get_gbm_format(s_format) == 0) {
++			s_width = bo->meta.total_size;
++			s_height = 1;
++			s_format = DRM_FORMAT_R8;
++		}
++		if (s_format == DRM_FORMAT_YVU420_ANDROID) {
++			s_width /= 2;
++			s_height += data->height / 2;
++			s_width = ALIGN(s_width, 512);
++		}
++		priv->drv = drv;
++		priv->gbm_bo = wr->import(drv->gbm_dev, data->fds[0], s_width, s_height,
++					  data->strides[0], data->format_modifier, s_format);
++	}
++
++	bo->priv = priv;
++
++	gbm_mesa_inode_to_handle(bo);
++
++	return 0;
++}
++
++int gbm_mesa_bo_destroy(struct bo *bo)
++{
++	if (bo->priv) {
++		delete (GbmMesaBoPriv *)(bo->priv);
++		bo->priv = nullptr;
++	}
++	return 0;
++}
++
++int gbm_mesa_bo_get_plane_fd(struct bo *bo, size_t plane)
++{
++	return dup(((GbmMesaBoPriv *)bo->priv)->fds[plane].Get());
++}
++
++void *gbm_mesa_bo_map(struct bo *bo, struct vma *vma, uint32_t map_flags)
++{
++	auto drv = gbm_mesa_get_or_init_driver(bo->drv, true);
++	auto wr = drv->wrapper;
++
++	vma->length = bo->meta.total_size;
++
++	auto priv = (GbmMesaBoPriv *)bo->priv;
++	assert(priv->gbm_bo != nullptr);
++
++	void *buf = MAP_FAILED;
++
++	uint32_t s_format = bo->meta.format;
++	int s_width = bo->meta.width;
++	int s_height = bo->meta.height;
++	if (wr->get_gbm_format(s_format) == 0) {
++		s_width = bo->meta.total_size;
++		s_height = 1;
++	}
++	if (s_format == DRM_FORMAT_YVU420_ANDROID) {
++		s_width /= 2;
++		s_height += bo->meta.height / 2;
++		s_width = ALIGN(s_width, 512);
++	}
++
++	wr->map(priv->gbm_bo, s_width, s_height, &buf, &vma->priv);
++
++	return buf;
++}
++
++int gbm_mesa_bo_unmap(struct bo *bo, struct vma *vma)
++{
++	auto drv = gbm_mesa_get_or_init_driver(bo->drv, true);
++	auto wr = drv->wrapper;
++
++	auto priv = (GbmMesaBoPriv *)bo->priv;
++	assert(priv->gbm_bo != nullptr);
++	assert(vma->priv != nullptr);
++	if (priv->gbm_bo && vma->priv)
++		wr->unmap(priv->gbm_bo, vma->priv);
++	vma->priv = nullptr;
++	return 0;
++}
++
++uint32_t gbm_mesa_bo_get_map_stride(struct bo *bo)
++{
++	auto priv = (GbmMesaBoPriv *)bo->priv;
++
++	return priv->map_stride;
++}
+diff --git a/gbm_mesa_driver/gbm_mesa_internals.h b/gbm_mesa_driver/gbm_mesa_internals.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..4a8ac9d894f6cb806a9260d9501686a56c2016fa
+--- /dev/null
++++ b/gbm_mesa_driver/gbm_mesa_internals.h
+@@ -0,0 +1,52 @@
++/*
++ * Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#pragma once
++
++#define LOG_TAG "MESAGBM-GRALLOC"
++
++#include <cutils/properties.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <gbm.h>
++#include <glob.h>
++#include <log/log.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <unistd.h>
++#include <xf86drm.h>
++#include <xf86drmMode.h>
++
++int gbm_mesa_driver_init(struct driver *drv);
++void gbm_mesa_driver_close(struct driver *drv);
++
++void gbm_mesa_resolve_format_and_use_flags(struct driver *drv, uint32_t format, uint64_t use_flags,
++					   uint32_t *out_format, uint64_t *out_use_flags);
++
++int gbm_mesa_bo_create(struct bo *bo, uint32_t width, uint32_t height, uint32_t format,
++		       uint64_t use_flags);
++
++int gbm_mesa_bo_import(struct bo *bo, struct drv_import_fd_data *data);
++
++int gbm_mesa_bo_destroy(struct bo *bo);
++
++uint32_t gbm_mesa_bo_get_map_stride(struct bo *bo);
++void *gbm_mesa_bo_map(struct bo *bo, struct vma *vma, uint32_t map_flags);
++int gbm_mesa_bo_unmap(struct bo *bo, struct vma *vma);
++
++int gbm_mesa_bo_get_plane_fd(struct bo *bo, size_t plane);
+diff --git a/gbm_mesa_driver/gbm_mesa_wrapper.cpp b/gbm_mesa_driver/gbm_mesa_wrapper.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..fb5af2b3f199f9f2cafe55d23480d96fc8f6cf13
+--- /dev/null
++++ b/gbm_mesa_driver/gbm_mesa_wrapper.cpp
+@@ -0,0 +1,257 @@
++/*
++ * Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#define LOG_TAG "GBM-MESA-WRAPPER"
++
++#include <gbm.h>
++
++#include "../drv.h"
++#include "gbm_mesa_wrapper.h"
++
++#include <drm_fourcc.h>
++#include <errno.h>
++#include <log/log.h>
++#include <sys/mman.h>
++
++#include <cutils/properties.h>
++
++#include <sstream>
++#include <vector>
++#include <unordered_map>
++
++#define ARRAY_SIZE(A) (sizeof(A) / sizeof(*(A)))
++#define DRM_TO_GBM_FORMAT(A)                                                                       \
++	{                                                                                          \
++		DRM_##A, GBM_##A                                                                   \
++	}
++
++/* List of the formats that has mesa3d DRI_ equivalent, therefore can be allocated directly */
++static const struct {
++	uint32_t drm_format;
++	uint32_t gbm_format;
++} drm_to_gbm_image_formats[] = {
++	DRM_TO_GBM_FORMAT(FORMAT_R8),
++	DRM_TO_GBM_FORMAT(FORMAT_GR88),
++	DRM_TO_GBM_FORMAT(FORMAT_ARGB1555),
++	DRM_TO_GBM_FORMAT(FORMAT_RGB565),
++	DRM_TO_GBM_FORMAT(FORMAT_XRGB8888),
++	DRM_TO_GBM_FORMAT(FORMAT_ARGB8888),
++	DRM_TO_GBM_FORMAT(FORMAT_XBGR8888),
++	DRM_TO_GBM_FORMAT(FORMAT_ABGR8888),
++	DRM_TO_GBM_FORMAT(FORMAT_XRGB2101010),
++	DRM_TO_GBM_FORMAT(FORMAT_XBGR2101010),
++	DRM_TO_GBM_FORMAT(FORMAT_ARGB2101010),
++	DRM_TO_GBM_FORMAT(FORMAT_ABGR2101010),
++	DRM_TO_GBM_FORMAT(FORMAT_XBGR16161616F),
++	DRM_TO_GBM_FORMAT(FORMAT_ABGR16161616F),
++	{DRM_FORMAT_YVU420_ANDROID, GBM_FORMAT_GR88},
++};
++
++static std::unordered_map<uint32_t, std::vector<uint64_t>> gbm_format_modifiers_map;
++
++static std::vector<uint64_t> get_supported_modifiers(struct gbm_device *gbm, uint32_t format) {
++	if (gbm_format_modifiers_map.find(format) != gbm_format_modifiers_map.end()) {
++		return gbm_format_modifiers_map[format];
++	}
++
++	// Create empty default so we can match it next time
++	std::vector<uint64_t> &modifiers = gbm_format_modifiers_map[format];
++
++	std::stringstream prop_name_stream;
++	prop_name_stream << "waydroid.modifiers." << std::hex << format << ".";
++	std::string prop_name_base = prop_name_stream.str();
++	char modifier_prop[PROPERTY_VALUE_MAX];
++	int i = 0;
++	while (true) {
++		std::string prop_name = (std::stringstream() << prop_name_base << i).str();
++		if (property_get(prop_name.c_str(), modifier_prop, NULL) < 1)
++			break;
++		std::stringstream ss(modifier_prop);
++		uint64_t mod;
++		ss >> std::hex >> mod;
++
++		// Filter out multiplanar format-modifier combos
++		if (gbm_device_get_format_modifier_plane_count(gbm, format, mod) < 2)
++			modifiers.push_back(mod);
++		i++;
++	}
++
++	return modifiers;
++}
++
++static uint32_t get_gbm_mesa_format(uint32_t drm_format)
++{
++	uint32_t i;
++	for (i = 0; i < ARRAY_SIZE(drm_to_gbm_image_formats); i++) {
++		if (drm_to_gbm_image_formats[i].drm_format == drm_format)
++			return drm_to_gbm_image_formats[i].gbm_format;
++	}
++
++	return 0;
++}
++
++static struct gbm_device *gbm_mesa_dev_create(int fd)
++{
++	struct gbm_device *gbm = gbm_create_device(fd);
++	if (!gbm)
++		ALOGE("Unable to create gbm device");
++
++	return gbm;
++}
++
++static void gbm_mesa_dev_destroy(struct gbm_device *gbm)
++{
++	gbm_device_destroy(gbm);
++}
++
++// ALLOCATOR_ONLY!
++static int gbm_mesa_alloc(struct alloc_args *args)
++{
++	struct gbm_bo *bo = NULL;
++
++	uint32_t gbm_format = get_gbm_mesa_format(args->drm_format);
++	int usage = 0;
++	if (args->force_linear)
++		usage |= GBM_BO_USE_LINEAR;
++
++	if (args->use_scanout)
++		usage |= GBM_BO_USE_SCANOUT;
++
++	std::vector<uint64_t> modifiers = get_supported_modifiers(args->gbm, args->drm_format);
++	if (modifiers.size() > 0) {
++		int usage2 = usage;
++		if (usage2 & GBM_BO_USE_LINEAR) {
++			usage2 &= ~GBM_BO_USE_LINEAR;
++			modifiers = {DRM_FORMAT_MOD_LINEAR};
++		}
++		bo = gbm_bo_create_with_modifiers2(args->gbm, args->width, args->height, gbm_format, modifiers.data(), modifiers.size(), usage2);
++	}
++	if (!bo) {
++		ALOGV("fallback to gbm_bo_create without modifiers");
++		bo = gbm_bo_create(args->gbm, args->width, args->height, gbm_format, usage);
++	}
++
++	if (!bo) {
++		ALOGE("Unable to create BO, size=%dx%d, fmt=%d", args->width, args->height,
++		      args->drm_format);
++		return -EINVAL;
++	}
++
++	/* gbm_mesa will create new fd, therefore it's our responsibility to close it once we don't
++	 * need the buffer */
++	args->out_fd = gbm_bo_get_fd(bo);
++
++	args->out_stride = gbm_bo_get_stride(bo);
++	args->out_modifier = gbm_bo_get_modifier(bo);
++
++	/* Buffer is now handled through the system via out_fd, we can now destroy gbm_mesa bo */
++	gbm_bo_destroy(bo);
++
++	if (args->needs_map_stride) {
++		/* At least on Intel and nouveau map_stride after gbm_create is different from
++		 * map_stride after gbm_import, We care only about map_stride after importing. */
++		struct gbm_import_fd_modifier_data data = {
++			.width = args->width,
++			.height = args->height,
++			.format = gbm_format,
++			.num_fds = 1,
++			.fds[0] = args->out_fd,
++			.strides[0] = (int)args->out_stride,
++			.modifier = args->out_modifier,
++		};
++		void *addr = NULL;
++		void *map_data = NULL;
++
++		bo = gbm_bo_import(args->gbm, GBM_BO_IMPORT_FD_MODIFIER, &data, 0);
++
++		int flags = GBM_BO_TRANSFER_READ | GBM_BO_TRANSFER_WRITE;
++
++		addr = gbm_bo_map(bo, 0, 0, args->width, args->height, flags, &args->out_map_stride,
++				  &map_data);
++		if (addr == NULL) {
++			ALOGE("Failed to map the buffer at %s:%d", __FILE__, __LINE__);
++		} else {
++			gbm_bo_unmap(bo, map_data);
++		}
++
++		gbm_bo_destroy(bo);
++	}
++
++	return 0;
++}
++
++// MAPPER ONLY!
++static struct gbm_bo *gbm_import(struct gbm_device *gbm, int buf_fd, uint32_t width,
++				 uint32_t height, uint32_t stride, uint64_t modifier,
++				 uint32_t drm_format)
++{
++	struct gbm_bo *bo = NULL;
++	struct gbm_import_fd_modifier_data data = {
++		.width = width,
++		.height = height,
++		.format = get_gbm_mesa_format(drm_format),
++		.num_fds = 1,
++		.fds[0] = buf_fd,
++		.strides[0] = (int)stride,
++		.modifier = modifier,
++	};
++
++	bo = gbm_bo_import(gbm, GBM_BO_IMPORT_FD_MODIFIER, &data, 0);
++
++	return bo;
++}
++
++static void gbm_free(struct gbm_bo *bo)
++{
++	gbm_bo_destroy(bo);
++}
++
++static void gbm_map(struct gbm_bo *bo, int w, int h, void **addr, void **map_data)
++{
++	int flags = GBM_BO_TRANSFER_READ | GBM_BO_TRANSFER_WRITE;
++
++	uint32_t stride = 0;
++	*addr = gbm_bo_map(bo, 0, 0, w, h, flags, &stride, map_data);
++	if (*addr == NULL) {
++		*addr = MAP_FAILED;
++		ALOGE("Failed to map the buffer at %s:%d", __FILE__, __LINE__);
++	}
++}
++
++static void gbm_unmap(struct gbm_bo *bo, void *map_data)
++{
++	gbm_bo_unmap(bo, map_data);
++}
++
++extern "C" {
++
++struct gbm_ops gbm_ops = {
++	.get_gbm_format = get_gbm_mesa_format,
++	.dev_create = gbm_mesa_dev_create,
++	.dev_destroy = gbm_mesa_dev_destroy,
++	.alloc = gbm_mesa_alloc,
++	.import = gbm_import,
++	.free = gbm_free,
++	.map = gbm_map,
++	.unmap = gbm_unmap,
++};
++
++__attribute__((visibility("default"))) struct gbm_ops *get_gbm_ops()
++{
++	return &gbm_ops;
++}
++
++}
+diff --git a/gbm_mesa_driver/gbm_mesa_wrapper.h b/gbm_mesa_driver/gbm_mesa_wrapper.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..653cb8ea35d54d580688f6a679d596636cc686a5
+--- /dev/null
++++ b/gbm_mesa_driver/gbm_mesa_wrapper.h
+@@ -0,0 +1,58 @@
++/*
++ * Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#pragma once
++
++#include <stdbool.h>
++
++struct gbm_device;
++struct gbm_bo;
++
++struct alloc_args {
++	struct gbm_device *gbm;
++	uint32_t width;
++	uint32_t height;
++	uint32_t drm_format;
++	bool use_scanout;
++	bool force_linear;
++	bool needs_map_stride;
++	int out_fd;
++	uint32_t out_stride;
++	uint64_t out_modifier;
++	uint32_t out_map_stride;
++};
++
++struct gbm_ops {
++	uint32_t (*get_gbm_format)(uint32_t drm_format);
++
++	struct gbm_device *(*dev_create)(int fd);
++
++	void (*dev_destroy)(struct gbm_device *gbm);
++
++	// ALLOCATOR ONLY
++	int (*alloc)(struct alloc_args *args);
++
++	// MAPPER ONLY
++	struct gbm_bo *(*import)(struct gbm_device *gbm, int buf_fd, uint32_t width,
++				 uint32_t height, uint32_t stride, uint64_t modifier,
++				 uint32_t drm_format);
++
++	void (*free)(struct gbm_bo *bo);
++
++	void (*map)(struct gbm_bo *bo, int w, int h, void **addr, void **map_data);
++
++	void (*unmap)(struct gbm_bo *bo, void *map_data);
++};

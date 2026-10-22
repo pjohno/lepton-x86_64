@@ -1,0 +1,8 @@
+module lepton_binder 1.2;
+
+require {
+    type spc_t;
+    class binder { call transfer set_context_mgr impersonate };
+}
+
+allow spc_t self:binder { call transfer set_context_mgr impersonate };

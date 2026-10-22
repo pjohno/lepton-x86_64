@@ -1,0 +1,70 @@
+From 312bb3ef71adbff25235085c23637c4eafd0b537 Mon Sep 17 00:00:00 2001
+From: Franz-Josef Haider <frajo@frajo.fi>
+Date: Fri, 18 Sep 2026 20:45:06 +0300
+Subject: [PATCH 1/1] lepton: Wait for debugger if requested before launching
+ the app.
+
+Change-Id: I307262d8ca3141f4aaa0dc5c134ff9d44b1a8b87
+---
+ core/jni/com_android_internal_os_Zygote.cpp | 31 +++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/core/jni/com_android_internal_os_Zygote.cpp b/core/jni/com_android_internal_os_Zygote.cpp
+index 96c27731eb75..aeeb05119cf9 100644
+--- a/core/jni/com_android_internal_os_Zygote.cpp
++++ b/core/jni/com_android_internal_os_Zygote.cpp
+@@ -113,6 +113,8 @@ using android::base::StringAppendF;
+ using android::base::StringPrintf;
+ using android::base::WriteStringToFile;
+ using android::base::GetBoolProperty;
++using android::base::GetProperty;
++using android::base::SetProperty;
+ 
+ using android::zygote::ZygoteFailure;
+ 
+@@ -1902,6 +1904,25 @@ static void BindMountStorageDirs(JNIEnv* env, jobjectArray pkg_data_info_list,
+   }
+ }
+ 
++int get_tracer_pid(void) {
++    FILE *f = fopen("/proc/self/status", "r");
++    if (!f)
++        return -1;
++
++    char line[256];
++    int tracer_pid = -1;
++
++    while (fgets(line, sizeof(line), f)) {
++        if (strncmp(line, "TracerPid:", 10) == 0) {
++            sscanf(line + 10, "%d", &tracer_pid);
++            break;
++        }
++    }
++
++    fclose(f);
++    return tracer_pid;
++}
++
+ // Utility routine to specialize a zygote child process.
+ static void SpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArray gids, jint runtime_flags,
+                              jobjectArray rlimits, jlong permitted_capabilities,
+@@ -2174,6 +2195,16 @@ static void SpecializeCommon(JNIEnv* env, uid_t uid, gid_t gid, jintArray gids,
+         initUnsolSocketToSystemServer();
+     }
+ 
++    if (GetBoolProperty("ro.lepton.wait_for_debugger", false)) {
++        if (nice_name.has_value() && nice_name.value() == GetProperty("lepton.active_app_id", "")) {
++            SetProperty("ro.lepton.application_pid", std::to_string((int)getpid()));
++            SetProperty("ro.lepton.ready_for_debugger", "true");
++            while (get_tracer_pid() <= 0) {
++                sleep(1);
++            }
++        }
++    }
++
+     env->CallStaticVoidMethod(gZygoteClass, gCallPostForkChildHooks, runtime_flags,
+                               is_system_server, is_child_zygote, managed_instruction_set);
+ 
+-- 
+2.55.0
+

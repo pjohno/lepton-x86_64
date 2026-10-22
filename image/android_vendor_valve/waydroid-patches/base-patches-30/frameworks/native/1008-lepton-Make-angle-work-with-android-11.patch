@@ -1,0 +1,27 @@
+From 62b8de16e27e5726d1d430b41452008a2f2b4998 Mon Sep 17 00:00:00 2001
+From: Franz-Josef Haider <frajo@frajo.fi>
+Date: Fri, 28 Aug 2026 19:23:20 +0300
+Subject: [PATCH 1/1] lepton: Make angle work with android 11.
+
+Change-Id: Ib3b9b1e01b2e2b6b0874c69fe8d2120da08d17b9
+---
+ libs/graphicsenv/GraphicsEnv.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/libs/graphicsenv/GraphicsEnv.cpp b/libs/graphicsenv/GraphicsEnv.cpp
+index 3d0f8bbb11..1f88a41fd6 100644
+--- a/libs/graphicsenv/GraphicsEnv.cpp
++++ b/libs/graphicsenv/GraphicsEnv.cpp
+@@ -647,7 +647,8 @@ android_namespace_t* GraphicsEnv::getAngleNamespace() {
+ 
+     if (mAnglePath.empty()) {
+         ALOGV("mAnglePath is empty, not creating ANGLE namespace");
+-        return nullptr;
++        mAnglePath = "/system/lib64";
++        //return nullptr;
+     }
+ 
+     mAngleNamespace = android_create_namespace("ANGLE",
+-- 
+2.55.0
+

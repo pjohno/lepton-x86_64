@@ -1,0 +1,371 @@
+spec:
+  inputs:
+    ROOTFS_VERSION:
+      description: "Branch/tag to download rootfs build artifacts from. Empty = run build-rootfs-job, 'latest' = resolve to most recent successful build."
+      default: "latest"
+    ROOTFS14_VERSION:
+      description: "Branch/tag to download android 14 rootfs build artifacts from. Empty = run build-rootfs-14-job, 'latest' = resolve to most recent successful build."
+      default: "latest"
+
+---
+
+workflow:
+  rules:
+    # Avoid duplicate branch pipelines when a merge request is open.
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"
+      when: never
+    - when: always
+      variables:
+        ROOTFS_VERSION: $[[ inputs.ROOTFS_VERSION ]]
+        ROOTFS14_VERSION: $[[ inputs.ROOTFS14_VERSION ]]
+
+build-compat-tool-job:
+  stage: build
+  image: ubuntu:24.04
+  script:
+    - ./.ci_scripts/install-build-compat_tool-dependencies.sh
+    - ./.ci_scripts/build-compat_tool.sh
+  variables:
+    FF_DISABLE_UMASK_FOR_DOCKER_EXECUTOR: "true"
+  artifacts:
+    paths:
+      - compat_tool.tar.zst
+
+.build-rootfs-job:
+  stage: build
+  image: ubuntu:22.04
+  script:
+    - |
+      apt-get -qq update && apt-get install -y git python3 curl unzip tmux
+
+      if [[ -n "${CI_COMMIT_TAG:-}" ]] || [[ "${CI_PIPELINE_SOURCE:-}" == "merge_request_event" ]] || [[ "${CI_COMMIT_BRANCH:-}" == "main" ]]; then
+        # Ensure tags are available for comparison in CI environments with shallow clones
+        git fetch --tags --force --prune origin >/dev/null 2>&1 || true
+
+        # Find the previous version tag without needing the first parent object
+        if [[ "${CI_PIPELINE_SOURCE:-}" == "merge_request_event" ]] || [[ "${CI_COMMIT_BRANCH:-}" == "main" ]]; then
+          PREVIOUS_TAG=$(git tag --list 'v[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+        else
+          PREVIOUS_TAG=$(git tag --list 'v[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '/^'"$CI_COMMIT_TAG"'$/{n;p;q}' || true)
+        fi
+
+        echo "build-rootfs: CI_COMMIT_TAG=${CI_COMMIT_TAG:-}, CI_COMMIT_SHA=${CI_COMMIT_SHA}, CI_COMMIT_BRANCH=${CI_COMMIT_BRANCH:-}, PREVIOUS_TAG=$PREVIOUS_TAG, initial ${ROOTFS_VERSION_VAR}=${!ROOTFS_VERSION_VAR:-}"
+
+        if [ -z "$PREVIOUS_TAG" ]; then
+          echo "build-rootfs: no previous tag found, forcing rebuild"
+          eval "${ROOTFS_VERSION_VAR}=''"
+        elif ! git diff --quiet "$PREVIOUS_TAG" "${CI_COMMIT_SHA}" -- "$IMAGE_DIR" "$BUILD_SCRIPT" "$DEPENDENCIES_SCRIPT"; then
+          echo "build-rootfs: rootfs changed vs $PREVIOUS_TAG, forcing rebuild"
+          eval "${ROOTFS_VERSION_VAR}=''"
+        else
+          echo "build-rootfs: no rootfs changes vs $PREVIOUS_TAG, keeping ${ROOTFS_VERSION_VAR}=${!ROOTFS_VERSION_VAR}"
+        fi
+      fi
+
+      if [[ -z "${!ROOTFS_VERSION_VAR}" ]]; then
+        sed -i "s|https://gitlab.steamos.cloud/|https://${BUILD_TOKEN_USER}:${BUILD_TOKEN_PASSWORD}@gitlab.steamos.cloud/|g" "$MANIFEST"
+
+        ./.ci_scripts/"$DEPENDENCIES_SCRIPT"
+        ./.ci_scripts/"$BUILD_SCRIPT"
+      else
+        ROOTFS_JOB_ID=$(python3 ./.ci_scripts/resolve-rootfs-version.py "$JOB_NAME" "${!ROOTFS_VERSION_VAR}")
+        DOWNLOAD_URL="${CI_API_V4_URL}/projects/deckard%2Flepton/jobs/${ROOTFS_JOB_ID}/artifacts"
+        echo "Downloading rootfs artifacts from: $DOWNLOAD_URL (${ROOTFS_VERSION_VAR}=${!ROOTFS_VERSION_VAR})"
+
+        curl --fail --location --header "PRIVATE-TOKEN: ${CI_LEPTON_TOKEN}" \
+          --output build-rootfs-artifacts.zip \
+          "$DOWNLOAD_URL"
+        unzip -o build-rootfs-artifacts.zip
+        rm build-rootfs-artifacts.zip
+      fi || exit 1
+      test -f "$IMAGE_DIR"/system.img || exit 1
+      test -f "$IMAGE_DIR"/vendor.img || exit 1
+      test -f "$IMAGE_DIR"/NOTICE.txt || exit 1
+      test -f "$IMAGE_DIR"/version.txt || exit 1
+      test -f "${SYMBOLS}" || exit 1 || exit 1
+  artifacts:
+    paths:
+      - "$IMAGE_DIR/system.img"
+      - "$IMAGE_DIR/vendor.img"
+      - "$IMAGE_DIR/NOTICE.txt"
+      - "$IMAGE_DIR/version.txt"
+      - "$IMAGE_DIR/output/out/verbose.log.gz"
+      - "$SYMBOLS"
+    when: always
+  tags:
+    - x86_64-linux-kvm-docker-largedisk
+  timeout: 8 hours
+
+build-rootfs-job:
+  extends: .build-rootfs-job
+  variables:
+    IMAGE_DIR: image
+    ROOTFS_VERSION_VAR: ROOTFS_VERSION
+    BUILD_SCRIPT: build-rootfs.sh
+    DEPENDENCIES_SCRIPT: install-build-rootfs-dependencies.sh
+    MANIFEST: image/android_vendor_valve/manifest_scripts/manifests-30/10-valve-remotes.xml
+    JOB_NAME: build-rootfs-job
+    SYMBOLS: symbols.tar.zst
+
+build-rootfs-14-job:
+  extends: .build-rootfs-job
+  variables:
+    IMAGE_DIR: image-14
+    ROOTFS_VERSION_VAR: ROOTFS14_VERSION
+    BUILD_SCRIPT: build-rootfs-14.sh
+    DEPENDENCIES_SCRIPT: install-build-rootfs-14-dependencies.sh
+    MANIFEST: image-14/android_vendor_valve/manifest_scripts/manifests-34/10-valve-remotes.xml
+    JOB_NAME: build-rootfs-14-job
+    SYMBOLS: symbols.tar.zst
+
+.prepare-rootfs-job:
+  stage: build
+  image: ubuntu:24.04
+  script:
+    - set -euo pipefail
+    - |
+      test -f "$IMAGE_DIR"/system.img || exit 1
+      test -f "$IMAGE_DIR"/vendor.img || exit 1
+      test -f "$IMAGE_DIR"/NOTICE.txt || exit 1
+      test -f "$IMAGE_DIR"/version.txt || exit 1
+    - ./.ci_scripts/${DEPENDENCIES_SCRIPT}
+    - ./.ci_scripts/${PREPARE_SCRIPT}
+    - test -f rootfs.tar.zst
+  artifacts:
+    paths:
+      - rootfs.tar.zst
+
+prepare-rootfs-job:
+  extends: .prepare-rootfs-job
+  needs:
+    - build-rootfs-job
+  variables:
+    IMAGE_DIR: image
+    DEPENDENCIES_SCRIPT: install-prepare-rootfs-dependencies.sh
+    PREPARE_SCRIPT: prepare-rootfs.sh
+
+prepare-rootfs-14-job:
+  extends: .prepare-rootfs-job
+  needs:
+    - build-rootfs-14-job
+  variables:
+    IMAGE_DIR: image-14
+    DEPENDENCIES_SCRIPT: install-prepare-rootfs-14-dependencies.sh
+    PREPARE_SCRIPT: prepare-rootfs-14.sh
+
+# Build the binder kernel module for the runner
+# (Can be dropped if/when the runners support binderfs)
+pre-sysbake-job:
+  stage: build
+  image: debian:bookworm
+  script: |
+    sed -i -e "s|Types\(.\) deb|Types\1 deb deb-src|g" /etc/apt/sources.list.d/debian.sources
+    apt update
+    apt-get install -y dpkg-dev git
+    apt-get build-dep -y linux
+    if ! apt-get install -y linux-headers-$(uname -r); then
+      echo 'Kernel version mismatch, ask @em and @pablo on discord to update the runner worker VM image. See https://gitlab.steamos.cloud/infrastructure/tasks/-/work_items/408'
+      exit 1
+    fi
+    git clone https://github.com/choff/anbox-modules
+    cd anbox-modules
+    git checkout 1434f1ebf74135a99d17e83f25d8e23908efc4cf
+    cd binder
+    KERNEL_SRC="/usr/lib/modules/`uname -r`/build"
+    KVER=$(uname -r)
+    if [[ ! -d "${KERNEL_SRC}" ]]; then
+        KVER=$(ls -1 /usr/lib/modules |head -n1)
+        KERNEL_SRC=/usr/lib/modules/${KVER}/build
+    fi
+    make KERNEL_SRC=${KERNEL_SRC}
+    echo 'Testing to make sure binder module is loadable'
+    if ! insmod binder_linux.ko; then
+      dmesg
+      uname -a
+      echo 'Unable to load binder module!'
+      exit 1
+    fi
+  artifacts:
+    paths:
+      - anbox-modules/binder/binder_linux.ko
+  tags:
+    - aarch64-linux-docker-privileged
+
+.sysbake-job:
+  stage: build
+  image: registry.gitlab.steamos.cloud/deckard/deckardos/holo/steamos-arm64-vr-sysimg-main:latest
+  script:
+    - uname -a
+    - insmod anbox-modules/binder/binder_linux.ko devices=binder,hwbinder,vndbinder || { dmesg; exit 1; }
+    - "./.ci_scripts/${SYSBAKE_DEPENDENCIES_SCRIPT}"
+    - mount --make-rshared /
+    - mkdir -p /run/user
+    - mkdir -p /home
+    - mkdir -p /home/steamos
+    - dd if=/dev/zero of=podman.img bs=1M count=2048
+    - mkfs.ext4 podman.img
+    - mount -o loop podman.img /home/steamos
+    - mount -o bind /home/steamos /tmp
+    - mount -o bind /home/steamos /run/user
+    - chown steamos:steamos -R /home/steamos
+    - mkdir -p /run/user/$(id -u steamos)
+    - chown steamos:steamos -R /run/user/$(id -u steamos)
+    - runuser -u steamos -- bash -c "./.ci_scripts/${SYSBAKE_SCRIPT}"
+  variables:
+    FF_DISABLE_UMASK_FOR_DOCKER_EXECUTOR: "true"
+    SYSBAKE_DEPENDENCIES_SCRIPT: install-sysbake-dependencies.sh
+    SYSBAKE_SCRIPT: build-sysbake.sh
+  artifacts:
+    when: always
+    paths:
+      - install/sysbake.tar.zst
+      - install/sysbake.xattrs
+      - sysbake-dmesg.txt
+      - sysbake-logcat.txt
+      - lepton-sysbake-trace.txt
+      - lepton-logcat-trace.txt
+      - lepton-sysbake-strace.txt
+  tags:
+    - aarch64-linux-docker-privileged
+
+sysbake-job:
+  extends: .sysbake-job
+  needs:
+    - pre-sysbake-job
+    - build-compat-tool-job
+    - prepare-rootfs-job
+
+sysbake-14-job:
+  extends: .sysbake-job
+  needs:
+    - pre-sysbake-job
+    - build-compat-tool-job
+    - prepare-rootfs-14-job
+  variables:
+    SYSBAKE_DEPENDENCIES_SCRIPT: install-sysbake-14-dependencies.sh
+    SYSBAKE_SCRIPT: build-sysbake-14.sh
+
+build-test-apk-job:
+  stage: build
+  image: registry.gitlab.steamos.cloud/deckard/deckardos/holo/android-arm64-package-builder-main:latest
+  script:
+    - ./.ci_scripts/install-build-test-apk-dependencies.sh
+    - ./.ci_scripts/build-test-apk.sh
+    - test -f tests/test-apk.apk || exit 1
+    - test -f tests/test-apk2.apk || exit 1
+    - test -f tests/test-apk3.apk || exit 1
+    - test -f tests/test-vulkan.apk || exit 1
+  artifacts:
+    paths:
+      - tests/test-apk.apk
+      - tests/test-apk2.apk
+      - tests/test-apk3.apk
+      - tests/test-vulkan.apk
+  tags:
+    - x86_64-linux-kvm-docker
+
+.tests-job:
+  stage: test
+  parallel:
+    matrix:
+      - RUNNER_TAG: aarch64-linux-docker-privileged
+        SHARD: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+      # Run the repeated start test on a heavier runner
+      - RUNNER_TAG: aarch64-linux-docker-heavy-privileged
+        SHARD: [13]
+  image: registry.gitlab.steamos.cloud/deckard/deckardos/holo/steamos-arm64-vr-sysimg-main:latest
+  script:
+    - uname -a
+    - insmod anbox-modules/binder/binder_linux.ko devices=binder,hwbinder,vndbinder || { dmesg; exit 1; }
+    - ./.ci_scripts/install-tests-dependencies.sh
+    - mount --make-rshared /
+    - mkdir -p /run/user
+    - mkdir -p /home
+    - mkdir -p /home/steamos
+    - dd if=/dev/zero of=podman.img bs=1M count=10240
+    - mkfs.ext4 podman.img
+    - mount -o loop podman.img /home/steamos
+    - mount -o bind /home/steamos /tmp
+    - mount -o bind /home/steamos /run/user
+    - chown steamos:steamos -R /home/steamos
+    - mkdir -p /run/user/$(id -u steamos)
+    - chown steamos:steamos -R /run/user/$(id -u steamos)
+    # Make sure we do not run into issues with podman if a lot of containers start
+    - sysctl -w kernel.keys.maxkeys=1000000
+    - runuser -u steamos -- bash -c "./.ci_scripts/run-tests.sh $CI_NODE_INDEX"
+  variables:
+    FF_DISABLE_UMASK_FOR_DOCKER_EXECUTOR: "true"
+  tags:
+    - $RUNNER_TAG
+  artifacts:
+    paths:
+      - test-output.log
+      - test-trace.log
+      - test-dmesg.log
+    when: always
+  timeout: 8 hours
+
+tests-job:
+  extends: .tests-job
+  needs:
+    - pre-sysbake-job
+    - sysbake-job
+    - build-compat-tool-job
+    - prepare-rootfs-job
+    - build-test-apk-job
+
+tests-14-job:
+  extends: .tests-job
+  needs:
+    - pre-sysbake-job
+    - sysbake-14-job
+    - build-compat-tool-job
+    - prepare-rootfs-14-job
+    - build-test-apk-job
+
+# Once a tag's build artifacts are ready, trigger a lepton-depot pipeline that
+# downloads them and uploads the build to the bleeding-edge Steam branch.
+# Runs on `needs:` so it doesn't have to wait for the test stage; bleeding-edge
+# deploys shouldn't be gated on the test matrix.
+trigger-depot-upload-job:
+  stage: deploy
+  image: ubuntu:24.04
+  rules:
+    # Official release tags only (v<major>.<minor>.<patchlevel>, same pattern
+    # lepton-depot's resolve-job-id.py uses to find releases)
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  needs:
+    - job: build-compat-tool-job
+      artifacts: false
+    - job: sysbake-job
+      artifacts: false
+    - job: sysbake-14-job
+      artifacts: false
+    - job: prepare-rootfs-job
+      artifacts: false
+    - job: prepare-rootfs-14-job
+      artifacts: false
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - apt-get -qq update && apt-get install -y --no-install-recommends curl ca-certificates
+    - >
+      curl --fail --location --request POST
+      --form "token=${LEPTON_DEPOT_TRIGGER_TOKEN}"
+      --form "ref=main"
+      --form "variables[COMPAT_TOOL_VERSION]=${CI_COMMIT_TAG}"
+      --form "variables[ROOTFS_VERSION]=${CI_COMMIT_TAG}"
+      --form "variables[ROOTFS14_VERSION]=${CI_COMMIT_TAG}"
+      --form "variables[PROMOTE_BRANCH]=bleeding-edge"
+      "${CI_API_V4_URL}/projects/deckard%2Flepton-depot/trigger/pipeline"
+
+default:
+  tags:
+    - x86_64-linux-kvm-docker
+  hooks:
+    pre_get_sources_script:
+      # for git submodules:
+      - git config --global url."https://${BUILD_TOKEN_USER}:${BUILD_TOKEN_PASSWORD}@gitlab.steamos.cloud/".insteadOf "https://gitlab.steamos.cloud/"
+
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive

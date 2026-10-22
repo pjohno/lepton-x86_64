@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Lepton BinderFS preflight. Never load or install kernel modules.
+lepton_check_binder() {
+    grep -qw binder /proc/filesystems 2>/dev/null && return 0
+
+    local message
+    message="Android Binder kernel support is unavailable.
+
+Lepton requires BinderFS, provided by rust_binder, binder_linux,
+or another compatible kernel implementation.
+
+Please initialize Binder support and launch the game again.
+
+Lepton will not install or load kernel modules."
+
+    printf 'ERROR: %s\n' "$message" >&2
+
+    # Show a scaled Qt dialog through X11, tagged for Steam Gamescope.
+    local title="Lepton Binder Unavailable"
+    local win="" dialog_pid
+
+    DISPLAY="$outer_display" QT_QPA_PLATFORM=xcb QT_SCALE_FACTOR=2 \
+        timeout 60s kdialog \
+        --title "$title" --error "$message" &
+    dialog_pid=$!
+
+    for ((i=0; i<80; i++)); do
+        kill -0 "$dialog_pid" 2>/dev/null || break
+
+        win=$(DISPLAY="$outer_display" xwininfo -root -tree 2>/dev/null |
+            awk -v title="$title" \
+                'index($0, "\"" title "\"") {print $1; exit}')
+
+        [[ -n "$win" ]] && break
+        sleep 0.1
+    done
+
+    if [[ -n "$win" ]]; then
+        DISPLAY="$outer_display" xprop -id "$win" \
+            -f STEAM_GAME 32c -set STEAM_GAME "$app_id"
+        echo "Assigned Steam AppID $app_id to dialog window $win"
+    else
+        echo "WARNING: Could not identify the kdialog window" >&2
+        kill "$dialog_pid" 2>/dev/null || true
+    fi
+
+    wait "$dialog_pid" 2>/dev/null || true
+    return 1
+}
+
+app_id="${SteamAppId:-}"
+if [[ ! "$app_id" =~ ^[1-9][0-9]*$ && "${SteamGameId:-}" =~ ^[0-9]+$ ]]; then
+    printf -v game_id_hex '%016x' "$SteamGameId"
+    app_id="$((16#${game_id_hex:0:8}))"
+fi
+[[ "$app_id" =~ ^[1-9][0-9]*$ ]] || {
+    echo "ERROR: A real SteamAppId is required" >&2
+    exit 1
+}
+
+export SteamAppId="$app_id"
+outer_display="${DISPLAY:?DISPLAY is not set}"
+
+# Choose the display resolution once, at launch.
+# An explicit override is useful if Steam exposes a fixed virtual resolution.
+resolution="${LEPTON_RESOLUTION:-}"
+
+if [[ -z "$resolution" ]]; then
+    resolution="$(DISPLAY="$outer_display" xdpyinfo 2>/dev/null |
+        awk '/dimensions:/ {print $2; exit}')"
+fi
+
+if [[ ! "$resolution" =~ ^[1-9][0-9]*x[1-9][0-9]*$ ]]; then
+    echo "WARNING: Invalid or unavailable resolution: $resolution" >&2
+    resolution="1280x800"
+fi
+
+width="${resolution%x*}"
+height="${resolution#*x}"
+
+echo "Lepton Gamescope resolution: ${width}x${height}"
+
+
+lepton_check_binder || exit 1
+
+SDL_VIDEODRIVER=x11 ENABLE_GAMESCOPE_WSI=0 \
+gamescope --backend sdl --expose-wayland -f \
+    -W "$width" -H "$height" -w "$width" -h "$height" \
+    --default-touch-mode 4 \
+    -- sh -c 'export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"; exec "$@"' sh "$@" &
+child=$!
+
+trap 'kill -TERM "$child" 2>/dev/null || true' INT TERM
+
+tagged=0
+for ((i=0; i<120; i++)); do
+    kill -0 "$child" 2>/dev/null || break
+
+    while read -r win; do
+        [[ -n "$win" ]] || continue
+
+        owner=$(DISPLAY="$outer_display" xprop -id "$win" _NET_WM_PID 2>/dev/null |
+            awk -F '= ' 'NF > 1 {print $2}')
+
+        if [[ "$owner" == "$child" ]]; then
+            DISPLAY="$outer_display" xprop -id "$win" \
+                -f STEAM_GAME 32c -set STEAM_GAME "$app_id"
+            echo "Assigned Steam AppID $app_id to window $win"
+            tagged=1
+            break
+        fi
+    done < <(
+        DISPLAY="$outer_display" xwininfo -root -tree 2>/dev/null |
+            awk '/"gamescope":/ {print $1}'
+    )
+
+    (( tagged )) && break
+    sleep 0.25
+done
+
+(( tagged )) || echo "WARNING: Gamescope window was not identified" >&2
+wait "$child"

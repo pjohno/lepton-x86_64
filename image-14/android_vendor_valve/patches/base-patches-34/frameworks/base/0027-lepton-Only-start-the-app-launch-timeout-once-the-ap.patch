@@ -1,0 +1,51 @@
+From 48a93f08da84622f312565bb42545290821a4613 Mon Sep 17 00:00:00 2001
+From: Matthew Schwartz <matthew.schwartz@linux.dev>
+Date: Wed, 14 Oct 2026 14:05:23 -0700
+Subject: [PATCH 1/1] lepton: Only start the app launch timeout once the app
+ may launch.
+
+Change-Id: I15f0691a02245eb4907106d920dfbffbb97a71dd
+---
+ .../android/server/LeptonProcessObserver.java | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/services/core/java/com/android/server/LeptonProcessObserver.java b/services/core/java/com/android/server/LeptonProcessObserver.java
+index 0f1dd3f..68234e2 100644
+--- a/services/core/java/com/android/server/LeptonProcessObserver.java
++++ b/services/core/java/com/android/server/LeptonProcessObserver.java
+@@ -21,6 +21,7 @@ public class LeptonProcessObserver {
+     private static final String TARGET_PROPERTY = "lepton.app_id";
+     private static final String DEFAULT_APP_ID = "com.android.launcher3"; // Fallback if property missing
+     private static final String TIMEOUT_PROPERTY = "lepton.active_app_launch_timeout";
++    private static final String APP_BAKED_PROPERTY = "ro.lepton.app_baked";
+ 
+     private final Context mContext;
+ 
+@@ -49,7 +50,23 @@ public class LeptonProcessObserver {
+                 touchExitFile();
+             }
+         };
+-        handler.postDelayed(timeoutRunnable, timeout * 1000);
++
++        // Wait until Lepton allows the app to launch. It sets APP_BAKED_PROPERTY
++        // at boot for baked apps or after installation finishes for new installs.
++        // Installation can take minutes on slow storage.
++        // Poll because property change callbacks do not fire for arbitrary properties.
++        Runnable waitForLaunchRunnable = new Runnable() {
++            @Override
++            public void run() {
++                if (SystemProperties.getBoolean(APP_BAKED_PROPERTY, false)) {
++                    Log.i(TAG, "App may launch, starting " + timeout + "s launch timeout.");
++                    handler.postDelayed(timeoutRunnable, timeout * 1000);
++                } else {
++                    handler.postDelayed(this, 500);
++                }
++            }
++        };
++        handler.post(waitForLaunchRunnable);
+     }
+ 
+     private Boolean isTargetApp(int pid) {
+-- 
+2.56.0
+
