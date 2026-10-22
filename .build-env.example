@@ -1,0 +1,10 @@
+# Lepton Android 14 x86_64 build configuration
+
+# Default location for a fresh Android source/build tree.
+# Change this if preflight reports insufficient disk space.
+LEPTON_OUTPUT_DIR="${HOME}/lepton-build"
+
+LEPTON_BUILD_TARGET="aosp_lepton_x86_64-ap2a-userdebug"
+LEPTON_BUILD_JOBS=6
+LEPTON_MIN_FREE_GIB=200
+LEPTON_LOG_DIR="${HOME}/lepton-build-logs/clean14"
