@@ -1,0 +1,1234 @@
+diff --git a/compat_tool/liblepton/mounting.sh b/compat_tool/liblepton/mounting.sh
+index af9e4b5d5abf7a96cef78a10040e878c33b21a62..6379e61252a9aaced597254c1a2f7a1b69642d37 100755
+--- a/compat_tool/liblepton/mounting.sh
++++ b/compat_tool/liblepton/mounting.sh
+@@ -35,7 +35,7 @@ BASE_APK=base.apk
+ 
+ function android_sdk_version()
+ {
+-    cat "${LEPTON_DIR}"/../images/rootfs/system/build.prop | grep ro.build.version.sdk= | sed "s/.*=//g"
++    cat "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/system/build.prop" | grep ro.build.version.sdk= | sed "s/.*=//g"
+ }
+ 
+ function setup_mounts()
+@@ -71,7 +71,7 @@ function setup_mounts()
+ 
+     println "Setting up overlays"
+ 
+-    LEPTON_ROOTFS="${LEPTON_DIR}"/../images/rootfs
++    LEPTON_ROOTFS="${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}"
+     LEPTON_OVERLAY="${LEPTON_DIR}"/../images/rootfs_overlay
+ 
+     # Mount some directories that are overlays over our rootfs
+@@ -249,7 +249,7 @@ function podman_extract_rootfs_file()
+ {
+     local FILE="$1"
+     local TARGET="$2"
+-    cp "${LEPTON_DIR}"/../images/rootfs/"${FILE}" "${TARGET}"
++    cp "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/${FILE#/}" "${TARGET}"
+ }
+ 
+ function generate_app_launch_rc()
+@@ -471,14 +471,21 @@ function setup_podman_mounts()
+ 
+     # On gitlab we run via swiftshader.
+     if [[ "${LEPTON_FORCE_SOFTWARE:-}" != "true" ]]; then
+-        for dev in renderD128 card0; do
+-            if [[ -e "/dev/dri/${dev}" ]]; then
+-                podman_mount_entry "/dev/dri/${dev}" "/dev/dri/${dev}" rw
+-            fi
+-        done
++        if [[ "$(uname -m)" == "x86_64" ]]; then
++            for dev in /dev/dri/renderD* /dev/dri/card*; do
++                [[ -e "${dev}" ]] || continue
++                podman_mount_entry "${dev}" "${dev}" rw
++            done
++        else
++            for dev in renderD128 card0; do
++                if [[ -e "/dev/dri/${dev}" ]]; then
++                    podman_mount_entry "/dev/dri/${dev}" "/dev/dri/${dev}" rw
++                fi
++            done
+ 
+-        # Mount `/dev/dri/renderD128` as `/dev/kgsl-3d0` for KGSL blob driver usage
+-        podman_mount_entry "/dev/dri/renderD128" "/dev/kgsl-3d0" rw
++            # KGSL blob driver compatibility.
++            podman_mount_entry "/dev/dri/renderD128" "/dev/kgsl-3d0" rw
++        fi
+     fi
+ 
+     for dev in "${DEV_NODES[@]}"; do
+diff --git a/compat_tool/liblepton/properties.sh b/compat_tool/liblepton/properties.sh
+index eaa102c40bb809a6040a7165ed9f7866d23beac9..5cac035cbdd1a141f965bfdcf7e92bc6995f7c79 100755
+--- a/compat_tool/liblepton/properties.sh
++++ b/compat_tool/liblepton/properties.sh
+@@ -61,22 +61,30 @@ function setup_props()
+         # tests on gitlab
+         props_echo "ro.hardware.vulkan=pastel"
+     else
+-        # Default to using turnip as our driver, but allow using the qcom driver
+-        if [[ "${LEPTON_USE_QCOM_DRIVER:-false}" == "true" ]]; then
++        if [[ "$(uname -m)" == "x86_64" ]]; then
++            # x86_64: ANGLE for EGL/GLES, RADV for Vulkan, generic minigbm.
+             props_echo "ro.hardware.egl=angle"
+-            props_echo "ro.hardware.vulkan=adreno"
+-            props_echo "ro.hardware.gralloc=qti-display"
+-            props_echo "vendor.gralloc.disable_ubwc=1"
++            props_echo "ro.hardware.vulkan=radeon"
++            props_echo "ro.hardware.gralloc=minigbm_gbm_mesa"
++            props_echo "debug.angle.feature_overrides_disabled=supportsSwapchainMaintenance1"
+         else
+-            props_echo "ro.hardware.egl=mesa"
+-            props_echo "ro.hardware.vulkan=freedreno"
+-            props_echo "ro.hardware.gralloc=minigbm_msm"
++            # Default to using turnip as our driver, but allow using the qcom driver
++            if [[ "${LEPTON_USE_QCOM_DRIVER:-false}" == "true" ]]; then
++                props_echo "ro.hardware.egl=angle"
++                props_echo "ro.hardware.vulkan=adreno"
++                props_echo "ro.hardware.gralloc=qti-display"
++                props_echo "vendor.gralloc.disable_ubwc=1"
++            else
++                props_echo "ro.hardware.egl=mesa"
++                props_echo "ro.hardware.vulkan=freedreno"
++                props_echo "ro.hardware.gralloc=minigbm_msm"
++
++                # Zink + disable kopper to work with mesa
++                props_echo "mesa.loader.driver.override=zink"
++                props_echo "mesa.libgl.kopper.disable=true"
++            fi
+         fi
+ 
+-        # Zink + disable kopper to work with mesa
+-        props_echo "mesa.loader.driver.override=zink"
+-        props_echo "mesa.libgl.kopper.disable=true"
+-
+         # Tell Fossilize to write out shaders to this directory
+         if is_app && [[ -n "${STEAM_FOSSILIZE_DUMP_PATH:-}" ]]; then
+             local DUMP_SUBPATH="${STEAM_FOSSILIZE_DUMP_PATH#"${STEAM_COMPAT_SHADER_PATH}"/}"
+diff --git a/compat_tool/test-0100.sh b/compat_tool/test-0100.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..f995082a0df64d7026f851075440b4d3d0339047
+--- /dev/null
++++ b/compat_tool/test-0100.sh
+@@ -0,0 +1,56 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++export LD_PRELOAD=
++
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++COMMAND=test-0100
++LEPTON_CONTEXT="test-0100-$$"
++PODMAN_CMDLINE=()
++
++exec {LEPTON_LOCKFD}>/tmp/lepton.lock
++flock --timeout 10 "$LEPTON_LOCKFD"
++
++source "$HERE/liblepton/liblepton.sh"
++
++create_prefix
++TEST_PREFIX="$LEPTON_PREFIX"
++
++finish() {
++    result=$?
++    trap - EXIT
++    set +e
++
++    cleanup_container "$LEPTON_CONTEXT" >/dev/null 2>&1
++    remove_prefix >/dev/null 2>&1
++
++    if [[ -e "$TEST_PREFIX" ]] ||
++       podman container exists "lepton-$LEPTON_CONTEXT"; then
++        echo "FAIL: cleanup left temporary state"
++        result=1
++    fi
++
++    if (( result == 0 )); then
++        echo "PASS: setup and cleanup"
++    else
++        echo "FAIL: setup or cleanup (exit $result)"
++    fi
++    exit "$result"
++}
++trap finish EXIT
++
++echo "TEST 0100: Filesystem setup and cleanup"
++
++test -x "$HERE/images/rootfs/system/bin/sh"
++
++setup_container
++
++mount_count=0
++for arg in "${PODMAN_CMDLINE[@]}"; do
++    if [[ "$arg" == type=bind,* ]]; then
++        ((mount_count += 1))
++    fi
++done
++
++echo "Configured bind mounts: $mount_count"
++(( mount_count > 0 ))
++echo "PASS: mount configuration generated"
+diff --git a/compat_tool/test-0200.sh b/compat_tool/test-0200.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..0c018dcea020336961529130d736c84e5a7cf27b
+--- /dev/null
++++ b/compat_tool/test-0200.sh
+@@ -0,0 +1,129 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++export LD_PRELOAD=
++
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++COMMAND=test-0200
++LEPTON_CONTEXT="test-0200-$$"
++NAME="lepton-$LEPTON_CONTEXT"
++PODMAN_CMDLINE=()
++
++exec {LEPTON_LOCKFD}>/tmp/lepton.lock
++flock --timeout 10 "$LEPTON_LOCKFD"
++
++source "$HERE/liblepton/liblepton.sh"
++create_prefix
++
++finish() {
++    result=$?
++    trap - EXIT
++    podman rm -f "$NAME" >/dev/null 2>&1 || true
++    remove_prefix >/dev/null 2>&1 || true
++    if ((result == 0)); then
++        echo "PASS: container start, stop and cleanup"
++    else
++        echo "FAIL: test 0200 (exit $result)"
++    fi
++    exit "$result"
++}
++trap finish EXIT
++
++echo "TEST 0200: Container lifecycle without Android"
++
++# A static x86_64 Linux probe: checks /system/build.prop,
++# handles SIGTERM, and otherwise waits for shutdown.
++cat > "$LEPTON_PREFIX/probe.S" <<'ASM'
++.global _start
++.section .text
++_start:
++    mov $13, %eax
++    mov $15, %edi
++    lea action(%rip), %rsi
++    xor %edx, %edx
++    mov $8, %r10d
++    syscall
++    test %rax, %rax
++    js failed
++
++    mov $2, %eax
++    lea path(%rip), %rdi
++    xor %esi, %esi
++    syscall
++    test %rax, %rax
++    js failed
++
++    mov %rax, %rdi
++    mov $3, %eax
++    syscall
++
++waiting:
++    mov $34, %eax
++    syscall
++    jmp waiting
++
++onterm:
++    mov $60, %eax
++    xor %edi, %edi
++    syscall
++
++failed:
++    mov $60, %eax
++    mov $42, %edi
++    syscall
++
++.section .rodata
++path: .asciz "/system/build.prop"
++.section .data
++.align 8
++action:
++    .quad onterm, 0x04000000, sigreturn, 0
++.section .text
++sigreturn:
++    mov $15, %rax
++    syscall
++ASM
++
++cc -nostdlib -static -no-pie \
++    -o "$LEPTON_PREFIX/probe" "$LEPTON_PREFIX/probe.S"
++
++
++# Isolated test data: do not depend on or modify the real sysbake.
++BAKED_SYSTEM_DATA_DIR="$LEPTON_PREFIX/test-data"
++mkdir -p "$BAKED_SYSTEM_DATA_DIR"
++
++setup_container
++
++ROOTFS="$(readlink -f "$HERE/images/rootfs")"
++
++podman run -d \
++    --read-only \
++    --env-host=false \
++    --init=false \
++    --name "$NAME" \
++    --userns=keep-id:uid=0,gid=0 \
++    --user 0:0 \
++    --group-add keep-groups \
++    "${PODMAN_CMDLINE[@]}" \
++    --volume "$LEPTON_PREFIX/probe:/lepton-probe:ro,Z" \
++    --rootfs "$ROOTFS:O" \
++    /lepton-probe
++
++sleep 2
++
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state: $state"
++
++if [[ "$state" != running ]]; then
++    podman logs "$NAME"
++    exit 1
++fi
++
++echo "PASS: container running; Android rootfs accessible"
++
++podman stop --time 3 "$NAME" >/dev/null
++exit_code="$(podman inspect -f '{{.State.ExitCode}}' "$NAME")"
++echo "Shutdown exit code: $exit_code"
++[[ "$exit_code" == 0 ]]
++
++podman rm "$NAME" >/dev/null
++! podman container exists "$NAME"
+diff --git a/compat_tool/test-0300.sh b/compat_tool/test-0300.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..f6c72ca28941973bbf7a09366e419940f32b64e4
+--- /dev/null
++++ b/compat_tool/test-0300.sh
+@@ -0,0 +1,116 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++export LD_PRELOAD=
++
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++COMMAND=test-0300
++LEPTON_CONTEXT="test-0300-$$"
++NAME="lepton-$LEPTON_CONTEXT"
++PODMAN_CMDLINE=()
++
++exec {LEPTON_LOCKFD}>/tmp/lepton.lock
++flock --timeout 10 "$LEPTON_LOCKFD"
++
++source "$HERE/liblepton/liblepton.sh"
++create_prefix
++
++finish() {
++    result=$?
++    trap - EXIT
++    podman rm -f "$NAME" >/dev/null 2>&1 || true
++    remove_prefix >/dev/null 2>&1 || true
++    if (( result == 0 )); then
++        echo "PASS: Test 0300"
++    else
++        echo "FAIL: Test 0300 (exit $result)"
++    fi
++    exit "$result"
++}
++trap finish EXIT
++
++echo "TEST 0300: Android init lifecycle"
++
++# Keep all test data separate from the real sysbake.
++BAKED_SYSTEM_DATA_DIR="$LEPTON_PREFIX/test-data"
++mkdir -p "$BAKED_SYSTEM_DATA_DIR"
++
++setup_container
++if [[ "${LEPTON_TEST_PASTEL:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    sed -i 's/^ro.hardware.vulkan=radeon$/ro.hardware.vulkan=pastel/' "$LEPTON_PREFIX/lepton.prop"
++    grep -E '^ro.hardware.(egl|vulkan|gralloc)=' "$LEPTON_PREFIX/lepton.prop"
++fi
++if [[ "${LEPTON_TEST_DISABLE_DEFERRED:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    echo 'debug.angle.feature_overrides_disabled=supportsSwapchainMaintenance1' >> "$LEPTON_PREFIX/lepton.prop"
++    echo "ANGLE: disabled supportsSwapchainMaintenance1"
++fi
++
++ROOTFS="$(readlink -f "$HERE/images/rootfs")"
++
++podman run -d \
++    --read-only \
++    --env-host=false \
++    --init=false \
++    --name "$NAME" \
++    --userns=keep-id:uid=0,gid=0 \
++    --user 0:0 \
++    --group-add keep-groups \
++    "${PODMAN_CMDLINE[@]}" \
++    --rootfs "$ROOTFS:O" \
++    /init
++
++LOGCAT_CAPTURE="$LEPTON_PREFIX/android-logcat.txt"
++
++for second in {1..10}; do
++    sleep 1
++    state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++    echo "${second}s: $state"
++    [[ "$state" == running ]] || break
++
++    if [[ "$second" == 2 || "$second" == 3 ]]; then
++        timeout 3 podman exec "$NAME" /system/bin/logcat -b all -d -t 300             >> "$LOGCAT_CAPTURE" 2>"$LEPTON_PREFIX/logcat-error.txt" || true
++    fi
++done
++
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after 10 seconds: $state"
++
++if [[ "$state" != running ]]; then
++    echo "--- Container exit details ---"
++    podman inspect "$NAME" --format         'ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} Error={{.State.Error}}'
++    echo "--- Container logs ---"
++    podman logs "$NAME" 2>&1 | tail -80 || true
++    echo "--- Native crash tombstones ---"
++    tombstone_dir="$(data_mount_path)/tombstones"
++    if [[ -d "$tombstone_dir" ]]; then
++        for f in "$tombstone_dir"/tombstone_*; do
++            [[ -f "$f" && "$f" != *.pb ]] || continue
++            echo "=== $(basename "$f") ==="
++            grep -aEm 16 '^(Cmdline:|pid:|signal |Abort message:| *#[0-9]+ pc)' "$f" || true
++        done
++    else
++        echo "No tombstones at $tombstone_dir"
++    fi
++
++    echo "--- Captured Android errors ---"
++    if [[ -s "$LOGCAT_CAPTURE" ]]; then
++        tail -n 80 "$LOGCAT_CAPTURE"
++    else
++        cat "$LEPTON_PREFIX/logcat-error.txt" 2>/dev/null || true
++    fi
++    exit 1
++fi
++
++echo "PASS: Android init container remains running"
++podman top "$NAME" | sed -n "1,12p"
++
++podman stop --time 5 "$NAME" >/dev/null
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after stop: $state"
++[[ "$state" == exited ]]
++
++podman rm "$NAME" >/dev/null
++echo "PASS: Container stopped and removed"
+diff --git a/compat_tool/test-0400.sh b/compat_tool/test-0400.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..0a1df5d97f469d9fe1112f45e8bcd2e92aec8054
+--- /dev/null
++++ b/compat_tool/test-0400.sh
+@@ -0,0 +1,125 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++export LD_PRELOAD=
++
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++COMMAND=test-0400
++LEPTON_CONTEXT="test-0400-$$"
++NAME="lepton-$LEPTON_CONTEXT"
++PODMAN_CMDLINE=()
++
++exec {LEPTON_LOCKFD}>/tmp/lepton.lock
++flock --timeout 10 "$LEPTON_LOCKFD"
++
++source "$HERE/liblepton/liblepton.sh"
++create_prefix
++
++finish() {
++    result=$?
++    trap - EXIT
++    podman rm -f "$NAME" >/dev/null 2>&1 || true
++    remove_prefix >/dev/null 2>&1 || true
++    if (( result == 0 )); then
++        echo "PASS: Test 0400"
++    else
++        echo "FAIL: Test 0400 (exit $result)"
++    fi
++    exit "$result"
++}
++trap finish EXIT
++
++echo "TEST 0400: Android init lifecycle"
++
++# Keep all test data separate from the real sysbake.
++BAKED_SYSTEM_DATA_DIR="$LEPTON_PREFIX/test-data"
++mkdir -p "$BAKED_SYSTEM_DATA_DIR"
++
++setup_container
++if [[ "${LEPTON_TEST_PASTEL:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    sed -i 's/^ro.hardware.vulkan=radeon$/ro.hardware.vulkan=pastel/' "$LEPTON_PREFIX/lepton.prop"
++    grep -E '^ro.hardware.(egl|vulkan|gralloc)=' "$LEPTON_PREFIX/lepton.prop"
++fi
++if [[ "${LEPTON_TEST_DISABLE_DEFERRED:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    echo 'debug.angle.feature_overrides_disabled=supportsSwapchainMaintenance1' >> "$LEPTON_PREFIX/lepton.prop"
++    echo "ANGLE: disabled supportsSwapchainMaintenance1"
++fi
++
++ROOTFS="$(readlink -f "$HERE/images/rootfs")"
++
++podman run -d \
++    --read-only \
++    --env-host=false \
++    --init=false \
++    --name "$NAME" \
++    --userns=keep-id:uid=0,gid=0 \
++    --user 0:0 \
++    --group-add keep-groups \
++    "${PODMAN_CMDLINE[@]}" \
++    --rootfs "$ROOTFS:O" \
++    /init
++
++LOGCAT_CAPTURE="$LEPTON_PREFIX/android-logcat.txt"
++
++for second in {1..30}; do
++    sleep 1
++    state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++    echo "${second}s: $state"
++    [[ "$state" == running ]] || break
++
++    if [[ "$second" == 2 || "$second" == 3 ]]; then
++        timeout 3 podman exec "$NAME" /system/bin/logcat -b all -d -t 300             >> "$LOGCAT_CAPTURE" 2>"$LEPTON_PREFIX/logcat-error.txt" || true
++    fi
++done
++
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after 30 seconds: $state"
++
++if [[ "$state" != running ]]; then
++    echo "--- Container exit details ---"
++    podman inspect "$NAME" --format         'ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} Error={{.State.Error}}'
++    echo "--- Container logs ---"
++    podman logs "$NAME" 2>&1 | tail -80 || true
++    echo "--- Native crash tombstones ---"
++    tombstone_dir="$(data_mount_path)/tombstones"
++    if [[ -d "$tombstone_dir" ]]; then
++        for f in "$tombstone_dir"/tombstone_*; do
++            [[ -f "$f" && "$f" != *.pb ]] || continue
++            echo "=== $(basename "$f") ==="
++            grep -aEm 16 '^(Cmdline:|pid:|signal |Abort message:| *#[0-9]+ pc)' "$f" || true
++        done
++    else
++        echo "No tombstones at $tombstone_dir"
++    fi
++
++    echo "--- Captured Android errors ---"
++    if [[ -s "$LOGCAT_CAPTURE" ]]; then
++        tail -n 80 "$LOGCAT_CAPTURE"
++    else
++        cat "$LEPTON_PREFIX/logcat-error.txt" 2>/dev/null || true
++    fi
++    exit 1
++fi
++
++echo "PASS: Android init container remains running"
++echo "Android boot completed: $(podman exec "$NAME" /system/bin/getprop sys.boot_completed)"
++for process in surfaceflinger system_server com.android.systemui; do
++    podman exec "$NAME" /system/bin/pidof "$process" >/dev/null || {
++        echo "FAIL: $process is not running"
++        exit 1
++    }
++    echo "PASS: $process running"
++done
++
++podman top "$NAME" | sed -n "1,12p"
++
++podman stop --time 5 "$NAME" >/dev/null
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after stop: $state"
++[[ "$state" == exited ]]
++
++podman rm "$NAME" >/dev/null
++echo "PASS: Container stopped and removed"
+diff --git a/compat_tool/test-0500.sh b/compat_tool/test-0500.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..ea4f5654e78223be6426194f0b51161a072c17bc
+--- /dev/null
++++ b/compat_tool/test-0500.sh
+@@ -0,0 +1,140 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++export LD_PRELOAD=
++
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++COMMAND=test-0500
++LEPTON_CONTEXT="test-0500-$$"
++NAME="lepton-$LEPTON_CONTEXT"
++PODMAN_CMDLINE=()
++
++exec {LEPTON_LOCKFD}>/tmp/lepton.lock
++flock --timeout 10 "$LEPTON_LOCKFD"
++
++source "$HERE/liblepton/liblepton.sh"
++create_prefix
++
++finish() {
++    result=$?
++    trap - EXIT
++    podman rm -f "$NAME" >/dev/null 2>&1 || true
++    remove_prefix >/dev/null 2>&1 || true
++    if (( result == 0 )); then
++        echo "PASS: Test 0500"
++    else
++        echo "FAIL: Test 0500 (exit $result)"
++    fi
++    exit "$result"
++}
++trap finish EXIT
++
++echo "TEST 0500: Android init lifecycle"
++
++# Keep all test data separate from the real sysbake.
++BAKED_SYSTEM_DATA_DIR="$LEPTON_PREFIX/test-data"
++mkdir -p "$BAKED_SYSTEM_DATA_DIR"
++
++setup_container
++if [[ "${LEPTON_TEST_PASTEL:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    sed -i 's/^ro.hardware.vulkan=radeon$/ro.hardware.vulkan=pastel/' "$LEPTON_PREFIX/lepton.prop"
++    grep -E '^ro.hardware.(egl|vulkan|gralloc)=' "$LEPTON_PREFIX/lepton.prop"
++fi
++if [[ "${LEPTON_TEST_DISABLE_DEFERRED:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    echo 'debug.angle.feature_overrides_disabled=supportsSwapchainMaintenance1' >> "$LEPTON_PREFIX/lepton.prop"
++    echo "ANGLE: disabled supportsSwapchainMaintenance1"
++fi
++
++ROOTFS="$(readlink -f "$HERE/images/rootfs")"
++
++podman run -d \
++    --read-only \
++    --env-host=false \
++    --init=false \
++    --name "$NAME" \
++    --userns=keep-id:uid=0,gid=0 \
++    --user 0:0 \
++    --group-add keep-groups \
++    "${PODMAN_CMDLINE[@]}" \
++    --rootfs "$ROOTFS:O" \
++    /init
++
++LOGCAT_CAPTURE="$LEPTON_PREFIX/android-logcat.txt"
++
++for second in {1..30}; do
++    sleep 1
++    state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++    echo "${second}s: $state"
++    [[ "$state" == running ]] || break
++
++    if [[ "$second" == 2 || "$second" == 3 ]]; then
++        timeout 3 podman exec "$NAME" /system/bin/logcat -b all -d -t 300             >> "$LOGCAT_CAPTURE" 2>"$LEPTON_PREFIX/logcat-error.txt" || true
++    fi
++done
++
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after 30 seconds: $state"
++
++if [[ "$state" != running ]]; then
++    echo "--- Container exit details ---"
++    podman inspect "$NAME" --format         'ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} Error={{.State.Error}}'
++    echo "--- Container logs ---"
++    podman logs "$NAME" 2>&1 | tail -80 || true
++    echo "--- Native crash tombstones ---"
++    tombstone_dir="$(data_mount_path)/tombstones"
++    if [[ -d "$tombstone_dir" ]]; then
++        for f in "$tombstone_dir"/tombstone_*; do
++            [[ -f "$f" && "$f" != *.pb ]] || continue
++            echo "=== $(basename "$f") ==="
++            grep -aEm 16 '^(Cmdline:|pid:|signal |Abort message:| *#[0-9]+ pc)' "$f" || true
++        done
++    else
++        echo "No tombstones at $tombstone_dir"
++    fi
++
++    echo "--- Captured Android errors ---"
++    if [[ -s "$LOGCAT_CAPTURE" ]]; then
++        tail -n 80 "$LOGCAT_CAPTURE"
++    else
++        cat "$LEPTON_PREFIX/logcat-error.txt" 2>/dev/null || true
++    fi
++    exit 1
++fi
++
++echo "PASS: Android init container remains running"
++echo "Android boot completed: $(podman exec "$NAME" /system/bin/getprop sys.boot_completed)"
++for process in surfaceflinger system_server com.android.systemui; do
++    podman exec "$NAME" /system/bin/pidof "$process" >/dev/null || {
++        echo "FAIL: $process is not running"
++        exit 1
++    }
++    echo "PASS: $process running"
++done
++
++echo "--- Graphics backend verification ---"
++for pair in     "ro.hardware.gralloc:minigbm_gbm_mesa"     "ro.hardware.vulkan:radeon"     "debug.angle.feature_overrides_disabled:supportsSwapchainMaintenance1"; do
++    key="${pair%%:*}"
++    expected="${pair#*:}"
++    actual="$(podman exec "$NAME" /system/bin/getprop "$key")"
++    echo "$key=$actual"
++    [[ "$actual" == "$expected" ]] || exit 1
++done
++
++echo "--- Graphics allocator process ---"
++podman exec "$NAME" /system/bin/ps -A -o ARGS |
++    grep -F 'allocator@4.0-service.minigbm_gbm_mesa'
++
++echo "PASS: Graphics configuration and allocator verified"
++
++podman top "$NAME" | sed -n "1,12p"
++
++podman stop --time 5 "$NAME" >/dev/null
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after stop: $state"
++[[ "$state" == exited ]]
++
++podman rm "$NAME" >/dev/null
++echo "PASS: Container stopped and removed"
+diff --git a/compat_tool/test-0600.sh b/compat_tool/test-0600.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d38e694a2e372889c90576e3c5715c7e1bfc695
+--- /dev/null
++++ b/compat_tool/test-0600.sh
+@@ -0,0 +1,162 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++export LD_PRELOAD=
++
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++COMMAND=test-0600
++LEPTON_CONTEXT="test-0600-$$"
++NAME="lepton-$LEPTON_CONTEXT"
++PODMAN_CMDLINE=()
++
++exec {LEPTON_LOCKFD}>/tmp/lepton.lock
++flock --timeout 10 "$LEPTON_LOCKFD"
++
++source "$HERE/liblepton/liblepton.sh"
++create_prefix
++
++finish() {
++    result=$?
++    trap - EXIT
++    podman rm -f "$NAME" >/dev/null 2>&1 || true
++    remove_prefix >/dev/null 2>&1 || true
++    if (( result == 0 )); then
++        echo "PASS: Test 0600"
++    else
++        echo "FAIL: Test 0600 (exit $result)"
++    fi
++    exit "$result"
++}
++trap finish EXIT
++
++echo "TEST 0600: Android init lifecycle"
++
++# Keep all test data separate from the real sysbake.
++BAKED_SYSTEM_DATA_DIR="$LEPTON_PREFIX/test-data"
++mkdir -p "$BAKED_SYSTEM_DATA_DIR"
++
++setup_container
++if [[ "${LEPTON_TEST_PASTEL:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    sed -i 's/^ro.hardware.vulkan=radeon$/ro.hardware.vulkan=pastel/' "$LEPTON_PREFIX/lepton.prop"
++    grep -E '^ro.hardware.(egl|vulkan|gralloc)=' "$LEPTON_PREFIX/lepton.prop"
++fi
++if [[ "${LEPTON_TEST_DISABLE_DEFERRED:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    echo 'debug.angle.feature_overrides_disabled=supportsSwapchainMaintenance1' >> "$LEPTON_PREFIX/lepton.prop"
++    echo "ANGLE: disabled supportsSwapchainMaintenance1"
++fi
++
++ROOTFS="$(readlink -f "$HERE/images/rootfs")"
++
++podman run -d \
++    --read-only \
++    --env-host=false \
++    --init=false \
++    --name "$NAME" \
++    --userns=keep-id:uid=0,gid=0 \
++    --user 0:0 \
++    --group-add keep-groups \
++    "${PODMAN_CMDLINE[@]}" \
++    --rootfs "$ROOTFS:O" \
++    /init
++
++LOGCAT_CAPTURE="$LEPTON_PREFIX/android-logcat.txt"
++
++for second in {1..30}; do
++    sleep 1
++    state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++    echo "${second}s: $state"
++    [[ "$state" == running ]] || break
++
++    if [[ "$second" == 2 || "$second" == 3 ]]; then
++        timeout 3 podman exec "$NAME" /system/bin/logcat -b all -d -t 300             >> "$LOGCAT_CAPTURE" 2>"$LEPTON_PREFIX/logcat-error.txt" || true
++    fi
++done
++
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after 30 seconds: $state"
++
++if [[ "$state" != running ]]; then
++    echo "--- Container exit details ---"
++    podman inspect "$NAME" --format         'ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} Error={{.State.Error}}'
++    echo "--- Container logs ---"
++    podman logs "$NAME" 2>&1 | tail -80 || true
++    echo "--- Native crash tombstones ---"
++    tombstone_dir="$(data_mount_path)/tombstones"
++    if [[ -d "$tombstone_dir" ]]; then
++        for f in "$tombstone_dir"/tombstone_*; do
++            [[ -f "$f" && "$f" != *.pb ]] || continue
++            echo "=== $(basename "$f") ==="
++            grep -aEm 16 '^(Cmdline:|pid:|signal |Abort message:| *#[0-9]+ pc)' "$f" || true
++        done
++    else
++        echo "No tombstones at $tombstone_dir"
++    fi
++
++    echo "--- Captured Android errors ---"
++    if [[ -s "$LOGCAT_CAPTURE" ]]; then
++        tail -n 80 "$LOGCAT_CAPTURE"
++    else
++        cat "$LEPTON_PREFIX/logcat-error.txt" 2>/dev/null || true
++    fi
++    exit 1
++fi
++
++echo "PASS: Android init container remains running"
++echo "Android boot completed: $(podman exec "$NAME" /system/bin/getprop sys.boot_completed)"
++for process in surfaceflinger system_server com.android.systemui; do
++    podman exec "$NAME" /system/bin/pidof "$process" >/dev/null || {
++        echo "FAIL: $process is not running"
++        exit 1
++    }
++    echo "PASS: $process running"
++done
++
++echo "--- Graphics backend verification ---"
++for pair in     "ro.hardware.gralloc:minigbm_gbm_mesa"     "ro.hardware.vulkan:radeon"     "debug.angle.feature_overrides_disabled:supportsSwapchainMaintenance1"; do
++    key="${pair%%:*}"
++    expected="${pair#*:}"
++    actual="$(podman exec "$NAME" /system/bin/getprop "$key")"
++    echo "$key=$actual"
++    [[ "$actual" == "$expected" ]] || exit 1
++done
++
++echo "--- Graphics allocator process ---"
++podman exec "$NAME" /system/bin/ps -A -o ARGS |
++    grep -F 'allocator@4.0-service.minigbm_gbm_mesa'
++
++echo "PASS: Graphics configuration and allocator verified"
++
++echo "--- GPU driver verification ---"
++podman exec "$NAME" /system/bin/sh -c '
++    set -eu
++    pid="$(pidof com.android.systemui)"
++    pid="${pid%% *}"
++    echo "SystemUI PID: $pid"
++
++    for lib in libGLESv2_angle.so vulkan.radeon.so; do
++        grep -Fq "$lib" "/proc/$pid/maps" || {
++            echo "FAIL: $lib not loaded"
++            exit 1
++        }
++        echo "PASS: $lib loaded"
++    done
++
++    ls -l "/proc/$pid/fd" | grep "/dev/dri/renderD" || {
++        echo "FAIL: No GPU render-node FD found"
++        exit 1
++    }
++    echo "PASS: GPU render device open"
++'
++
++podman top "$NAME" | sed -n "1,12p"
++
++podman stop --time 5 "$NAME" >/dev/null
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after stop: $state"
++[[ "$state" == exited ]]
++
++podman rm "$NAME" >/dev/null
++echo "PASS: Container stopped and removed"
+diff --git a/compat_tool/test-0700.sh b/compat_tool/test-0700.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..d984922f283628176f319a1b5dbea4d2c83d5a90
+--- /dev/null
++++ b/compat_tool/test-0700.sh
+@@ -0,0 +1,169 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++export LD_PRELOAD=
++
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++COMMAND=test-0700
++LEPTON_CONTEXT="test-0700-$$"
++NAME="lepton-$LEPTON_CONTEXT"
++PODMAN_CMDLINE=()
++
++exec {LEPTON_LOCKFD}>/tmp/lepton.lock
++flock --timeout 10 "$LEPTON_LOCKFD"
++
++source "$HERE/liblepton/liblepton.sh"
++create_prefix
++
++finish() {
++    result=$?
++    trap - EXIT
++    podman rm -f "$NAME" >/dev/null 2>&1 || true
++    remove_prefix >/dev/null 2>&1 || true
++    if (( result == 0 )); then
++        echo "PASS: Test 0700"
++    else
++        echo "FAIL: Test 0700 (exit $result)"
++    fi
++    exit "$result"
++}
++trap finish EXIT
++
++echo "TEST 0700: Android init lifecycle"
++
++# Keep all test data separate from the real sysbake.
++BAKED_SYSTEM_DATA_DIR="$LEPTON_PREFIX/test-data"
++mkdir -p "$BAKED_SYSTEM_DATA_DIR"
++
++LEPTON_TEST_ROOTFS="$(readlink -e "${LEPTON_TEST_ROOTFS:?Set LEPTON_TEST_ROOTFS}")"
++[[ "$LEPTON_TEST_ROOTFS" != "$(readlink -f "$HERE/images/rootfs")" ]]
++[[ -f "$LEPTON_TEST_ROOTFS/system/build.prop" ]]
++[[ -f "$LEPTON_TEST_ROOTFS/vendor/lib64/hw/vulkan.radeon.so" ]]
++export LEPTON_TEST_ROOTFS
++echo "Testing reproduced rootfs: $LEPTON_TEST_ROOTFS"
++
++setup_container
++if [[ "${LEPTON_TEST_PASTEL:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    sed -i 's/^ro.hardware.vulkan=radeon$/ro.hardware.vulkan=pastel/' "$LEPTON_PREFIX/lepton.prop"
++    grep -E '^ro.hardware.(egl|vulkan|gralloc)=' "$LEPTON_PREFIX/lepton.prop"
++fi
++if [[ "${LEPTON_TEST_DISABLE_DEFERRED:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    echo 'debug.angle.feature_overrides_disabled=supportsSwapchainMaintenance1' >> "$LEPTON_PREFIX/lepton.prop"
++    echo "ANGLE: disabled supportsSwapchainMaintenance1"
++fi
++
++ROOTFS="$LEPTON_TEST_ROOTFS"
++
++podman run -d \
++    --read-only \
++    --env-host=false \
++    --init=false \
++    --name "$NAME" \
++    --userns=keep-id:uid=0,gid=0 \
++    --user 0:0 \
++    --group-add keep-groups \
++    "${PODMAN_CMDLINE[@]}" \
++    --rootfs "$ROOTFS:O" \
++    /init
++
++LOGCAT_CAPTURE="$LEPTON_PREFIX/android-logcat.txt"
++
++for second in {1..30}; do
++    sleep 1
++    state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++    echo "${second}s: $state"
++    [[ "$state" == running ]] || break
++
++    if [[ "$second" == 2 || "$second" == 3 ]]; then
++        timeout 3 podman exec "$NAME" /system/bin/logcat -b all -d -t 300             >> "$LOGCAT_CAPTURE" 2>"$LEPTON_PREFIX/logcat-error.txt" || true
++    fi
++done
++
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after 30 seconds: $state"
++
++if [[ "$state" != running ]]; then
++    echo "--- Container exit details ---"
++    podman inspect "$NAME" --format         'ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} Error={{.State.Error}}'
++    echo "--- Container logs ---"
++    podman logs "$NAME" 2>&1 | tail -80 || true
++    echo "--- Native crash tombstones ---"
++    tombstone_dir="$(data_mount_path)/tombstones"
++    if [[ -d "$tombstone_dir" ]]; then
++        for f in "$tombstone_dir"/tombstone_*; do
++            [[ -f "$f" && "$f" != *.pb ]] || continue
++            echo "=== $(basename "$f") ==="
++            grep -aEm 16 '^(Cmdline:|pid:|signal |Abort message:| *#[0-9]+ pc)' "$f" || true
++        done
++    else
++        echo "No tombstones at $tombstone_dir"
++    fi
++
++    echo "--- Captured Android errors ---"
++    if [[ -s "$LOGCAT_CAPTURE" ]]; then
++        tail -n 80 "$LOGCAT_CAPTURE"
++    else
++        cat "$LEPTON_PREFIX/logcat-error.txt" 2>/dev/null || true
++    fi
++    exit 1
++fi
++
++echo "PASS: Android init container remains running"
++echo "Android boot completed: $(podman exec "$NAME" /system/bin/getprop sys.boot_completed)"
++for process in surfaceflinger system_server com.android.systemui; do
++    podman exec "$NAME" /system/bin/pidof "$process" >/dev/null || {
++        echo "FAIL: $process is not running"
++        exit 1
++    }
++    echo "PASS: $process running"
++done
++
++echo "--- Graphics backend verification ---"
++for pair in     "ro.hardware.gralloc:minigbm_gbm_mesa"     "ro.hardware.vulkan:radeon"     "debug.angle.feature_overrides_disabled:supportsSwapchainMaintenance1"; do
++    key="${pair%%:*}"
++    expected="${pair#*:}"
++    actual="$(podman exec "$NAME" /system/bin/getprop "$key")"
++    echo "$key=$actual"
++    [[ "$actual" == "$expected" ]] || exit 1
++done
++
++echo "--- Graphics allocator process ---"
++podman exec "$NAME" /system/bin/ps -A -o ARGS |
++    grep -F 'allocator@4.0-service.minigbm_gbm_mesa'
++
++echo "PASS: Graphics configuration and allocator verified"
++
++echo "--- GPU driver verification ---"
++podman exec "$NAME" /system/bin/sh -c '
++    set -eu
++    pid="$(pidof com.android.systemui)"
++    pid="${pid%% *}"
++    echo "SystemUI PID: $pid"
++
++    for lib in libGLESv2_angle.so vulkan.radeon.so; do
++        grep -Fq "$lib" "/proc/$pid/maps" || {
++            echo "FAIL: $lib not loaded"
++            exit 1
++        }
++        echo "PASS: $lib loaded"
++    done
++
++    ls -l "/proc/$pid/fd" | grep "/dev/dri/renderD" || {
++        echo "FAIL: No GPU render-node FD found"
++        exit 1
++    }
++    echo "PASS: GPU render device open"
++'
++
++podman top "$NAME" | sed -n "1,12p"
++
++podman stop --time 5 "$NAME" >/dev/null
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after stop: $state"
++[[ "$state" == exited ]]
++
++podman rm "$NAME" >/dev/null
++echo "PASS: Container stopped and removed"
+diff --git a/compat_tool/test-0800.sh b/compat_tool/test-0800.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..2db4c8c847232d603b64acd5025a0914c5157e35
+--- /dev/null
++++ b/compat_tool/test-0800.sh
+@@ -0,0 +1,182 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++export LD_PRELOAD=
++
++HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++COMMAND=test-0800
++LEPTON_CONTEXT="test-0800-$$"
++NAME="lepton-$LEPTON_CONTEXT"
++PODMAN_CMDLINE=()
++
++exec {LEPTON_LOCKFD}>/tmp/lepton.lock
++flock --timeout 10 "$LEPTON_LOCKFD"
++
++source "$HERE/liblepton/liblepton.sh"
++create_prefix
++
++finish() {
++    result=$?
++    trap - EXIT
++    podman rm -f "$NAME" >/dev/null 2>&1 || true
++    remove_prefix >/dev/null 2>&1 || true
++    if (( result == 0 )); then
++        echo "PASS: Test 0800"
++    else
++        echo "FAIL: Test 0800 (exit $result)"
++    fi
++    exit "$result"
++}
++trap finish EXIT
++
++echo "TEST 0800: Android init lifecycle"
++
++# Keep all test data separate from the real sysbake.
++BAKED_SYSTEM_DATA_DIR="$LEPTON_PREFIX/test-data"
++mkdir -p "$BAKED_SYSTEM_DATA_DIR"
++
++LEPTON_TEST_ROOTFS="$(readlink -e "${LEPTON_TEST_ROOTFS:?Set LEPTON_TEST_ROOTFS}")"
++[[ "$LEPTON_TEST_ROOTFS" != "$(readlink -f "$HERE/images/rootfs")" ]]
++[[ -f "$LEPTON_TEST_ROOTFS/system/build.prop" ]]
++[[ -f "$LEPTON_TEST_ROOTFS/vendor/lib64/hw/vulkan.radeon.so" ]]
++export LEPTON_TEST_ROOTFS
++echo "Testing reproduced rootfs: $LEPTON_TEST_ROOTFS"
++
++setup_container
++if [[ "${LEPTON_TEST_PASTEL:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    sed -i 's/^ro.hardware.vulkan=radeon$/ro.hardware.vulkan=pastel/' "$LEPTON_PREFIX/lepton.prop"
++    grep -E '^ro.hardware.(egl|vulkan|gralloc)=' "$LEPTON_PREFIX/lepton.prop"
++fi
++if [[ "${LEPTON_TEST_DISABLE_DEFERRED:-false}" == "true" ]]; then
++    grep -qx 'ro.hardware.vulkan=radeon' "$LEPTON_PREFIX/lepton.prop"
++    grep -qx 'ro.hardware.gralloc=minigbm_gbm_mesa' "$LEPTON_PREFIX/lepton.prop"
++    echo 'debug.angle.feature_overrides_disabled=supportsSwapchainMaintenance1' >> "$LEPTON_PREFIX/lepton.prop"
++    echo "ANGLE: disabled supportsSwapchainMaintenance1"
++fi
++
++ROOTFS="$LEPTON_TEST_ROOTFS"
++
++podman run -d \
++    --read-only \
++    --env-host=false \
++    --init=false \
++    --name "$NAME" \
++    --userns=keep-id:uid=0,gid=0 \
++    --user 0:0 \
++    --group-add keep-groups \
++    "${PODMAN_CMDLINE[@]}" \
++    --rootfs "$ROOTFS:O" \
++    /init
++
++LOGCAT_CAPTURE="$LEPTON_PREFIX/android-logcat.txt"
++
++for second in {1..30}; do
++    sleep 1
++    state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++    echo "${second}s: $state"
++    [[ "$state" == running ]] || break
++
++    if [[ "$second" == 2 || "$second" == 3 ]]; then
++        timeout 3 podman exec "$NAME" /system/bin/logcat -b all -d -t 300             >> "$LOGCAT_CAPTURE" 2>"$LEPTON_PREFIX/logcat-error.txt" || true
++    fi
++done
++
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after 30 seconds: $state"
++
++if [[ "$state" != running ]]; then
++    echo "--- Container exit details ---"
++    podman inspect "$NAME" --format         'ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} Error={{.State.Error}}'
++    echo "--- Container logs ---"
++    podman logs "$NAME" 2>&1 | tail -80 || true
++    echo "--- Native crash tombstones ---"
++    tombstone_dir="$(data_mount_path)/tombstones"
++    if [[ -d "$tombstone_dir" ]]; then
++        for f in "$tombstone_dir"/tombstone_*; do
++            [[ -f "$f" && "$f" != *.pb ]] || continue
++            echo "=== $(basename "$f") ==="
++            grep -aEm 16 '^(Cmdline:|pid:|signal |Abort message:| *#[0-9]+ pc)' "$f" || true
++        done
++    else
++        echo "No tombstones at $tombstone_dir"
++    fi
++
++    echo "--- Captured Android errors ---"
++    if [[ -s "$LOGCAT_CAPTURE" ]]; then
++        tail -n 80 "$LOGCAT_CAPTURE"
++    else
++        cat "$LEPTON_PREFIX/logcat-error.txt" 2>/dev/null || true
++    fi
++    exit 1
++fi
++
++echo "PASS: Android init container remains running"
++echo "Android boot completed: $(podman exec "$NAME" /system/bin/getprop sys.boot_completed)"
++for process in surfaceflinger system_server com.android.systemui; do
++    podman exec "$NAME" /system/bin/pidof "$process" >/dev/null || {
++        echo "FAIL: $process is not running"
++        exit 1
++    }
++    echo "PASS: $process running"
++done
++
++echo "--- Graphics backend verification ---"
++for pair in     "ro.hardware.gralloc:minigbm_gbm_mesa"     "ro.hardware.vulkan:radeon"     "debug.angle.feature_overrides_disabled:supportsSwapchainMaintenance1"; do
++    key="${pair%%:*}"
++    expected="${pair#*:}"
++    actual="$(podman exec "$NAME" /system/bin/getprop "$key")"
++    echo "$key=$actual"
++    [[ "$actual" == "$expected" ]] || exit 1
++done
++
++echo "--- Graphics allocator process ---"
++podman exec "$NAME" /system/bin/ps -A -o ARGS |
++    grep -F 'allocator@4.0-service.minigbm_gbm_mesa'
++
++echo "PASS: Graphics configuration and allocator verified"
++
++echo "--- GPU driver verification ---"
++podman exec "$NAME" /system/bin/sh -c '
++    set -eu
++    pid="$(pidof com.android.systemui)"
++    pid="${pid%% *}"
++    echo "SystemUI PID: $pid"
++
++    for lib in libGLESv2_angle.so vulkan.radeon.so; do
++        grep -Fq "$lib" "/proc/$pid/maps" || {
++            echo "FAIL: $lib not loaded"
++            exit 1
++        }
++        echo "PASS: $lib loaded"
++    done
++
++    ls -l "/proc/$pid/fd" | grep "/dev/dri/renderD" || {
++        echo "FAIL: No GPU render-node FD found"
++        exit 1
++    }
++    echo "PASS: GPU render device open"
++'
++
++podman top "$NAME" | sed -n "1,12p"
++
++echo "--- Android crash log ---"
++podman exec "$NAME" /system/bin/logcat -b crash -d -v threadtime | tail -n 120 || true
++
++echo "--- Native tombstone summaries ---"
++tombstone_dir="$(data_mount_path)/tombstones"
++if [[ -d "$tombstone_dir" ]]; then
++    for f in "$tombstone_dir"/tombstone_*; do
++        [[ -f "$f" && "$f" != *.pb ]] || continue
++        echo "=== $(basename "$f") ==="
++        grep -aEm 15 '^(Cmdline:|pid:|signal |Abort message:| *#[0-9]+ pc)' "$f" || true
++    done
++fi
++
++podman stop --time 5 "$NAME" >/dev/null
++state="$(podman inspect -f '{{.State.Status}}' "$NAME")"
++echo "Container state after stop: $state"
++[[ "$state" == exited ]]
++
++podman rm "$NAME" >/dev/null
++echo "PASS: Container stopped and removed"

@@ -1,0 +1,13 @@
+The Lepton AOSP image uses source code from the following opensource projects with their own licenses:
+
+* Android Opensource Project: https://source.android.com/docs/setup/about/licenses
+* Waydroid device and hardware configurations:
+    - https://github.com/waydroid/android_vendor_waydroid/tree/lineage-18.1/LICENSES
+    - https://github.com/waydroid/android_hardware_waydroid http://www.apache.org/licenses/LICENSE-2.0
+    - https://github.com/waydroid/android_device_waydroid_waydroid/tree/lineage-18.1 http://www.apache.org/licenses/LICENSE-2.0
+    - Lepton includes patches from Waydroid which originate from the Anbox, Halium or Hybris projects.
+* Boringdroid: https://github.com/boringdroid/boringdroid/blob/master/LICENSE
+* LineageOS: Licenses can be found in the individual repositories under: https://github.com/LineageOS
+
+The AOSP image, as a product of the combination of these opensource projects, is released under a GPL-3.0 license.
+The GPL-3.0 license text can be read here: https://www.gnu.org/licenses/gpl-3.0.html

@@ -1,0 +1,394 @@
+diff --git a/image-14/android_device_valve_lepton/device.mk b/image-14/android_device_valve_lepton/device.mk
+index d542d4c2fc5fb0b6d279444ba12085db303483e9..26bf8e3b0a7e1ddaf9a88a414d07230423fd8af2 100644
+--- a/image-14/android_device_valve_lepton/device.mk
++++ b/image-14/android_device_valve_lepton/device.mk
+@@ -24,7 +24,9 @@ $(call inherit-product-if-exists, vendor/bliss/config/common_full_tablet_wifionl
+ 
+ PRODUCT_PACKAGES += cmd_real vendor_manifest.xml system_manifest.xml manifest.xml
+ 
++ifneq ($(TARGET_PRODUCT),aosp_lepton_x86_64)
+ PRODUCT_PACKAGES += android.hardware.atrace@1.0-service
++endif
+ 
+ # Audio HAL
+ PRODUCT_PACKAGES += \
+@@ -90,8 +92,9 @@ endif
+ ifneq ($(TARGET_USE_MESA),false)
+ ifeq ($(TARGET_PRODUCT),aosp_lepton_x86_64)
+ PRODUCT_PACKAGES += \
+-    android.hardware.graphics.allocator@4.0-service.minigbm \
+-    gralloc.minigbm \
++    android.hardware.graphics.allocator@4.0-service.minigbm_gbm_mesa \
++    android.hardware.graphics.mapper@4.0-impl.minigbm_gbm_mesa \
++    dri_gbm \
+     libgallium_dri \
+     vulkan.radeon
+ else
+@@ -158,8 +161,15 @@ PRODUCT_PACKAGES += \
+ DEVICE_PACKAGE_OVERLAYS += $(LOCAL_PATH)/overlay
+ 
+ # Permissions
++ifeq ($(TARGET_PRODUCT),aosp_lepton_x86_64)
++PRODUCT_COPY_FILES += \
++    device/waydroid/waydroid/permissions/handheld_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/handheld_core_hardware.xml
++else
++PRODUCT_COPY_FILES += \
++    frameworks/native/data/etc/handheld_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/handheld_core_hardware.xml
++endif
++
+ PRODUCT_COPY_FILES += \
+-    frameworks/native/data/etc/handheld_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/handheld_core_hardware.xml \
+     frameworks/native/data/etc/android.hardware.audio.low_latency.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.audio.low_latency.xml \
+     frameworks/native/data/etc/android.hardware.camera.flash-autofocus.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.camera.flash-autofocus.xml \
+     frameworks/native/data/etc/android.hardware.camera.front.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.camera.front.xml \
+diff --git a/image-14/android_device_valve_lepton/permissions/handheld_core_hardware.xml b/image-14/android_device_valve_lepton/permissions/handheld_core_hardware.xml
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ace8fd8c0918bc5070d6553ae225e4630897927
+--- /dev/null
++++ b/image-14/android_device_valve_lepton/permissions/handheld_core_hardware.xml
+@@ -0,0 +1,103 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Copyright (C) 2009 The Android Open Source Project
++
++     Licensed under the Apache License, Version 2.0 (the "License");
++     you may not use this file except in compliance with the License.
++     You may obtain a copy of the License at
++
++          http://www.apache.org/licenses/LICENSE-2.0
++
++     Unless required by applicable law or agreed to in writing, software
++     distributed under the License is distributed on an "AS IS" BASIS,
++     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++     See the License for the specific language governing permissions and
++     limitations under the License.
++-->
++
++<!-- These are the hardware components that all handheld devices except Android Go
++     must include, for Android Go devices include go_handheld_core_hardware.xml.
++     Devices with optional hardware must also include extra hardware files, per the comments below.
++
++     Handheld devices include phones, mobile Internet devices (MIDs),
++     Personal Media Players (PMPs), small tablets (7" or less), and similar
++     devices.
++-->
++<permissions>
++    <!-- This is Android and fully CTS compatible.  Basically this is for CTS tests to use. -->
++    <feature name="android.software.cts" />
++
++    <feature name="android.hardware.audio.output" />
++    <feature name="android.hardware.camera" />
++    <feature name="android.hardware.location" />
++    <feature name="android.hardware.location.network" />
++    <feature name="android.hardware.sensor.compass" />
++    <feature name="android.hardware.sensor.accelerometer" />
++    <feature name="android.hardware.touchscreen" />
++    <feature name="android.hardware.microphone" />
++    <feature name="android.hardware.screen.portrait" />
++    <feature name="android.hardware.screen.landscape" />
++    <!-- Indicate support for the Android security model per the CDD. -->
++    <feature name="android.hardware.security.model.compatible" />
++
++    <!-- basic system services -->
++    <feature name="android.software.app_widgets" />
++    <feature name="android.software.telecom" />
++    <feature name="android.software.voice_recognizers" notLowRam="true" />
++    <feature name="android.software.backup" />
++    <feature name="android.software.home_screen" />
++    <feature name="android.software.input_methods" />
++    <feature name="android.software.picture_in_picture" notLowRam="true" />
++    <feature name="android.software.activities_on_secondary_displays" notLowRam="true" />
++    <feature name="android.software.companion_device_setup" />
++    <feature name="android.software.autofill" />
++    <feature name="android.software.credentials" />
++    <feature name="android.software.cant_save_state" />
++    <feature name="android.software.secure_lock_screen" />
++    <feature name="android.software.window_magnification" />
++
++    <!-- Feature to specify if the device supports adding device admins. -->
++    <feature name="android.software.device_admin" />
++
++    <!-- Feature to specify if the device support managed users. -->
++    <feature name="android.software.managed_users" notLowRam="true"/>
++
++    <!-- Feature to specify if the device supports controls. -->
++    <feature name="android.software.controls" />
++
++    <!-- Devices with all optimizations required to support VR Mode and
++         pass all CDD requirements for this feature may include
++         android.hardware.vr.high_performance -->
++    <!-- Devices that support VR headtracking features and pass all CDD
++         requirements may include
++         android.hardware.vr.headtracking -->
++
++    <!-- devices with GPS must include android.hardware.location.gps.xml -->
++    <!-- devices with an autofocus camera and/or flash must include either
++         android.hardware.camera.autofocus.xml or
++         android.hardware.camera.autofocus-flash.xml -->
++    <!-- devices with a front facing camera must include
++         android.hardware.camera.front.xml -->
++    <!-- devices with WiFi must also include android.hardware.wifi.xml -->
++    <!-- devices that support multitouch must include the most appropriate one
++         of these files:
++
++         If only partial (non-independent) pointers are supported:
++         android.hardware.touchscreen.multitouch.xml
++
++         If up to 4 independently tracked pointers are supported:
++         include android.hardware.touchscreen.multitouch.distinct.xml
++
++         If 5 or more independently tracked pointers are supported:
++         include android.hardware.touchscreen.multitouch.jazzhand.xml
++
++         ONLY ONE of the above should be included. -->
++    <!-- devices with an ambient light sensor must also include
++         android.hardware.sensor.light.xml -->
++    <!-- devices with a proximity sensor must also include
++         android.hardware.sensor.proximity.xml -->
++    <!-- GSM phones must also include android.hardware.telephony.gsm.xml -->
++    <!-- CDMA phones must also include android.hardware.telephony.cdma.xml -->
++    <!-- Devices that have low-latency audio stacks suitable for apps like
++         VoIP may include android.hardware.audio.low_latency.xml. ONLY apps
++         that meet the requirements specified in the CDD may include this. -->
++</permissions>
+diff --git a/image-14/scripts/build-images-x86_64.sh b/image-14/scripts/build-images-x86_64.sh
+index 0abd5f88665e7deba60508f36fc26d5e8d3b8e8b..7b4136cd0042921eaaa6ebf88eabba0035adbbd2 100755
+--- a/image-14/scripts/build-images-x86_64.sh
++++ b/image-14/scripts/build-images-x86_64.sh
+@@ -33,19 +33,28 @@ ln -sf \
+ 
+ ./.buildscripts/copy_vendored_projects.sh
+ 
+-PATCH=/workspace/patches/0001-mesa-android-sdk34-link-libzstd.patch
+-if [[ -f "$PATCH" ]]; then
+-    cd /workspace/output/external/mesa
+-    if git apply --reverse --check "$PATCH" >/dev/null 2>&1; then
+-        echo "Mesa libzstd patch already applied"
++apply_patch() {
++    local tree="$1"
++    local patch="$2"
++    local name="$3"
++
++    if [[ ! -f "$patch" ]]; then
++        echo "Missing $patch" >&2
++        exit 1
++    fi
++
++    cd "$tree"
++    if git apply --reverse --check "$patch" >/dev/null 2>&1; then
++        echo "$name already applied"
+     else
+-        git apply "$PATCH"
+-        echo "Applied Mesa libzstd patch"
++        git apply "$patch"
++        echo "Applied $name"
+     fi
+-else
+-    echo "Missing $PATCH" >&2
+-    exit 1
+-fi
++}
++
++apply_patch /workspace/output/external/mesa     /workspace/patches/0001-mesa-android-sdk34-link-libzstd.patch     "Mesa libzstd patch"
++
++apply_patch /workspace/output/external/minigbm     /workspace/patches/0004-minigbm-gbm-mesa-driver.patch     "minigbm GBM/Mesa backend"
+ 
+ cd /workspace/output
+ taskset -c 0-5 bash -c "
+diff --git a/image-14/scripts/package-repro-rootfs.sh b/image-14/scripts/package-repro-rootfs.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..6aa8adebee82c407ce66548a99b0021c63e1bb3b
+--- /dev/null
++++ b/image-14/scripts/package-repro-rootfs.sh
+@@ -0,0 +1,87 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++
++if [[ $# -ne 1 ]]; then
++    echo "Usage: $0 /path/to/aosp-checkout" >&2
++    exit 2
++fi
++
++aosp="$(readlink -f "$1")"
++product="$aosp/out/target/product/lepton_x86_64"
++stage="$aosp/repro-rootfs-auto"
++target="$stage/rootfs"
++
++[[ -d "$aosp/.repo" ]] || { echo "Not an AOSP checkout" >&2; exit 1; }
++[[ -f "$product/system.img" && -f "$product/vendor.img" ]] || {
++    echo "Missing Android images" >&2
++    exit 1
++}
++[[ ! -e "$target" && ! -L "$target" ]] || {
++    echo "Refusing to overwrite $target" >&2
++    exit 1
++}
++
++for tool in simg2img sqfs2tar tar unzip fuse2fs fusermount3 rsync; do
++    command -v "$tool" >/dev/null || {
++        echo "Missing required tool: $tool" >&2
++        exit 1
++    }
++done
++
++mkdir -p "$stage"
++tmp="$(mktemp -d "$stage/.package-XXXXXXXX")"
++mounted=''
++
++cleanup() {
++    if [[ -n "$mounted" ]]; then
++        fusermount3 -u "$mounted" || true
++    fi
++    rm -rf -- "$tmp"
++}
++trap cleanup EXIT
++
++echo "Converting Android sparse images..."
++for part in system vendor; do
++    simg2img "$product/$part.img" "$tmp/$part.raw.img"
++done
++
++echo "Extracting system and vendor..."
++sqfs2tar "$tmp/system.raw.img" > "$tmp/rootfs.tar"
++sqfs2tar -r vendor "$tmp/vendor.raw.img" > "$tmp/vendor.tar"
++tar -A -f "$tmp/rootfs.tar" "$tmp/vendor.tar"
++
++mkdir "$tmp/rootfs"
++tar -xf "$tmp/rootfs.tar" -C "$tmp/rootfs"
++
++echo "Flattening APEX packages..."
++shopt -s nullglob
++count=0
++
++for apex in "$tmp/rootfs"/{system,vendor}/apex/*.apex; do
++    unpack="$tmp/apex-unpack"
++    mountdir="$tmp/apex-mount"
++    dest="${apex%.apex}"
++
++    mkdir -p "$unpack" "$mountdir" "$dest"
++    unzip -q "$apex" -d "$unpack"
++    fuse2fs -o fakeroot "$unpack/apex_payload.img" "$mountdir"
++    mounted="$mountdir"
++
++    rsync -a --exclude='lost+found' "$mountdir/" "$dest/"
++
++    fusermount3 -u "$mounted"
++    mounted=''
++
++    rm -rf -- "$unpack" "$mountdir"
++    rm -- "$apex"
++    ((count += 1))
++done
++
++[[ -f "$tmp/rootfs/system/build.prop" ]]
++[[ -f "$tmp/rootfs/vendor/lib64/hw/vulkan.radeon.so" ]]
++[[ ! -e "$target" && ! -L "$target" ]]
++
++mv "$tmp/rootfs" "$target"
++
++echo "PASS: Flattened $count APEX packages"
++echo "PASS: Reproduced rootfs available at $target"
+diff --git a/image-14/scripts/snapshot-worktree-patches.sh b/image-14/scripts/snapshot-worktree-patches.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..1d7d901e899bfb4cbef932fd3830d3873452d775
+--- /dev/null
++++ b/image-14/scripts/snapshot-worktree-patches.sh
+@@ -0,0 +1,99 @@
++#!/usr/bin/env bash
++# Capture current Lepton x86_64 source changes without staging/committing to the real index.
++# Install under image-14/scripts/ and run: bash scripts/snapshot-worktree-patches.sh
++set -Eeuo pipefail
++
++IMAGE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
++COMPAT_DIR="$(cd -- "$IMAGE_DIR/../compat_tool" && pwd -P)"
++AOSP_DIR="$(readlink -f -- "$IMAGE_DIR/aosp-output")"
++
++if [[ ! -d "$AOSP_DIR/external/minigbm/.git" && ! -f "$AOSP_DIR/external/minigbm/.git" ]]; then
++    echo "ERROR: expected a Git checkout at $AOSP_DIR/external/minigbm" >&2
++    exit 1
++fi
++if ! git -C "$IMAGE_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
++   ! git -C "$COMPAT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
++   ! git -C "$AOSP_DIR/external/mesa" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
++    echo "ERROR: image-14, compat_tool and AOSP Mesa must be Git working trees" >&2
++    exit 1
++fi
++
++mkdir -p -- "$IMAGE_DIR/patches/snapshots"
++OUT="$(mktemp -d "$IMAGE_DIR/patches/snapshots/run-XXXXXXXX")"
++printf 'Generated: %s\n' "$(date -Is)" > "$OUT/BASE_COMMITS.txt"
++printf 'Snapshots are raw, unreviewed, current working-tree changes.\n' >> "$OUT/BASE_COMMITS.txt"
++printf 'They may contain obsolete AMD/DRI code or duplicate the Mesa zstd patch.\n\n' >> "$OUT/BASE_COMMITS.txt"
++
++ALT_INDEX=''
++cleanup_index() {
++    if [[ -n "$ALT_INDEX" ]]; then
++        rm -f -- "$ALT_INDEX" "$ALT_INDEX.lock"
++    fi
++}
++trap cleanup_index EXIT
++
++capture() {
++    local label="$1" repo="$2"; shift 2
++    local outfile="$OUT/${label}.DRAFT.patch"
++
++    printf '\n[%s]\n' "$label" >> "$OUT/BASE_COMMITS.txt"
++    printf 'requested_directory=%s\n' "$repo" >> "$OUT/BASE_COMMITS.txt"
++    printf 'git_root=%s\n' "$(git -C "$repo" rev-parse --show-toplevel)" >> "$OUT/BASE_COMMITS.txt"
++    printf 'base_commit=%s\n' "$(git -C "$repo" rev-parse HEAD)" >> "$OUT/BASE_COMMITS.txt"
++    git -C "$repo" status --short --untracked-files=normal > "$OUT/${label}.status.txt"
++
++    # Build a temporary index starting at HEAD: includes new/untracked files while
++    # avoiding writes to the user's real staging area (.git/index).
++    ALT_INDEX="$(mktemp "$OUT/.alt-index-XXXXXXXX")"
++    rm -f -- "$ALT_INDEX"
++    GIT_INDEX_FILE="$ALT_INDEX" git -C "$repo" read-tree HEAD
++    GIT_INDEX_FILE="$ALT_INDEX" git -C "$repo" add -A -- "$@"
++    GIT_INDEX_FILE="$ALT_INDEX" git -C "$repo" diff --cached --binary --full-index HEAD > "$outfile"
++    cleanup_index
++    ALT_INDEX=''
++    if [[ -s "$outfile" ]]; then
++        echo "Captured: $(basename "$outfile") ($(wc -c < "$outfile") bytes)"
++    else
++        echo "No selected changes for: $label"
++    fi
++}
++
++# These two snapshots intentionally include experimental work. Review before use.
++capture minigbm "$AOSP_DIR/external/minigbm" .
++capture mesa-android "$AOSP_DIR/external/mesa" android
++
++# Scope the main repositories, avoiding generated output, symlinks and binary images.
++image_paths=(android_device_valve_lepton .buildscripts/container.sh)
++[[ -f "$IMAGE_DIR/.buildscripts/package_rootfs.sh" ]] && image_paths+=(.buildscripts/package_rootfs.sh)
++[[ -d "$IMAGE_DIR/scripts" ]] && image_paths+=(scripts)
++capture lepton-image "$IMAGE_DIR" "${image_paths[@]}"
++
++compat_paths=(liblepton)
++[[ -d "$COMPAT_DIR/images/rootfs_overlay" ]] && compat_paths+=(images/rootfs_overlay)
++shopt -s nullglob
++for test_script in "$COMPAT_DIR"/test-[0-9][0-9][0-9][0-9].sh; do
++    compat_paths+=("$(basename "$test_script")")
++done
++shopt -u nullglob
++capture lepton-runtime "$COMPAT_DIR" "${compat_paths[@]}"
++
++cat > "$OUT/README.txt" <<'INFO'
++PATCH CAPTURE — REVIEW REQUIRED
++================================
++Each *.DRAFT.patch is a snapshot against the base commit recorded in
++BASE_COMMITS.txt. Apply patches from the corresponding git_root directory,
++not blindly from image-14. No source/index changes were made to capture them.
++
++minigbm: may include obsolete AMD/legacy DRI experimental code alongside the
++          working Waydroid GBM/Mesa backend. Clean/split before finalization.
++mesa-android: may overlap the existing 0001 SDK34 zstd patch; do NOT apply both
++              without inspecting the diff.
++lepton-image: device config and build helper changes from the image checkout.
++lepton-runtime: runtime library changes and numbered test scripts.
++
++Next: review git diff and patches, remove experiments, promote to ordered
++patches, update build-images-x86_64.sh to apply all required patches, then
++verify clean Git checkouts + rebuilt images + tests 0100–0600.
++INFO
++printf '\nPatch snapshots saved to: %s\n' "$OUT"
++printf 'Source checkouts and their actual Git index were not modified.\n'

@@ -1,0 +1,20 @@
+lepton_compat_tool_build.vdf
+lepton_rootfs_build.vdf
+install
+install-rootfs
+compat_tool/images/rootfs
+compat_tool/images/sysbake
+*.zip
+compat_tool/liblepton/apk_extractor/bin/apk-info-extractor
+compat_tool/liblepton/mdns_publisher/bin/lepton-mdns-publish
+compat_tool.tar.zst
+.code_snapshots
+
+# Local generated Lepton data
+/compat_tool/images/rootfs-previous/
+/compat_tool/sysbake/
+/compat_tool/sysbake.xattrs
+/image-14/.buildscripts/root/
+/image-14/patches/snapshots/
+
+/docs/

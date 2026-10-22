@@ -1,0 +1,47 @@
+diff --git a/android/mesa3d_cross.mk b/android/mesa3d_cross.mk
+index ddb2915..f73aa16 100644
+--- a/android/mesa3d_cross.mk
++++ b/android/mesa3d_cross.mk
+@@ -65,6 +65,7 @@ MESON_GEN_FILES_TARGET                   := $(MESON_GEN_DIR)/.timestamp
+ 
+ MESA3D_GALLIUM_DIR                       := $(MESON_OUT_DIR)/install/usr/local/lib
+ $(M_TARGET_PREFIX)MESA3D_GALLIUM_BIN     := $(MESON_OUT_DIR)/install/usr/local/lib/libgallium_dri.so
++$(M_TARGET_PREFIX)MESA3D_RADEONSI_DRI_BIN := $(MESON_OUT_DIR)/install/usr/local/lib/dri/libdril_dri.so
+ $(M_TARGET_PREFIX)MESA3D_LIBEGL_BIN      := $(MESON_OUT_DIR)/install/usr/local/lib/libEGL.so
+ $(M_TARGET_PREFIX)MESA3D_LIBGLESV1_BIN   := $(MESON_OUT_DIR)/install/usr/local/lib/libGLESv1_CM.so
+ $(M_TARGET_PREFIX)MESA3D_LIBGLESV2_BIN   := $(MESON_OUT_DIR)/install/usr/local/lib/libGLESv2.so
+@@ -78,6 +79,7 @@ MESA3D_GBM_BINS := \
+ 
+ MESA3D_GLES_BINS := \
+     $($(M_TARGET_PREFIX)MESA3D_GALLIUM_BIN) \
++    $($(M_TARGET_PREFIX)MESA3D_RADEONSI_DRI_BIN) \
+     $($(M_TARGET_PREFIX)MESA3D_LIBEGL_BIN)    \
+     $($(M_TARGET_PREFIX)MESA3D_LIBGLESV1_BIN) \
+     $($(M_TARGET_PREFIX)MESA3D_LIBGLESV2_BIN) \
+diff --git a/src/meson.build b/src/meson.build
+index f27dae3..b9b37a1 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -154,7 +154,7 @@ if with_egl
+   subdir('egl')
+ endif
+ if with_gallium and with_gbm
+-  if with_glx == 'dri' or with_platform_x11 or with_platform_xcb
++  if with_glx == 'dri' or with_platform_x11 or with_platform_xcb or with_platform_android
+     subdir('gallium/targets/dril')
+   endif
+ endif
+diff --git a/android/Android.mk b/android/Android.mk
+index aaddb17..95995a2 100644
+--- a/android/Android.mk
++++ b/android/Android.mk
+@@ -190,6 +190,9 @@ ifneq ($(strip $(BOARD_MESA3D_GALLIUM_DRIVERS)),)
+ # Module 'libgallium_dri', produces '/vendor/lib{64}/libgallium_dri.so'
+ # This module also trigger DRI symlinks creation process
+ $(eval $(call mesa3d-lib,libgallium_dri,,MESA3D_GALLIUM_BIN))
++ifneq ($(filter radeonsi,$(BOARD_MESA3D_GALLIUM_DRIVERS)),)
++$(eval $(call mesa3d-lib,radeonsi_dri,dri,MESA3D_RADEONSI_DRI_BIN))
++endif
+ 
+ # Module 'libEGL_mesa', produces '/vendor/lib{64}/egl/libEGL_mesa.so'
+ $(eval $(call mesa3d-lib,libEGL_mesa,egl,MESA3D_LIBEGL_BIN))
