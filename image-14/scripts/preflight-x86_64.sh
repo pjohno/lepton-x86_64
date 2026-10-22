@@ -16,8 +16,8 @@ fail() {
 failures=0
 warnings=0
 
-if [[ "$MODE" != fresh && "$MODE" != existing ]]; then
-    echo "Usage: $0 [fresh|existing]" >&2
+if [[ "$MODE" != fresh && "$MODE" != existing && "$MODE" != full ]]; then
+    echo "Usage: $0 [fresh|existing|full]" >&2
     exit 2
 fi
 
@@ -142,15 +142,11 @@ else
     fail "Build jobs exceed available CPUs"
 fi
 
-if command -v taskset >/dev/null 2>&1 &&
-   taskset -c 0-5 true 2>/dev/null; then
-    pass "Published CPU affinity 0-5 usable"
-else
-    fail "Published CPU affinity 0-5 unavailable"
-fi
+# The current image builder uses configurable -jN, not taskset.
+info "CPU affinity is not required by the current build workflow"
 
 # Host prerequisites.
-for tool in git podman rsync realpath findmnt taskset; do
+for tool in git podman rsync realpath findmnt df awk cmp python3 tee mktemp; do
     if command -v "$tool" >/dev/null 2>&1; then
         pass "Host tool: $tool"
     else
@@ -167,6 +163,18 @@ if command -v podman >/dev/null 2>&1; then
     else
         fail "Podman builder image missing"
     fi
+fi
+
+# The derived builder is required for compilation, not source download.
+if [[ "$MODE" == existing || "$MODE" == full ]]; then
+    if command -v podman >/dev/null 2>&1 &&
+       podman image exists lepton-builder-glslang14:latest; then
+        pass "glslang-capable builder image available"
+    else
+        fail "Missing lepton-builder-glslang14:latest; build Containerfile.glslang14"
+    fi
+else
+    info "Derived glslang builder checked in existing/full mode"
 fi
 
 # Git submodules: missing is normal before preparation.
@@ -196,6 +204,84 @@ for submodule in \
             ;;
     esac
 done
+
+# Verify that an existing checkout belongs to this workflow.
+if [[ "$MODE" == existing || "$MODE" == full ]]; then
+    state="$TARGET/.lepton-clean14-state"
+    if [[ -f "$TARGET/.lepton-clean14-owner" ]]; then
+        pass "Owned clean-build checkout"
+    else
+        fail "Missing clean-build ownership marker"
+    fi
+
+    for marker in sync.done vendor.done patches.done; do
+        if [[ -f "$state/$marker" ]]; then
+            pass "Preparation checkpoint: $marker"
+        else
+            fail "Missing preparation checkpoint: $marker"
+        fi
+    done
+
+    if [[ -e "$state/patches.started" ]]; then
+        fail "Interrupted patch stage recorded"
+    else
+        pass "No interrupted patch operation"
+    fi
+
+    glslang="$TARGET/out/host/glslang14/StandAlone/glslang"
+    if [[ -x "$glslang" ]]; then
+        pass "Compiled glslang available"
+    elif [[ -d "$TARGET/external/angle/third_party/vulkan-deps/glslang/src" ]]; then
+        info "glslang will be bootstrapped by build-images-x86_64.sh"
+    else
+        fail "Neither compiled glslang nor its source was found"
+    fi
+fi
+
+# Full workflow: check packaging dependencies and finished images.
+if [[ "$MODE" == full ]]; then
+    echo
+    info "=== Full build and packaging prerequisites ==="
+
+    for tool in simg2img sqfs2tar tar unzip fuse2fs fusermount3 rsync; do
+        if command -v "$tool" >/dev/null 2>&1; then
+            pass "Packaging tool: $tool"
+        else
+            fail "Missing packaging tool: $tool"
+        fi
+    done
+
+    if [[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]]; then
+        pass "FUSE device accessible"
+        info "Actual FUSE mounting is verified during packaging"
+    else
+        fail "FUSE device missing or inaccessible: /dev/fuse"
+    fi
+
+    product="$TARGET/out/target/product/lepton_x86_64"
+    for part in system vendor; do
+        if [[ -s "$product/$part.img" ]]; then
+            pass "Built image present: $part.img"
+        else
+            fail "Missing built image: $part.img"
+        fi
+    done
+
+    stage="$TARGET/repro-rootfs-auto"
+    if [[ -e "$stage/rootfs" || -L "$stage/rootfs" ]]; then
+        warn "Packaging output already exists; packaging script refuses overwrite"
+        warnings=$((warnings + 1))
+    else
+        pass "Packaging output rootfs is available"
+    fi
+
+    if [[ -f "$ROOT/image-14/scripts/patch-binderfs-init.sh" &&
+          -f "$ROOT/image-14/scripts/package-repro-rootfs.sh" ]]; then
+        pass "Rootfs packaging and BinderFS scripts available"
+    else
+        fail "Rootfs packaging or BinderFS script missing"
+    fi
+fi
 
 # Required source files.
 for file in \
