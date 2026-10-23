@@ -18,7 +18,7 @@ Verified on the development setup:
 
 Known limitations:
 
-- This is **not** a complete, validated from-scratch build on an arbitrary computer. The tested image workflow reuses an already prepared Android 14 source checkout and build environment.
+- The clean Android 14 x86_64 source preparation, image build, and rootfs packaging workflows have succeeded on the development Fedora host. Boot validation of the **newly reproduced** rootfs is still in progress; earlier boot results do not establish that this new build boots.
 - USB mouse interaction is incomplete; connecting/disconnecting a mouse may affect application touch handling.
 - Multiple controllers, controller hotplugging, and controller selection order are not yet reliable.
 - Steam shortcuts, input configuration, Binder support, host graphics, and Android application compatibility vary by system.
@@ -29,29 +29,75 @@ Known limitations:
 
 | Path | Purpose |
 | --- | --- |
-| `compat_tool/` | Lepton runtime and x86_64 adaptations |
+| `compat_tool/` | Lepton runtime, local test scripts, and x86_64 adaptations |
 | `compat_tool/tools/lepton-gamescope-bridge` | Experimental nested Gamescope launcher used on Steam Deck |
 | `image-14/` | Android 14 image build configuration, vendor projects, and scripts |
 | `image-14/patches/` | Reviewed source patches, including native evdev input-axis handling |
-| `image-14/scripts/build-images-x86_64.sh` | Incremental Android system/vendor image build in the configured builder |
-| `image-14/scripts/package-repro-rootfs.sh` | Packages a separate Android test rootfs from locally built images |
+| `image-14/scripts/preflight-x86_64.sh` | Checks host and workflow prerequisites (`fresh`, `existing`, or `full`) |
+| `image-14/scripts/prepare-x86_64.sh` | Prepares an isolated Android 14 source checkout |
+| `image-14/scripts/build-images-x86_64.sh` | Builds Android system/vendor images with the configured builder |
+| `image-14/scripts/package-repro-rootfs.sh` | Packages a separate test rootfs from locally built images |
+| `image-14/scripts/deploy-compat-x86_64.sh` | Stages a local test rootfs and native x86_64 APK extractor (local development script) |
 
 Some build components are Git submodules. Confirm that the URLs in `.gitmodules` are publicly accessible before attempting a fresh clone or reporting a reproducible clean build.
 
-## Building the Android image (developer workflow)
+## Building and deploying Android 14 x86_64
 
-**Prerequisites:** an existing and correctly prepared Android 14/AOSP checkout, a working `lepton-builder:latest` container image, rootless Podman and the image-building utilities described by the scripts. The supported developer workflow also needs a local glslang 14 validator; the build script will report if it is missing. This repository is **not** a turnkey Android image downloader or installer.
+The experimental developer workflow uses Fedora Linux, rootless Podman, an Ubuntu-based builder container, and a separately configured Android source/output directory. This is not a turnkey Android image downloader or consumer installer.
 
-From `image-14/`, with a separately prepared source/output checkout:
+Copy `.build-env.example` to `.build-env` and configure its local paths. The `.build-env` file is machine-specific and excluded from Git. Prepare the builder images described by the build scripts before invoking source preparation or image compilation.
+
+From the repository root:
 
 ```bash
-./scripts/build-images-x86_64.sh /path/to/lepton-output
-./scripts/package-repro-rootfs.sh /path/to/lepton-output
+# Check prerequisites and prepare a fresh, isolated AOSP checkout.
+bash image-14/scripts/preflight-x86_64.sh fresh
+bash image-14/scripts/prepare-x86_64.sh --execute
+
+# Check the prepared checkout and builder environment.
+bash image-14/scripts/preflight-x86_64.sh existing
+
+# Compile the Android 14 system and vendor images.
+bash image-14/scripts/build-images-x86_64.sh --check
+bash image-14/scripts/build-images-x86_64.sh --execute
+
+# Package the images as a standalone test rootfs.
+source .build-env
+bash image-14/scripts/package-repro-rootfs.sh "$LEPTON_OUTPUT_DIR"
+
+# Stage the rootfs and native x86_64 APK extractor under compat_tool.
+bash image-14/scripts/deploy-compat-x86_64.sh --check
+bash image-14/scripts/deploy-compat-x86_64.sh --execute
 ```
 
-The build script uses the Android target `aosp_lepton_x86_64-ap2a-userdebug` inside the configured builder container and builds `systemimage vendorimage`. The packaging script extracts `system.img` and `vendor.img`, flattens APEX packages, and writes to `/path/to/lepton-output/repro-rootfs-auto/rootfs`. It refuses to overwrite an existing packaged target. **Do not point packaging scripts at a working Steam Deck rootfs or distribute the output without a separate license and security review.**
+The image build uses the Android target `aosp_lepton_x86_64-ap2a-userdebug` and produces `system.img` and `vendor.img`. The packaging step converts the Android sparse images, extracts their filesystems, flattens APEX packages, and writes to `$LEPTON_OUTPUT_DIR/repro-rootfs-auto/rootfs`. It refuses to overwrite an existing packaged rootfs.
 
-The native controller range correction is held in `image-14/patches/0007-eventhub-preserve-evdev-axes.patch` and is applied by the build script to the AOSP `frameworks/native` checkout. It preserves synthetic Wayland input ranges while restoring the evdev axis information of real controllers.
+The local deploy step copies the packaged rootfs into `compat_tool/images/rootfs` and builds the native x86_64 APK metadata extractor. It refuses to overwrite an existing destination and **does not install or replace Lepton in Steam**. Generated rootfs contents and the extractor executable are Git-ignored, but they can be included in a separate rsync transfer of the repository directory; ensure the rsync options do not exclude ignored/generated files. There is no need to transfer the full AOSP checkout to another test computer.
+
+The native controller range correction is held in `image-14/patches/0007-eventhub-preserve-evdev-axes.patch` and is applied during the source preparation workflow to the AOSP `frameworks/native` checkout. It preserves synthetic Wayland input ranges while restoring the evdev axis information of real controllers.
+
+**Do not point packaging or deployment scripts at an existing Steam Deck runtime, and do not distribute generated Android binaries without a separate license and security review.**
+
+## Runtime testing prerequisites
+
+When testing Lepton on Fedora, SteamOS, or a second x86_64 Linux computer:
+
+- Install the Steam client for the Linux user who will run Lepton.
+- Launch Steam and complete account sign-in at least once using **that same Linux user**.
+- Steam does **not necessarily need to remain running** for the shell-based runtime tests. Launching Android applications through Steam may require an active Steam session.
+- Install rootless Podman and the other host dependencies required by the runtime.
+- Ensure the required Wayland, audio, BinderFS, and graphics resources are accessible to the test user. On a Fedora Wayland desktop, `GAMESCOPE_WAYLAND_DISPLAY=wayland-0` may be necessary. Lepton maps this variable to its expected Wayland socket during setup.
+- When running tests over SSH, use the account with the existing Steam setup and desktop runtime resources. An SSH login alone does not create a Wayland or audio session.
+
+The experimental x86_64 tests are ordered from filesystem setup to Android initialization and graphics checks. Tests `0100` through `0600` read `compat_tool/images/rootfs`. Tests `0700` and `0800` are designed for a **separate** rootfs provided through `LEPTON_TEST_ROOTFS` and refuse to use the default rootfs path. Test failures at Podman container creation are not proof that Android itself failed to boot.
+
+Start with the least invasive test from the repository root:
+
+```bash
+GAMESCOPE_WAYLAND_DISPLAY=wayland-0 bash compat_tool/test-0100.sh
+```
+
+Once host prerequisites and configuration are satisfied, continue in test-number order. `test-0200.sh` verifies container lifecycle without starting Android `/init`, while later tests exercise Android initialization and the graphics stack. Do not run `.ci_scripts/run-tests.sh` directly on a normal Fedora desktop: the CI harness includes system-wide changes and a forced Podman reset.
 
 ## Steam Deck input notes (experimental)
 
