@@ -18,8 +18,9 @@ function update_baked_system_data()
         die "ERROR! System data bake failed!"
     fi
 
-    # Skip ipconfig.txt as it is container specific and has 000 chmod.
-    rm -f "$(data_mount_path)/misc/ethernet/ipconfig.txt"
+    # Ethernet IP settings are per-container; never bake the build host address.
+    rm -f "$(data_mount_path)/misc/ethernet/ipconfig.txt" \
+          "$(data_mount_path)/misc/apexdata/com.android.tethering/misc/ethernet/ipconfig.txt"
     cp -Ra "$(data_mount_path)" "${BAKED_SYSTEM_DATA_DIR}"
 }
 
