@@ -116,7 +116,7 @@ for program in rsync tar gzip sha256sum awk grep mktemp install; do
     command -v "$program" >/dev/null || { echo "ERROR: missing $program" >&2; exit 1; }
 done
 
-for script in liblepton.sh app_metadata.sh mounting.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     [[ -f "$repo/compat_tool/liblepton/$script" ]] || {
         echo "ERROR: missing Fedora source compat_tool/liblepton/$script" >&2
         exit 1
@@ -131,6 +131,7 @@ for path in \
     compat_tool/liblepton/liblepton.sh \
     compat_tool/liblepton/app_metadata.sh \
     compat_tool/liblepton/mounting.sh \
+    compat_tool/liblepton/baking.sh \
     compat_tool/sysbake.xattrs \
     compat_tool/sysbake/system/packages.xml \
     compat_tool/images/rootfs/system/etc/init/hw/init.rc \
@@ -149,7 +150,7 @@ grep -q 'binderfs-ensure' "$stage/compat_tool/images/rootfs/system/etc/init/hw/i
 grep -q 'steamlaunch-0' "$repo/compat_tool/liblepton/liblepton.sh" || {
     echo 'ERROR: Fedora installer lacks the tested steamlaunch-0 installation route' >&2; exit 1;
 }
-for script in liblepton.sh app_metadata.sh mounting.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     bash -n "$repo/compat_tool/liblepton/$script"
 done
 grep -Fq 'no-force-stop' "$repo/compat_tool/liblepton/app_metadata.sh" || {
@@ -184,7 +185,7 @@ rsync -a --no-owner --no-group -- "$stage/" "$tmp/payload/"
 
 # Refresh all tested shell fixes without touching the staged materialized
 # Android rootfs (the Fedora checkout holds only an external rootfs symlink).
-for script in liblepton.sh app_metadata.sh mounting.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     install -m 755 "$repo/compat_tool/liblepton/$script" \
         "$tmp/payload/compat_tool/liblepton/$script"
 done
@@ -249,7 +250,7 @@ sed -i "s/lepton-x86_64-steamdeck-v308.tar.gz/$(basename -- "$archive")/g" \
 
 [[ -f "$tmp/payload/compat_tool/images/rootfs/system/etc/init/hw/init.rc" ]]
 [[ -x "$tmp/payload/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure" ]]
-for script in liblepton.sh app_metadata.sh mounting.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
 grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/mounting.sh"
