@@ -520,6 +520,15 @@ function setup_podman_mounts()
     touch "${DATA_OVERLAY}/misc/ethernet/ipconfig.txt"
     podman_mount_entry "$(prefix)/ipconfig.txt" "/data/misc/ethernet/ipconfig.txt" rw
 
+    # Android 14 prefers the Tethering APEX configuration over the legacy path.
+    # Override both with this container's current IP, not an address from sysbake.
+    if [[ "$(android_sdk_version)" -ge 34 ]]; then
+        local ETHERNET_APEX_CONFIG="misc/apexdata/com.android.tethering/misc/ethernet/ipconfig.txt"
+        mkdir -p "${DATA_OVERLAY}/$(dirname "${ETHERNET_APEX_CONFIG}")"
+        touch "${DATA_OVERLAY}/${ETHERNET_APEX_CONFIG}"
+        podman_mount_entry "$(prefix)/ipconfig.txt" "/data/${ETHERNET_APEX_CONFIG}" rw
+    fi
+
     if ! is_sysbake && command -v steamvr >/dev/null 2>&1; then
         mkdir -p "${DATA_OVERLAY}/steamvr/runtime"
         # Add our steamvr build into `/data/steamvr/runtime` and `/data/steamvr/config`
