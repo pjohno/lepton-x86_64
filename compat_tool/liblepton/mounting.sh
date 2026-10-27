@@ -494,6 +494,22 @@ function setup_podman_mounts()
         fi
     done
 
+    # Forward existing evdev gamepads, including Steam Input's virtual Xbox pad.
+    # Match udev properties rather than unstable event numbers, and do not mount
+    # the whole /dev/input directory over Android's Wayland input FIFOs.
+    # Devices connected after container startup still require hotplug handling.
+    if ! is_sysbake && command -v udevadm >/dev/null 2>&1; then
+        local GAMEPAD_NODE
+        for GAMEPAD_NODE in /dev/input/event*; do
+            [[ -c "${GAMEPAD_NODE}" ]] || continue
+            if udevadm info --query=property --name="${GAMEPAD_NODE}" 2>/dev/null |
+                    grep -qx 'ID_INPUT_JOYSTICK=1'; then
+                println "Forwarding gamepad ${GAMEPAD_NODE} to Android"
+                podman_cmdline --device "${GAMEPAD_NODE}:${GAMEPAD_NODE}:rwm"
+            fi
+        done
+    fi
+
     # By default, we do not allow writes to msg
     local KMSG_MOUNT="/dev/null"
     if [[ "${LEPTON_ALLOW_KMSG:-false}" != "false" ]]; then
