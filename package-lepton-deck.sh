@@ -122,6 +122,10 @@ for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
         exit 1
     }
 done
+[[ -f "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]] || {
+    echo "ERROR: missing Steam Input keylayout in Fedora source" >&2
+    exit 1
+}
 
 # Require a previously validated stage. Do not dereference the source checkout's
 # external rootfs symlink, and do not assemble the Android rootfs here.
@@ -189,6 +193,8 @@ for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     install -m 755 "$repo/compat_tool/liblepton/$script" \
         "$tmp/payload/compat_tool/liblepton/$script"
 done
+install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
+    "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
 
 # A Fedora sysbake may carry security.selinux xattrs, which cannot be restored
 # by Deck users. Keep every user.* attribute and its file-path record intact.
@@ -250,6 +256,7 @@ sed -i "s/lepton-x86_64-steamdeck-v308.tar.gz/$(basename -- "$archive")/g" \
 
 [[ -f "$tmp/payload/compat_tool/images/rootfs/system/etc/init/hw/init.rc" ]]
 [[ -x "$tmp/payload/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure" ]]
+[[ -s "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]]
 for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
