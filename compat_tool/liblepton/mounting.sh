@@ -494,18 +494,32 @@ function setup_podman_mounts()
         fi
     done
 
-    # Forward existing evdev gamepads, including Steam Input's virtual Xbox pad.
-    # Match udev properties rather than unstable event numbers, and do not mount
-    # the whole /dev/input directory over Android's Wayland input FIFOs.
-    # Devices connected after container startup still require hotplug handling.
-    if ! is_sysbake && command -v udevadm >/dev/null 2>&1; then
-        local GAMEPAD_NODE
-        for GAMEPAD_NODE in /dev/input/event*; do
-            [[ -c "${GAMEPAD_NODE}" ]] || continue
-            if udevadm info --query=property --name="${GAMEPAD_NODE}" 2>/dev/null |
-                    grep -qx 'ID_INPUT_JOYSTICK=1'; then
-                println "Forwarding gamepad ${GAMEPAD_NODE} to Android"
-                podman_cmdline --device "${GAMEPAD_NODE}:${GAMEPAD_NODE}:rwm"
+    # Restore the bind-mounted Steam Input controller from the tested Deck
+    # runtime. Podman's --device node is hidden by Android's /dev tmpfs.
+    # Match the Steam virtual Xbox controller identity, not an event number.
+    # Further controllers and hotplugging are separate follow-up work.
+    if ! is_sysbake && [[ "${LEPTON_GAMEPAD_PASSTHROUGH:-true}" == "true" ]]; then
+        local gamepad_event gamepad_sysfs gamepad_name gamepad_vendor gamepad_product
+        for gamepad_event in /dev/input/event*; do
+            [[ -c "${gamepad_event}" ]] || continue
+            gamepad_sysfs="/sys/class/input/${gamepad_event##*/}/device"
+            [[ -r "${gamepad_sysfs}/name" &&
+               -r "${gamepad_sysfs}/id/vendor" &&
+               -r "${gamepad_sysfs}/id/product" ]] || continue
+
+            gamepad_name="$(cat "${gamepad_sysfs}/name")"
+            gamepad_vendor="$(cat "${gamepad_sysfs}/id/vendor")"
+            gamepad_product="$(cat "${gamepad_sysfs}/id/product")"
+
+            if [[ "${gamepad_name}" == "Microsoft X-Box 360 pad "* &&
+                  "${gamepad_vendor}" == "28de" &&
+                  "${gamepad_product}" == "11ff" ]]; then
+                println "Passing Steam Input controller ${gamepad_event} to Android"
+                podman_mount_entry "${gamepad_event}" "${gamepad_event}" rw
+                podman_mount_entry \
+                    "${LEPTON_DIR}/Vendor_28de_Product_11ff.kl" \
+                    "/system/usr/keylayout/Vendor_28de_Product_11ff.kl" ro
+                break
             fi
         done
     fi
