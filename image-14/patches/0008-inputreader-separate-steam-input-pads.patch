@@ -1,0 +1,29 @@
+diff --git a/services/inputflinger/reader/InputReader.cpp b/services/inputflinger/reader/InputReader.cpp
+--- a/services/inputflinger/reader/InputReader.cpp
++++ b/services/inputflinger/reader/InputReader.cpp
+@@ -52,8 +52,25 @@
+ static bool isSubDevice(const InputDeviceIdentifier& identifier1,
+                         const InputDeviceIdentifier& identifier2) {
++    // Steam Input exposes each virtual Xbox pad with the same bus, USB IDs,
++    // location and uniqueId. Distinct numbered pads must remain separate
++    // logical controllers, while other composite devices keep normal grouping.
++    const auto isSteamInputPad = [](const InputDeviceIdentifier& id) {
++        constexpr char kPadPrefix[] = "Microsoft X-Box 360 pad ";
++        constexpr size_t kPrefixLength = sizeof(kPadPrefix) - 1;
++        return id.vendor == 0x28de && id.product == 0x11ff &&
++                id.name.compare(0, kPrefixLength, kPadPrefix) == 0 &&
++                id.name.size() > kPrefixLength &&
++                id.name.find_first_not_of("0123456789", kPrefixLength) ==
++                        std::string::npos;
++    };
++    if (isSteamInputPad(identifier1) && isSteamInputPad(identifier2) &&
++            identifier1.name != identifier2.name) {
++        return false;
++    }
++
+     return (identifier1.vendor == identifier2.vendor &&
+             identifier1.product == identifier2.product && identifier1.bus == identifier2.bus &&
+             identifier1.version == identifier2.version &&
+             identifier1.uniqueId == identifier2.uniqueId &&
+             identifier1.location == identifier2.location);
+ }
