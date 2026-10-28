@@ -107,6 +107,17 @@ The checked-in `compat_tool/tools/lepton-gamescope-bridge` reflects a tested nes
 
 With this combination, touch worked in the tested 2048 application and RetroArch's menu (with RetroArch's Mouse Support disabled). Results are specific to the development configuration. A USB mouse is not a substitute for native touch and may behave inconsistently.
 
+**Verified on Steam Deck, 28 October 2026:** RetroArch recognises the Steam Input virtual Xbox controller and its buttons, D-pad, and analogue axes after restoring the tested evdev bind mount and `Vendor_28de_Product_11ff.kl` keylayout. The corrected Android `libinputreader.so` from the clean Android build is also required; the older staging library enumerated the controller but mapped joystick axes incorrectly to the Deck's display dimensions.
+
+Controller passthrough defaults to **enabled**. No launch option is necessary; set `LEPTON_GAMEPAD_PASSTHROUGH=false` (lowercase) to opt out. Only the first matching Steam Input virtual Xbox controller is currently forwarded; multiple controllers and hotplugging remain unimplemented.
+
+**Build provenance for this verified Deck test:**
+
+- `image-14/patches/0007-eventhub-preserve-evdev-axes.patch` is committed and applied during Android source preparation.
+- Working `system/lib64/libinputreader.so` SHA-256: `3f4aaaca90bb0ade2cce6690b20f7d20ec0fb57d77f57294ab95d19077c5fd70`.
+- Nonworking old-stage `system/lib64/libinputreader.so` SHA-256: `65d09719c2f68a3171128fcec9a4ddcca0ddd82cdd5ad5e64598dc41d07e5d01`.
+- Verified bundle: `lepton-x86_64-steamdeck-controller-inputreader-20261028.tar.gz`. This bundle was prepared by **manually copying the corrected library into the Fedora staging directory**; the repository's current packaging script still defaults to an existing staged rootfs and does not automatically refresh it after an Android rebuild. Do not assume a fresh package uses the corrected library without checking the hash. The staging automation and provenance guard remain follow-up work.
+
 The experimental controller passthrough presently selects the first matching Steam virtual Xbox input device. Do not assume multi-controller or hotplug support. RetroArch may also require manual right-stick and trigger bindings.
 
 ## Upstream, attribution and licenses
