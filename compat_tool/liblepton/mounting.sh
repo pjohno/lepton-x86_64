@@ -526,6 +526,18 @@ function setup_podman_mounts()
         done
     fi
 
+    # Experimental hotplug proof: make host evdev nodes visible at a stable
+    # path, separate from Android's own /dev/input FIFOs and input registry.
+    # No additional Android devices are registered until a selected symlink
+    # is explicitly created under /dev/input. Opt-in because this directory
+    # exposes more host input devices to Android than the individual bind.
+    if ! is_sysbake &&
+       [[ "${LEPTON_GAMEPAD_PASSTHROUGH:-true}" == "true" ]] &&
+       [[ "${LEPTON_GAMEPAD_HOTPLUG_PROBE:-false}" == "true" ]] &&
+       [[ -d /dev/input ]]; then
+        podman_mount_entry /dev/input /lepton/host-input ro
+    fi
+
     # By default, we do not allow writes to msg
     local KMSG_MOUNT="/dev/null"
     if [[ "${LEPTON_ALLOW_KMSG:-false}" != "false" ]]; then
