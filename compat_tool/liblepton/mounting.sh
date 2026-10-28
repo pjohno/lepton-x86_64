@@ -498,6 +498,8 @@ function setup_podman_mounts()
     # runtime. Podman's --device node is hidden by Android's /dev tmpfs.
     # Match the Steam virtual Xbox controller identity, not an event number.
     # Further controllers and hotplugging are separate follow-up work.
+    # Passthrough is on by default. Set LEPTON_GAMEPAD_PASSTHROUGH=false
+    # (lowercase) to opt out; setting it to true explicitly is optional.
     if ! is_sysbake && [[ "${LEPTON_GAMEPAD_PASSTHROUGH:-true}" == "true" ]]; then
         local gamepad_event gamepad_sysfs gamepad_name gamepad_vendor gamepad_product
         for gamepad_event in /dev/input/event*; do
