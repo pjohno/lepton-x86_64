@@ -2,20 +2,29 @@
 # Lepton experimental Steam Input hotplug bridge.
 # Default is read-only; --apply is required to alter Android symlinks.
 # Use only with the opt-in LEPTON_GAMEPAD_HOTPLUG_PROBE=true mount.
+# --restore-native-touch is separately opt-in: preserve native mode (4)
+# only if already active when the watcher starts, around input hotplug events.
 set -uo pipefail
 
 mode=once
 apply=false
+restore_native_touch=false
+touch_display="${LEPTON_TOUCH_DISPLAY:-${DISPLAY:-:0}}"
 while (($#)); do
     case "$1" in
         --once) mode=once; shift ;;
         --watch) mode=watch; shift ;;
         --apply) apply=true; shift ;;
+        --restore-native-touch) restore_native_touch=true; shift ;;
         *) break ;;
     esac
 done
 if (($# != 1)) || [[ ! "$1" =~ ^lepton-[A-Za-z0-9_.-]+$ ]]; then
-    echo "Usage: bash $0 [--once|--watch] [--apply] lepton-CONTEXT" >&2
+    echo "Usage: bash $0 [--once|--watch] [--apply] [--restore-native-touch] lepton-CONTEXT" >&2
+    exit 2
+fi
+if [[ "$restore_native_touch" == true && ( "$mode" != watch || "$apply" != true ) ]]; then
+    echo "STOP: --restore-native-touch requires --watch --apply" >&2
     exit 2
 fi
 container="$1"
@@ -93,6 +102,48 @@ if [[ "$mode" == once ]]; then
     reconcile
     exit $?
 fi
+
+# Touchscreen native passthrough can be reset to mouse mode when Steam
+# switches layouts on Bluetooth controller add/remove. The Lepton bridge
+# launches Gamescope with native mode 4. Respect the actual starting mode,
+# rather than enabling native touch when the user chose another mode.
+get_touch_mode() {
+    local property
+    property=$(DISPLAY="$touch_display" xprop -root STEAM_TOUCH_CLICK_MODE 2>/dev/null) || return 1
+    if [[ "$property" =~ STEAM_TOUCH_CLICK_MODE\(CARDINAL\)[[:space:]]*=[[:space:]]*([0-9]+) ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+    else
+        return 1
+    fi
+}
+native_touch_enabled=false
+touch_fix_until=0
+if [[ "$restore_native_touch" == true ]]; then
+    command -v xprop >/dev/null 2>&1 || {
+        echo "STOP: xprop required for native touch restoration" >&2
+        exit 1
+    }
+    initial_touch_mode=$(get_touch_mode || true)
+    if [[ "$initial_touch_mode" == 4 ]]; then
+        native_touch_enabled=true
+        echo "Native touch restoration armed on display $touch_display (initial mode 4)"
+    else
+        echo "Native touch restoration disabled (initial mode: ${initial_touch_mode:-unknown})"
+    fi
+fi
+restore_touch_if_changed() {
+    [[ "$native_touch_enabled" == true ]] || return 0
+    ((SECONDS <= touch_fix_until)) || return 0
+    local current
+    current=$(get_touch_mode) || return 0
+    if [[ "$current" != 4 ]]; then
+        if DISPLAY="$touch_display" xprop -root -f STEAM_TOUCH_CLICK_MODE 32c \
+                -set STEAM_TOUCH_CLICK_MODE 4; then
+            echo "RESTORED native touchscreen mode 4 (was $current)"
+        fi
+    fi
+}
+
 # Watch udev notifications and recover from missed notifications by polling.
 monitor_pid=
 monitor_dir=
@@ -138,7 +189,14 @@ while running && kill -0 "$monitor_pid" 2>/dev/null; do
                             rm "$dst"
                     ' sh "$devname" || true
                 fi
+                if [[ ( "$action" == add || "$action" == remove ) &&
+                      "$devname" =~ ^event[0-9]+$ ]]; then
+                    # Steam's mode change can occur after the udev notification.
+                    # Recheck for a short window, not indefinitely during play.
+                    touch_fix_until=$((SECONDS + 10))
+                fi
                 [[ -z "$action" ]] || reconcile || break
+                restore_touch_if_changed
                 action=
                 devname=
                 ;;
@@ -146,6 +204,7 @@ while running && kill -0 "$monitor_pid" 2>/dev/null; do
     fi
     if ((SECONDS - last_check >= 1)); then
         reconcile || break
+        restore_touch_if_changed
         last_check=$SECONDS
     fi
 done
