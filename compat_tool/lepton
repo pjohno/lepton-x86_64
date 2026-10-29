@@ -188,17 +188,15 @@ case "${COMMAND}" in
         logcat_debug "pre-start-container"
         start_container
 
-        # Experimental Steam Input hotplug bridge. An additional explicit
-        # opt-in is required beyond the read-only host input probe mount.
-        # Keep lifecycle ownership in the launching Lepton process: no
-        # persistent user service, no modifications to Android init.
+        # Experimental Steam Input hotplug: the single user-facing opt-in
+        # enables both the source mount and this watcher. Keep lifecycle
+        # ownership in the launching Lepton process, not a user service.
         LEPTON_HOTPLUG_WATCHER_PID=
         start_lepton_hotplug_watcher()
         {
-            [[ "${LEPTON_GAMEPAD_HOTPLUG_AUTO:-false}" == "true" ]] || return 0
-            if [[ "${LEPTON_GAMEPAD_HOTPLUG_PROBE:-false}" != "true" ||
-                  "${LEPTON_GAMEPAD_PASSTHROUGH:-true}" != "true" ]]; then
-                println "WARNING: Hotplug auto-start requires LEPTON_GAMEPAD_HOTPLUG_PROBE=true and gamepad passthrough" >&2
+            [[ "${LEPTON_GAMEPAD_HOTPLUG:-false}" == "true" ]] || return 0
+            if [[ "${LEPTON_GAMEPAD_PASSTHROUGH:-true}" != "true" ]]; then
+                println "WARNING: LEPTON_GAMEPAD_HOTPLUG=true ignored because gamepad passthrough is disabled" >&2
                 return 0
             fi
 
