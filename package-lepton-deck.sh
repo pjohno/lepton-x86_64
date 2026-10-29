@@ -25,7 +25,7 @@ Without --deck-ip, package locally only. With --deck-ip, copy the resulting
 archive + checksum to deck@IP:~/Downloads/lepton-deck-bundles/ and verify it.
 --transfer-only sends an already-built archive without repackaging.
 Reads .build-env from the repository root. Configure LEPTON_DECK_STAGE_DIR,
-LEPTON_DECK_BUNDLE_DIR and LEPTON_OUTPUT_DIR there (see .build-env.example).
+LEPTON_DECK_BUNDLE_DIR there (see .build-env.example).
 Positional directory arguments override the configured paths.
 --bundle-id names a distinct archive; default: timestamped dev bundle.
 --transfer-only requires the same bundle ID previously used to package.
@@ -122,11 +122,6 @@ fi
     exit 2
 }
 stage="$(realpath -e -- "$stage")"
-[[ -n "${LEPTON_OUTPUT_DIR:-}" ]] || {
-    echo 'ERROR: set LEPTON_OUTPUT_DIR in .build-env to locate Android build outputs' >&2
-    exit 2
-}
-
 for program in rsync tar gzip sha256sum awk grep mktemp install; do
     command -v "$program" >/dev/null || { echo "ERROR: missing $program" >&2; exit 1; }
 done
@@ -183,30 +178,6 @@ grep -Fq 'no-force-stop' "$repo/compat_tool/liblepton/mounting.sh" || {
     echo 'ERROR: Fedora source missing tested automatic launch call' >&2; exit 1;
 }
 
-# The staging rootfs can lag behind the Android build. Take the tested
-# library directly from the configured build output and overlay it only
-# in the temporary bundle payload; do not mutate the staging directory.
-inputreader_relpath="compat_tool/images/rootfs/system/lib64/libinputreader.so"
-inputreader_sha256="c745652ec34ab8937cb8d344bdac72d01e3549639c1b02edc78bff418d3fa560"
-inputreader_source="${LEPTON_OUTPUT_DIR%/}/out/target/product/lepton_x86_64/system/lib64/libinputreader.so"
-verify_inputreader_file() {
-    local file="$1" actual
-    [[ -f "$file" ]] || {
-        echo "ERROR: missing Android InputReader library: $file" >&2
-        return 1
-    }
-    actual="$(sha256sum "$file" | awk '{print $1}')"
-    if [[ "$actual" != "$inputreader_sha256" ]]; then
-        echo "ERROR: Android InputReader checksum mismatch" >&2
-        echo "  expected: $inputreader_sha256" >&2
-        echo "  actual:   $actual" >&2
-        echo "  file:     $file" >&2
-        return 1
-    fi
-    printf 'PASS: tested two-controller InputReader (%s)\n' "$actual"
-}
-verify_inputreader_file "$inputreader_source"
-
 [[ ! -e "$archive" && ! -e "$checksum" ]] || {
     echo "ERROR: output already exists; refusing overwrite: $archive" >&2
     exit 1
@@ -245,7 +216,6 @@ install -m 755 "$repo/compat_tool/tools/lepton-controller-hotplug-experiment" \
     "$tmp/payload/compat_tool/tools/lepton-controller-hotplug-experiment"
 install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
     "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
-install -m 644 "$inputreader_source" "$tmp/payload/$inputreader_relpath"
 
 # A Fedora sysbake may carry security.selinux xattrs, which cannot be restored
 # by Deck users. Keep every user.* attribute and its file-path record intact.
@@ -308,7 +278,6 @@ sed -i "s/lepton-x86_64-steamdeck-v308.tar.gz/$(basename -- "$archive")/g" \
 [[ -f "$tmp/payload/compat_tool/images/rootfs/system/etc/init/hw/init.rc" ]]
 [[ -x "$tmp/payload/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure" ]]
 [[ -s "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]]
-verify_inputreader_file "$tmp/payload/$inputreader_relpath"
 for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
