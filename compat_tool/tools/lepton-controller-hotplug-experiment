@@ -9,7 +9,10 @@ set -uo pipefail
 mode=once
 apply=false
 restore_native_touch=false
-touch_display="${LEPTON_TOUCH_DISPLAY:-${DISPLAY:-:0}}"
+# In Steam Gaming Mode DISPLAY may point at nested Gamescope (e.g. :2), while
+# Steam's STEAM_TOUCH_CLICK_MODE root property belongs to the host display :0.
+# Keep an explicit override for alternate desktop or Gamescope configurations.
+touch_display="${LEPTON_TOUCH_DISPLAY:-:0}"
 while (($#)); do
     case "$1" in
         --once) mode=once; shift ;;
