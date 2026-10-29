@@ -494,6 +494,50 @@ function setup_podman_mounts()
         fi
     done
 
+    # Bind each Steam Input virtual controller present at container startup.
+    # Podman's --device nodes are hidden by Android's /dev tmpfs, so explicit
+    # per-device binds are needed. This does not expose unrelated host inputs.
+    # Later controller connections still require experimental hotplug opt-in.
+    # Passthrough defaults to enabled; set LEPTON_GAMEPAD_PASSTHROUGH=false
+    # to opt out.
+    if ! is_sysbake && [[ "${LEPTON_GAMEPAD_PASSTHROUGH:-true}" == "true" ]]; then
+        local gamepad_event gamepad_sysfs gamepad_name gamepad_vendor gamepad_product
+        for gamepad_event in /dev/input/event*; do
+            [[ -c "${gamepad_event}" ]] || continue
+            gamepad_sysfs="/sys/class/input/${gamepad_event##*/}/device"
+            [[ -r "${gamepad_sysfs}/name" &&
+               -r "${gamepad_sysfs}/id/vendor" &&
+               -r "${gamepad_sysfs}/id/product" ]] || continue
+
+            gamepad_name="$(cat "${gamepad_sysfs}/name")"
+            gamepad_vendor="$(cat "${gamepad_sysfs}/id/vendor")"
+            gamepad_product="$(cat "${gamepad_sysfs}/id/product")"
+
+            if [[ "${gamepad_name}" == "Microsoft X-Box 360 pad "* &&
+                  "${gamepad_vendor}" == "28de" &&
+                  "${gamepad_product}" == "11ff" ]]; then
+                println "Passing Steam Input controller ${gamepad_event} to Android"
+                podman_mount_entry "${gamepad_event}" "${gamepad_event}" rw
+            fi
+        done
+        # One shared keylayout for every matching Steam Input virtual pad.
+        podman_mount_entry \
+            "${LEPTON_DIR}/Vendor_28de_Product_11ff.kl" \
+            "/system/usr/keylayout/Vendor_28de_Product_11ff.kl" ro
+    fi
+
+    # Experimental hotplug proof: make host evdev nodes visible at a stable
+    # path, separate from Android's own /dev/input FIFOs and input registry.
+    # No additional Android devices are registered until a selected symlink
+    # is explicitly created under /dev/input. Opt-in because this directory
+    # exposes more host input devices to Android than the individual bind.
+    if ! is_sysbake &&
+       [[ "${LEPTON_GAMEPAD_PASSTHROUGH:-true}" == "true" ]] &&
+       [[ "${LEPTON_GAMEPAD_HOTPLUG:-false}" == "true" ]] &&
+       [[ -d /dev/input ]]; then
+        podman_mount_entry /dev/input /lepton/host-input ro
+    fi
+
     # By default, we do not allow writes to msg
     local KMSG_MOUNT="/dev/null"
     if [[ "${LEPTON_ALLOW_KMSG:-false}" != "false" ]]; then

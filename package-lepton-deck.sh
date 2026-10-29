@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Build a Steam Deck transferable bundle from an already-prepared Fedora stage.
+# Local directories are configured in .build-env; command-line options override.
 # Usage: ./package-lepton-deck.sh [STAGE_DIR] [OUT_DIR] [--bundle-id ID] [--deck-ip IPv4]
 #        ./package-lepton-deck.sh [STAGE_DIR] [OUT_DIR] [--bundle-id ID] --deck-ip IPv4 --transfer-only
 set -Eeuo pipefail
 
-stage="${HOME}/lepton-deck-stage-v308"
-outdir="${HOME}/lepton-deck-bundles"
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# This is a trusted, developer-maintained shell config already used by builds.
+[[ ! -f "$repo/.build-env" ]] || source "$repo/.build-env"
+stage="${LEPTON_DECK_STAGE_DIR:-}"
+outdir="${LEPTON_DECK_BUNDLE_DIR:-${HOME}/lepton-deck-bundles}"
 deck_ip=""
-bundle_id="v308-stable-0700"
+bundle_id="${LEPTON_DECK_BUNDLE_ID:-dev-$(date -u +%Y%m%d-%H%M%S)}"
 transfer_only=false
 positionals=()
 
@@ -21,7 +24,11 @@ Usage:
 Without --deck-ip, package locally only. With --deck-ip, copy the resulting
 archive + checksum to deck@IP:~/Downloads/lepton-deck-bundles/ and verify it.
 --transfer-only sends an already-built archive without repackaging.
---bundle-id names a distinct archive; default: v308-stable-0700.
+Reads .build-env from the repository root. Configure LEPTON_DECK_STAGE_DIR,
+LEPTON_DECK_BUNDLE_DIR there (see .build-env.example).
+Positional directory arguments override the configured paths.
+--bundle-id names a distinct archive; default: timestamped dev bundle.
+--transfer-only requires the same bundle ID previously used to package.
 Neither mode modifies the Deck's existing Lepton installation.
 HELP
 }
@@ -110,8 +117,11 @@ if [[ "$transfer_only" == true ]]; then
     exit 0
 fi
 
+[[ -n "$stage" ]] || {
+    echo 'ERROR: set LEPTON_DECK_STAGE_DIR in .build-env or supply STAGE_DIR' >&2
+    exit 2
+}
 stage="$(realpath -e -- "$stage")"
-
 for program in rsync tar gzip sha256sum awk grep mktemp install; do
     command -v "$program" >/dev/null || { echo "ERROR: missing $program" >&2; exit 1; }
 done
@@ -122,6 +132,14 @@ for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
         exit 1
     }
 done
+for script in compat_tool/lepton compat_tool/tools/lepton-gamescope-bridge compat_tool/tools/lepton-controller-hotplug-experiment; do
+    [[ -f "$repo/$script" ]] || { echo "ERROR: missing Fedora source $script" >&2; exit 1; }
+    bash -n "$repo/$script"
+done
+[[ -f "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]] || {
+    echo "ERROR: missing Steam Input keylayout in Fedora source" >&2
+    exit 1
+}
 
 # Require a previously validated stage. Do not dereference the source checkout's
 # external rootfs symlink, and do not assemble the Android rootfs here.
@@ -185,10 +203,22 @@ rsync -a --no-owner --no-group -- "$stage/" "$tmp/payload/"
 
 # Refresh all tested shell fixes without touching the staged materialized
 # Android rootfs (the Fedora checkout holds only an external rootfs symlink).
+# Earlier stages did not ship compat_tool/tools; create the destination before
+# overlaying the newer launch helpers.
+mkdir -p -- "$tmp/payload/compat_tool/liblepton" "$tmp/payload/compat_tool/tools"
 for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     install -m 755 "$repo/compat_tool/liblepton/$script" \
         "$tmp/payload/compat_tool/liblepton/$script"
 done
+# These launch helpers must track the checked-out Fedora source, not an
+# older stage snapshot. Do not touch the staged Android rootfs.
+install -m 755 "$repo/compat_tool/lepton" "$tmp/payload/compat_tool/lepton"
+install -m 755 "$repo/compat_tool/tools/lepton-gamescope-bridge" \
+    "$tmp/payload/compat_tool/tools/lepton-gamescope-bridge"
+install -m 755 "$repo/compat_tool/tools/lepton-controller-hotplug-experiment" \
+    "$tmp/payload/compat_tool/tools/lepton-controller-hotplug-experiment"
+install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
+    "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
 
 # A Fedora sysbake may carry security.selinux xattrs, which cannot be restored
 # by Deck users. Keep every user.* attribute and its file-path record intact.
@@ -250,10 +280,14 @@ sed -i "s/lepton-x86_64-steamdeck-v308.tar.gz/$(basename -- "$archive")/g" \
 
 [[ -f "$tmp/payload/compat_tool/images/rootfs/system/etc/init/hw/init.rc" ]]
 [[ -x "$tmp/payload/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure" ]]
+[[ -s "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]]
 for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
 grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/mounting.sh"
+for script in compat_tool/lepton compat_tool/tools/lepton-gamescope-bridge compat_tool/tools/lepton-controller-hotplug-experiment; do
+    bash -n "$tmp/payload/$script"
+done
 
 printf 'Creating compressed archive...\n'
 ( cd "$tmp/payload" && tar --warning=no-file-ignored -cf - . ) | gzip -1 > "$tmp/bundle.tar.gz"

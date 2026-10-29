@@ -188,6 +188,48 @@ case "${COMMAND}" in
         logcat_debug "pre-start-container"
         start_container
 
+        # Experimental Steam Input hotplug: the single user-facing opt-in
+        # enables both the source mount and this watcher. Keep lifecycle
+        # ownership in the launching Lepton process, not a user service.
+        LEPTON_HOTPLUG_WATCHER_PID=
+        start_lepton_hotplug_watcher()
+        {
+            [[ "${LEPTON_GAMEPAD_HOTPLUG:-false}" == "true" ]] || return 0
+            if [[ "${LEPTON_GAMEPAD_PASSTHROUGH:-true}" != "true" ]]; then
+                println "WARNING: LEPTON_GAMEPAD_HOTPLUG=true ignored because gamepad passthrough is disabled" >&2
+                return 0
+            fi
+
+            local watcher="${SCRIPT_DIR}/tools/lepton-controller-hotplug-experiment"
+            if [[ ! -f "${watcher}" ]]; then
+                println "WARNING: Missing experimental hotplug watcher: ${watcher}" >&2
+                return 0
+            fi
+
+            local -a args=(--watch --apply)
+            if [[ "${LEPTON_GAMEPAD_HOTPLUG_RESTORE_NATIVE_TOUCH:-true}" == "true" ]]; then
+                args+=(--restore-native-touch)
+            fi
+
+            (
+                uninherit_lepton_lock
+                exec bash "${watcher}" "${args[@]}" "lepton-${LEPTON_CONTEXT}"
+            ) &
+            LEPTON_HOTPLUG_WATCHER_PID=$!
+            println "Started experimental controller watcher (PID ${LEPTON_HOTPLUG_WATCHER_PID})"
+        }
+
+        stop_lepton_hotplug_watcher()
+        {
+            if [[ -n "${LEPTON_HOTPLUG_WATCHER_PID:-}" ]]; then
+                kill -TERM "${LEPTON_HOTPLUG_WATCHER_PID}" 2>/dev/null || true
+                wait "${LEPTON_HOTPLUG_WATCHER_PID}" 2>/dev/null || true
+                LEPTON_HOTPLUG_WATCHER_PID=
+            fi
+        }
+
+        start_lepton_hotplug_watcher
+
         function teardown()
         {
             # Prevent double-signal handling
@@ -217,6 +259,9 @@ case "${COMMAND}" in
                 fi
             fi
 
+            # Give the watcher a chance to remove only its own guest links
+            # while the Android container is still running.
+            stop_lepton_hotplug_watcher
             kill_container "${LEPTON_CONTEXT}" --quiet
             logcat_debug "killed"
 

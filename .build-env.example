@@ -8,3 +8,8 @@ LEPTON_BUILD_TARGET="aosp_lepton_x86_64-ap2a-userdebug"
 LEPTON_BUILD_JOBS=6
 LEPTON_MIN_FREE_GIB=200
 LEPTON_LOG_DIR="${HOME}/lepton-build-logs/clean14"
+
+# Steam Deck bundle packaging (local paths; never commit .build-env).
+LEPTON_DECK_STAGE_DIR="${HOME}/lepton-deck-stage"
+LEPTON_DECK_BUNDLE_DIR="${HOME}/lepton-deck-bundles"
+# Optional: LEPTON_DECK_BUNDLE_ID="dev-test"

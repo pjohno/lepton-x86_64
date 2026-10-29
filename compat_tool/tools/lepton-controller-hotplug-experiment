@@ -1,0 +1,248 @@
+#!/usr/bin/env bash
+# Lepton experimental Steam Input hotplug bridge.
+# Default is read-only; --apply is required to alter Android symlinks.
+# Use only with the opt-in LEPTON_GAMEPAD_HOTPLUG=true source mount.
+# --restore-native-touch is separately opt-in: preserve native mode (4)
+# only if already active when the watcher starts, around input hotplug events.
+set -uo pipefail
+
+mode=once
+apply=false
+restore_native_touch=false
+# In Steam Gaming Mode DISPLAY may point at nested Gamescope (e.g. :2), while
+# Steam's STEAM_TOUCH_CLICK_MODE root property belongs to the host display :0.
+# Keep an explicit override for alternate desktop or Gamescope configurations.
+touch_display="${LEPTON_TOUCH_DISPLAY:-:0}"
+while (($#)); do
+    case "$1" in
+        --once) mode=once; shift ;;
+        --watch) mode=watch; shift ;;
+        --apply) apply=true; shift ;;
+        --restore-native-touch) restore_native_touch=true; shift ;;
+        *) break ;;
+    esac
+done
+if (($# != 1)) || [[ ! "$1" =~ ^lepton-[A-Za-z0-9_.-]+$ ]]; then
+    echo "Usage: bash $0 [--once|--watch] [--apply] [--restore-native-touch] lepton-CONTEXT" >&2
+    exit 2
+fi
+if [[ "$restore_native_touch" == true && ( "$mode" != watch || "$apply" != true ) ]]; then
+    echo "STOP: --restore-native-touch requires --watch --apply" >&2
+    exit 2
+fi
+container="$1"
+running() {
+    [[ "$(podman inspect --format '{{.State.Running}} {{ index .Config.Labels "lepton" }}' "$container" 2>/dev/null)" == "true true" ]]
+}
+is_virtual_pad() {
+    local event="$1" sys="/sys/class/input/$1/device" name vendor product
+    [[ -c "/dev/input/$event" ]] || return 1
+    name=$(cat "$sys/name" 2>/dev/null) || return 1
+    vendor=$(cat "$sys/id/vendor" 2>/dev/null) || return 1
+    product=$(cat "$sys/id/product" 2>/dev/null) || return 1
+    [[ "$vendor" == 28de && "$product" == 11ff &&
+       "$name" =~ ^Microsoft[[:space:]]X-Box[[:space:]]360[[:space:]]pad[[:space:]][0-9]+$ ]]
+}
+# Track both the sysfs device instance and character node identity. A reused
+# event number must be unregistered before any new device can use that slot.
+# This is defence-in-depth, NOT a substitute for a narrow mount: a race still
+# exists while the raw /dev/input directory remains mounted into the guest.
+declare -A previous_keys=()
+device_key() {
+    local event="$1" sys="/sys/class/input/$1/device" instance node
+    is_virtual_pad "$event" || return 1
+    instance=$(readlink -f -- "$sys" 2>/dev/null) || return 1
+    node=$(stat -Lc '%d:%i:%t:%T' -- "/dev/input/$event" 2>/dev/null) || return 1
+    printf '%s|%s\n' "$instance" "$node"
+}
+remove_guest_link() {
+    local event="$1"
+    [[ "$event" =~ ^event[0-9]+$ ]] || return 2
+    podman exec "$container" /system/bin/sh -c '
+        event="$1"; dst="/dev/input/$event"
+        if [ "$(readlink "$dst" 2>/dev/null)" = "/lepton/host-input/$event" ]; then
+            rm "$dst" && echo "REMOVED $event"
+        fi
+    ' sh "$event"
+}
+# Only own links to the experimental mount. Never replace Android device nodes.
+guest_reconcile='
+wanted=" $* "
+for dst in /dev/input/event*; do
+    [ -L "$dst" ] || continue
+    event=${dst##*/}
+    target=$(readlink "$dst" 2>/dev/null) || continue
+    [ "$target" = "/lepton/host-input/$event" ] || continue
+    case "$wanted" in
+        *" $event "*) ;;
+        *) rm "$dst" && echo "REMOVED $event" ;;
+    esac
+done
+for event in "$@"; do
+    case "$event" in event[0-9]*) ;; *) continue ;; esac
+    src="/lepton/host-input/$event"
+    dst="/dev/input/$event"
+    [ -c "$src" ] || continue
+    if [ -L "$dst" ]; then
+        [ "$(readlink "$dst")" = "$src" ] && continue
+        echo "SKIPPED unrelated link $event"
+        continue
+    fi
+    [ -e "$dst" ] && continue
+    ln -s "$src" "$dst" && echo "ADDED $event"
+done
+'
+reconcile() {
+    local event path key old
+    local -a selected=() validated=()
+    local -A current_keys=()
+    running || return 1
+    podman exec "$container" /system/bin/sh -c '[ -d /lepton/host-input ]' >/dev/null 2>&1 || {
+        echo "STOP: hotplug input mount missing (requires LEPTON_GAMEPAD_HOTPLUG=true)" >&2
+        return 2
+    }
+    for path in /dev/input/event*; do
+        [[ -c "$path" ]] || continue
+        event="${path##*/}"
+        key=$(device_key "$event") || continue
+        selected+=("$event")
+        current_keys["$event"]="$key"
+    done
+    if [[ "$apply" != true ]]; then
+        printf 'DRY RUN: eligible virtual pads:'
+        printf ' %s' "${selected[@]}"
+        printf '\nExisting experimental links:\n'
+        podman exec "$container" /system/bin/sh -c '
+            for dst in /dev/input/event*; do
+                [ -L "$dst" ] || continue
+                target=$(readlink "$dst" 2>/dev/null) || continue
+                case "$target" in /lepton/host-input/event*) echo "$dst -> $target";; esac
+            done
+        '
+        return
+    fi
+    # If /dev/input/eventN has been reused between two polls, unlink any
+    # previously exposed guest path FIRST, even if the name is still pad N.
+    # A removed controller cannot be assumed to retain its old event number.
+    for event in "${!previous_keys[@]}"; do
+        old="${previous_keys[$event]}"
+        if [[ "${current_keys[$event]-}" != "$old" ]]; then
+            remove_guest_link "$event" || return 1
+        fi
+    done
+    for event in "${selected[@]}"; do
+        key=$(device_key "$event") || continue
+        [[ "$key" == "${current_keys[$event]}" ]] || continue
+        validated+=("$event")
+    done
+    podman exec "$container" /system/bin/sh -c "$guest_reconcile" sh "${validated[@]}" || return 1
+    previous_keys=()
+    for event in "${validated[@]}"; do
+        previous_keys["$event"]="${current_keys[$event]}"
+    done
+}
+if [[ "$mode" == once ]]; then
+    reconcile
+    exit $?
+fi
+
+# Touchscreen native passthrough can be reset to mouse mode when Steam
+# switches layouts on Bluetooth controller add/remove. The Lepton bridge
+# launches Gamescope with native mode 4. Respect the actual starting mode,
+# rather than enabling native touch when the user chose another mode.
+get_touch_mode() {
+    local property
+    property=$(DISPLAY="$touch_display" xprop -root STEAM_TOUCH_CLICK_MODE 2>/dev/null) || return 1
+    if [[ "$property" =~ STEAM_TOUCH_CLICK_MODE\(CARDINAL\)[[:space:]]*=[[:space:]]*([0-9]+) ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+    else
+        return 1
+    fi
+}
+native_touch_enabled=false
+touch_fix_until=0
+if [[ "$restore_native_touch" == true ]]; then
+    command -v xprop >/dev/null 2>&1 || {
+        echo "STOP: xprop required for native touch restoration" >&2
+        exit 1
+    }
+    initial_touch_mode=$(get_touch_mode || true)
+    if [[ "$initial_touch_mode" == 4 ]]; then
+        native_touch_enabled=true
+        echo "Native touch restoration armed on display $touch_display (initial mode 4)"
+    else
+        echo "Native touch restoration disabled (initial mode: ${initial_touch_mode:-unknown})"
+    fi
+fi
+restore_touch_if_changed() {
+    [[ "$native_touch_enabled" == true ]] || return 0
+    ((SECONDS <= touch_fix_until)) || return 0
+    local current
+    current=$(get_touch_mode) || return 0
+    if [[ "$current" != 4 ]]; then
+        if DISPLAY="$touch_display" xprop -root -f STEAM_TOUCH_CLICK_MODE 32c \
+                -set STEAM_TOUCH_CLICK_MODE 4; then
+            echo "RESTORED native touchscreen mode 4 (was $current)"
+        fi
+    fi
+}
+
+# Watch udev notifications and recover from missed notifications by polling.
+monitor_pid=
+monitor_dir=
+cleanup() {
+    local code=$?
+    trap - EXIT INT TERM HUP
+    if [[ -n "$monitor_pid" ]]; then
+        kill "$monitor_pid" 2>/dev/null || true
+        wait "$monitor_pid" 2>/dev/null || true
+    fi
+    [[ -z "$monitor_dir" ]] || rm -rf -- "$monitor_dir"
+    if [[ "$apply" == true ]] && running; then
+        podman exec "$container" /system/bin/sh -c "$guest_reconcile" sh >/dev/null 2>&1 || true
+    fi
+    exit "$code"
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM HUP
+command -v udevadm >/dev/null 2>&1 || {
+    echo "STOP: udevadm is required for --watch" >&2
+    exit 1
+}
+reconcile || exit 1
+monitor_dir=$(mktemp -d /tmp/lepton-hotplug.XXXXXXXX) || exit 1
+mkfifo -m 600 "$monitor_dir/events" || exit 1
+exec 3<>"$monitor_dir/events"
+udevadm monitor --udev --subsystem-match=input --property >"$monitor_dir/events" 2>/dev/null &
+monitor_pid=$!
+action=
+devname=
+last_check=$SECONDS
+while running && kill -0 "$monitor_pid" 2>/dev/null; do
+    if IFS= read -r -t 1 -u 3 line; then
+        case "$line" in
+            ACTION=*) action="${line#ACTION=}" ;;
+            DEVNAME=/dev/input/event*) devname="${line#DEVNAME=/dev/input/}" ;;
+            '')
+                if [[ "$apply" == true && "$action" == remove && "$devname" =~ ^event[0-9]+$ ]]; then
+                    remove_guest_link "$devname" || true
+                fi
+                if [[ ( "$action" == add || "$action" == remove ) &&
+                      "$devname" =~ ^event[0-9]+$ ]]; then
+                    # Steam's mode change can occur after the udev notification.
+                    # Recheck for a short window, not indefinitely during play.
+                    touch_fix_until=$((SECONDS + 10))
+                fi
+                [[ -z "$action" ]] || reconcile || break
+                restore_touch_if_changed
+                action=
+                devname=
+                ;;
+        esac
+    fi
+    if ((SECONDS - last_check >= 1)); then
+        reconcile || break
+        restore_touch_if_changed
+        last_check=$SECONDS
+    fi
+done
