@@ -122,6 +122,10 @@ for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
         exit 1
     }
 done
+for script in compat_tool/lepton compat_tool/tools/lepton-gamescope-bridge compat_tool/tools/lepton-controller-hotplug-experiment; do
+    [[ -f "$repo/$script" ]] || { echo "ERROR: missing Fedora source $script" >&2; exit 1; }
+    bash -n "$repo/$script"
+done
 [[ -f "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]] || {
     echo "ERROR: missing Steam Input keylayout in Fedora source" >&2
     exit 1
@@ -193,6 +197,13 @@ for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     install -m 755 "$repo/compat_tool/liblepton/$script" \
         "$tmp/payload/compat_tool/liblepton/$script"
 done
+# These launch helpers must track the checked-out Fedora source, not an
+# older stage snapshot. Do not touch the staged Android rootfs.
+install -m 755 "$repo/compat_tool/lepton" "$tmp/payload/compat_tool/lepton"
+install -m 755 "$repo/compat_tool/tools/lepton-gamescope-bridge" \
+    "$tmp/payload/compat_tool/tools/lepton-gamescope-bridge"
+install -m 755 "$repo/compat_tool/tools/lepton-controller-hotplug-experiment" \
+    "$tmp/payload/compat_tool/tools/lepton-controller-hotplug-experiment"
 install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
     "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
 
@@ -261,6 +272,9 @@ for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
 grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/mounting.sh"
+for script in compat_tool/lepton compat_tool/tools/lepton-gamescope-bridge compat_tool/tools/lepton-controller-hotplug-experiment; do
+    bash -n "$tmp/payload/$script"
+done
 
 printf 'Creating compressed archive...\n'
 ( cd "$tmp/payload" && tar --warning=no-file-ignored -cf - . ) | gzip -1 > "$tmp/bundle.tar.gz"
