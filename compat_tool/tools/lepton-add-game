@@ -73,12 +73,13 @@ def read_binary(data):
             fields[key] = value
         fail("Truncated VDF object")
     root, end = node(11)
-    if end != len(data):
+    # Binary VDF commonly has two trailing 0x08 terminators: one for the
+    # "shortcuts" map and another for the implicit outer map. Other writers
+    # omit the implicit outer terminator. Accept only these two shapes, and
+    # insert new entries before the shortcuts map's own closing byte.
+    if data[end:] not in (b"", b"\x08"):
         fail("Unexpected bytes after shortcuts.vdf root")
-    # The 11-byte header above is the "shortcuts" object itself.
-    # node(11) already returns its numbered child entries ("0", "1", ...).
-    # No second nested "shortcuts" object is present in Steam binary VDF.
-    return root, data, len(data) - 1
+    return root, data, end - 1
 
 
 def string(key, value):
@@ -217,7 +218,8 @@ def main():
         slot, appid, name, apk, options
     ) + (data[insertion:] if data else b"\x08")
     if not data:
-        new_shortcuts = b"\x00shortcuts\x00" + new_shortcuts
+        # Include the conventional implicit outer map terminator as well.
+        new_shortcuts = b"\x00shortcuts\x00" + new_shortcuts + b"\x08"
 
     original_config = config.read_bytes()
     decoded = original_config.decode("utf-8")
