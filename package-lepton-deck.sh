@@ -136,6 +136,8 @@ for script in compat_tool/lepton compat_tool/tools/lepton-gamescope-bridge compa
     [[ -f "$repo/$script" ]] || { echo "ERROR: missing Fedora source $script" >&2; exit 1; }
     bash -n "$repo/$script"
 done
+[[ -f "$repo/compat_tool/tools/lepton-add-game" ]] || { echo 'ERROR: missing shortcut installer' >&2; exit 1; }
+python3 -m py_compile "$repo/compat_tool/tools/lepton-add-game"
 [[ -f "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]] || {
     echo "ERROR: missing Steam Input keylayout in Fedora source" >&2
     exit 1
@@ -217,6 +219,8 @@ install -m 755 "$repo/compat_tool/tools/lepton-gamescope-bridge" \
     "$tmp/payload/compat_tool/tools/lepton-gamescope-bridge"
 install -m 755 "$repo/compat_tool/tools/lepton-controller-hotplug-experiment" \
     "$tmp/payload/compat_tool/tools/lepton-controller-hotplug-experiment"
+install -m 755 "$repo/compat_tool/tools/lepton-add-game" \
+    "$tmp/payload/compat_tool/tools/lepton-add-game"
 install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
     "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
 
@@ -264,9 +268,13 @@ Fresh registration, only if not already registered:
   cp "$HOME/.local/share/lepton-x86_64-dev/lepton_x86_64_dev.vdf" "$HOME/.local/share/Steam/compatibilitytools.d/"
   Restart Steam after initial registration.
 
-Add an APK as a non-Steam shortcut and choose "Lepton x86_64 (development)"
-under Properties > Compatibility. Use these Steam launch options:
-  SteamAppId=0 APP_WANTS_FLATSCREEN=true GAMESCOPE_WAYLAND_DISPLAY=wayland-0 LEPTON_ADB=/home/deck/.local/share/lepton-x86_64-dev/tools/platform-tools/adb PATH=/home/deck/.local/share/lepton-x86_64-dev/tools/bin:$PATH %command%
+To add an APK shortcut, fully exit Steam in Desktop Mode first, then run:
+  python3 "$HOME/.local/share/lepton-x86_64-dev/compat_tool/tools/lepton-add-game" "$HOME/Android_Games/RetroArch.apk"
+The shortcut installer selects Lepton and sets the Gamescope bridge automatically.
+Use --hotplug only to opt in to broader host input access and live gamepad hotplug.
+Steam Input Touchscreen Native Support remains a manual controller-layout setting.
+On KDE Wayland Desktop Mode the bridge uses a windowed Wayland Gamescope.
+On Steam Gaming Mode the bridge retains the tested SDL/X11 fullscreen behavior.
 
 The steamlaunch-0 app-install path uses Podman and waits for Android package
 services before installing. The automatic game launch does not force-stop a
@@ -284,6 +292,7 @@ sed -i "s/lepton-x86_64-steamdeck-v308.tar.gz/$(basename -- "$archive")/g" \
 for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
+python3 -m py_compile "$tmp/payload/compat_tool/tools/lepton-add-game"
 grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/mounting.sh"
 for script in compat_tool/lepton compat_tool/tools/lepton-gamescope-bridge compat_tool/tools/lepton-controller-hotplug-experiment; do
     bash -n "$tmp/payload/$script"
