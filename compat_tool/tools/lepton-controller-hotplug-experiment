@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# Lepton experimental Steam Input hotplug bridge.
+# Default is read-only; --apply is required to alter Android symlinks.
+# Use only with the opt-in LEPTON_GAMEPAD_HOTPLUG_PROBE=true mount.
+set -uo pipefail
+
+mode=once
+apply=false
+while (($#)); do
+    case "$1" in
+        --once) mode=once; shift ;;
+        --watch) mode=watch; shift ;;
+        --apply) apply=true; shift ;;
+        *) break ;;
+    esac
+done
+if (($# != 1)) || [[ ! "$1" =~ ^lepton-[A-Za-z0-9_.-]+$ ]]; then
+    echo "Usage: bash $0 [--once|--watch] [--apply] lepton-CONTEXT" >&2
+    exit 2
+fi
+container="$1"
+running() {
+    [[ "$(podman inspect --format '{{.State.Running}} {{ index .Config.Labels "lepton" }}' "$container" 2>/dev/null)" == "true true" ]]
+}
+is_virtual_pad() {
+    local event="$1" sys="/sys/class/input/$1/device" name vendor product
+    [[ -c "/dev/input/$event" ]] || return 1
+    name=$(cat "$sys/name" 2>/dev/null) || return 1
+    vendor=$(cat "$sys/id/vendor" 2>/dev/null) || return 1
+    product=$(cat "$sys/id/product" 2>/dev/null) || return 1
+    [[ "$vendor" == 28de && "$product" == 11ff &&
+       "$name" =~ ^Microsoft[[:space:]]X-Box[[:space:]]360[[:space:]]pad[[:space:]][0-9]+$ ]]
+}
+# Only own links to the experimental mount. Never replace Android device nodes.
+guest_reconcile='
+wanted=" $* "
+for dst in /dev/input/event*; do
+    [ -L "$dst" ] || continue
+    event=${dst##*/}
+    target=$(readlink "$dst" 2>/dev/null) || continue
+    [ "$target" = "/lepton/host-input/$event" ] || continue
+    case "$wanted" in
+        *" $event "*) ;;
+        *) rm "$dst" && echo "REMOVED $event" ;;
+    esac
+done
+for event in "$@"; do
+    case "$event" in event[0-9]*) ;; *) continue ;; esac
+    src="/lepton/host-input/$event"
+    dst="/dev/input/$event"
+    [ -c "$src" ] || continue
+    if [ -L "$dst" ]; then
+        [ "$(readlink "$dst")" = "$src" ] && continue
+        echo "SKIPPED unrelated link $event"
+        continue
+    fi
+    [ -e "$dst" ] && continue
+    ln -s "$src" "$dst" && echo "ADDED $event"
+done
+'
+reconcile() {
+    local event path
+    local -a selected=() validated=()
+    running || return 1
+    podman exec "$container" /system/bin/sh -c '[ -d /lepton/host-input ]' >/dev/null 2>&1 || {
+        echo "STOP: LEPTON_GAMEPAD_HOTPLUG_PROBE mount missing" >&2
+        return 2
+    }
+    for path in /dev/input/event*; do
+        [[ -c "$path" ]] || continue
+        event="${path##*/}"
+        is_virtual_pad "$event" && selected+=("$event")
+    done
+    if [[ "$apply" != true ]]; then
+        printf 'DRY RUN: eligible virtual pads:'
+        printf ' %s' "${selected[@]}"
+        printf '\nExisting experimental links:\n'
+        podman exec "$container" /system/bin/sh -c '
+            for dst in /dev/input/event*; do
+                [ -L "$dst" ] || continue
+                target=$(readlink "$dst" 2>/dev/null) || continue
+                case "$target" in /lepton/host-input/event*) echo "$dst -> $target";; esac
+            done
+        '
+        return
+    fi
+    for event in "${selected[@]}"; do
+        is_virtual_pad "$event" && validated+=("$event")
+    done
+    podman exec "$container" /system/bin/sh -c "$guest_reconcile" sh "${validated[@]}"
+}
+if [[ "$mode" == once ]]; then
+    reconcile
+    exit $?
+fi
+# Watch udev notifications and recover from missed notifications by polling.
+monitor_pid=
+monitor_dir=
+cleanup() {
+    local code=$?
+    trap - EXIT INT TERM HUP
+    if [[ -n "$monitor_pid" ]]; then
+        kill "$monitor_pid" 2>/dev/null || true
+        wait "$monitor_pid" 2>/dev/null || true
+    fi
+    [[ -z "$monitor_dir" ]] || rm -rf -- "$monitor_dir"
+    if [[ "$apply" == true ]] && running; then
+        podman exec "$container" /system/bin/sh -c "$guest_reconcile" sh >/dev/null 2>&1 || true
+    fi
+    exit "$code"
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM HUP
+command -v udevadm >/dev/null 2>&1 || {
+    echo "STOP: udevadm is required for --watch" >&2
+    exit 1
+}
+reconcile || exit 1
+monitor_dir=$(mktemp -d /tmp/lepton-hotplug.XXXXXXXX) || exit 1
+mkfifo -m 600 "$monitor_dir/events" || exit 1
+exec 3<>"$monitor_dir/events"
+udevadm monitor --udev --subsystem-match=input --property >"$monitor_dir/events" 2>/dev/null &
+monitor_pid=$!
+action=
+devname=
+last_check=$SECONDS
+while running && kill -0 "$monitor_pid" 2>/dev/null; do
+    if IFS= read -r -t 1 -u 3 line; then
+        case "$line" in
+            ACTION=*) action="${line#ACTION=}" ;;
+            DEVNAME=/dev/input/event*) devname="${line#DEVNAME=/dev/input/}" ;;
+            '')
+                if [[ "$apply" == true && "$action" == remove && "$devname" =~ ^event[0-9]+$ ]]; then
+                    podman exec "$container" /system/bin/sh -c '
+                        event="$1"
+                        dst="/dev/input/$event"
+                        [ "$(readlink "$dst" 2>/dev/null)" != "/lepton/host-input/$event" ] ||
+                            rm "$dst"
+                    ' sh "$devname" || true
+                fi
+                [[ -z "$action" ]] || reconcile || break
+                action=
+                devname=
+                ;;
+        esac
+    fi
+    if ((SECONDS - last_check >= 1)); then
+        reconcile || break
+        last_check=$SECONDS
+    fi
+done
