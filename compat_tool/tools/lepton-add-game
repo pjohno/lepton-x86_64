@@ -45,7 +45,7 @@ def cstr(data, index):
 def read_binary(data):
     """Return shortcuts data, existing entry names, and root closing offset."""
     if not data:
-        return [], b"\x00shortcuts\x00", 0
+        return {}, b"", 0
     if data[:11] != b"\x00shortcuts\x00":
         fail("Unrecognized shortcuts.vdf root; refusing to edit")
     def node(pos):
