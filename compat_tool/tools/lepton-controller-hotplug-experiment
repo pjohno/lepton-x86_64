@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Lepton experimental Steam Input hotplug bridge.
 # Default is read-only; --apply is required to alter Android symlinks.
-# Use only with the opt-in LEPTON_GAMEPAD_HOTPLUG_PROBE=true mount.
+# Use only with the opt-in LEPTON_GAMEPAD_HOTPLUG=true source mount.
 # --restore-native-touch is separately opt-in: preserve native mode (4)
 # only if already active when the watcher starts, around input hotplug events.
 set -uo pipefail
@@ -98,7 +98,7 @@ reconcile() {
     local -A current_keys=()
     running || return 1
     podman exec "$container" /system/bin/sh -c '[ -d /lepton/host-input ]' >/dev/null 2>&1 || {
-        echo "STOP: LEPTON_GAMEPAD_HOTPLUG_PROBE mount missing" >&2
+        echo "STOP: hotplug input mount missing (requires LEPTON_GAMEPAD_HOTPLUG=true)" >&2
         return 2
     }
     for path in /dev/input/event*; do
