@@ -40,6 +40,28 @@ is_virtual_pad() {
     [[ "$vendor" == 28de && "$product" == 11ff &&
        "$name" =~ ^Microsoft[[:space:]]X-Box[[:space:]]360[[:space:]]pad[[:space:]][0-9]+$ ]]
 }
+# Track both the sysfs device instance and character node identity. A reused
+# event number must be unregistered before any new device can use that slot.
+# This is defence-in-depth, NOT a substitute for a narrow mount: a race still
+# exists while the raw /dev/input directory remains mounted into the guest.
+declare -A previous_keys=()
+device_key() {
+    local event="$1" sys="/sys/class/input/$1/device" instance node
+    is_virtual_pad "$event" || return 1
+    instance=$(readlink -f -- "$sys" 2>/dev/null) || return 1
+    node=$(stat -Lc '%d:%i:%t:%T' -- "/dev/input/$event" 2>/dev/null) || return 1
+    printf '%s|%s\n' "$instance" "$node"
+}
+remove_guest_link() {
+    local event="$1"
+    [[ "$event" =~ ^event[0-9]+$ ]] || return 2
+    podman exec "$container" /system/bin/sh -c '
+        event="$1"; dst="/dev/input/$event"
+        if [ "$(readlink "$dst" 2>/dev/null)" = "/lepton/host-input/$event" ]; then
+            rm "$dst" && echo "REMOVED $event"
+        fi
+    ' sh "$event"
+}
 # Only own links to the experimental mount. Never replace Android device nodes.
 guest_reconcile='
 wanted=" $* "
@@ -68,8 +90,9 @@ for event in "$@"; do
 done
 '
 reconcile() {
-    local event path
+    local event path key old
     local -a selected=() validated=()
+    local -A current_keys=()
     running || return 1
     podman exec "$container" /system/bin/sh -c '[ -d /lepton/host-input ]' >/dev/null 2>&1 || {
         echo "STOP: LEPTON_GAMEPAD_HOTPLUG_PROBE mount missing" >&2
@@ -78,7 +101,9 @@ reconcile() {
     for path in /dev/input/event*; do
         [[ -c "$path" ]] || continue
         event="${path##*/}"
-        is_virtual_pad "$event" && selected+=("$event")
+        key=$(device_key "$event") || continue
+        selected+=("$event")
+        current_keys["$event"]="$key"
     done
     if [[ "$apply" != true ]]; then
         printf 'DRY RUN: eligible virtual pads:'
@@ -93,10 +118,25 @@ reconcile() {
         '
         return
     fi
-    for event in "${selected[@]}"; do
-        is_virtual_pad "$event" && validated+=("$event")
+    # If /dev/input/eventN has been reused between two polls, unlink any
+    # previously exposed guest path FIRST, even if the name is still pad N.
+    # A removed controller cannot be assumed to retain its old event number.
+    for event in "${!previous_keys[@]}"; do
+        old="${previous_keys[$event]}"
+        if [[ "${current_keys[$event]-}" != "$old" ]]; then
+            remove_guest_link "$event" || return 1
+        fi
     done
-    podman exec "$container" /system/bin/sh -c "$guest_reconcile" sh "${validated[@]}"
+    for event in "${selected[@]}"; do
+        key=$(device_key "$event") || continue
+        [[ "$key" == "${current_keys[$event]}" ]] || continue
+        validated+=("$event")
+    done
+    podman exec "$container" /system/bin/sh -c "$guest_reconcile" sh "${validated[@]}" || return 1
+    previous_keys=()
+    for event in "${validated[@]}"; do
+        previous_keys["$event"]="${current_keys[$event]}"
+    done
 }
 if [[ "$mode" == once ]]; then
     reconcile
@@ -182,12 +222,7 @@ while running && kill -0 "$monitor_pid" 2>/dev/null; do
             DEVNAME=/dev/input/event*) devname="${line#DEVNAME=/dev/input/}" ;;
             '')
                 if [[ "$apply" == true && "$action" == remove && "$devname" =~ ^event[0-9]+$ ]]; then
-                    podman exec "$container" /system/bin/sh -c '
-                        event="$1"
-                        dst="/dev/input/$event"
-                        [ "$(readlink "$dst" 2>/dev/null)" != "/lepton/host-input/$event" ] ||
-                            rm "$dst"
-                    ' sh "$devname" || true
+                    remove_guest_link "$devname" || true
                 fi
                 if [[ ( "$action" == add || "$action" == remove ) &&
                       "$devname" =~ ^event[0-9]+$ ]]; then
