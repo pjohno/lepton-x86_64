@@ -107,18 +107,17 @@ The checked-in `compat_tool/tools/lepton-gamescope-bridge` reflects a tested nes
 
 With this combination, touch worked in the tested 2048 application and RetroArch's menu (with RetroArch's Mouse Support disabled). Results are specific to the development configuration. A USB mouse is not a substitute for native touch and may behave inconsistently.
 
-**Verified on Steam Deck, 28 October 2026:** RetroArch recognises the Steam Input virtual Xbox controller and its buttons, D-pad, and analogue axes after restoring the tested evdev bind mount and `Vendor_28de_Product_11ff.kl` keylayout. The corrected Android `libinputreader.so` from the clean Android build is also required; the older staging library enumerated the controller but mapped joystick axes incorrectly to the Deck's display dimensions.
+**Verified on Steam Deck, 28 October 2026:** RetroArch recognises the built-in Steam Input virtual Xbox controller and its buttons, D-pad, and analogue axes with `Vendor_28de_Product_11ff.kl` and the patched Android InputReader. Controller passthrough defaults to **enabled** for the initial pad; set `LEPTON_GAMEPAD_PASSTHROUGH=false` to opt out.
 
-Controller passthrough defaults to **enabled**. No launch option is necessary; set `LEPTON_GAMEPAD_PASSTHROUGH=false` (lowercase) to opt out. Only the first matching Steam Input virtual Xbox controller is currently forwarded; multiple controllers and hotplugging remain unimplemented.
+**Experimental clean-install test, 29 October 2026:** On a freshly cleared Steam Deck, RetroArch launched in Gaming Mode through `lepton-gamescope-bridge`. The built-in Deck controller operated on Port 1, and two Bluetooth controllers were recognised independently on Ports 2 and 3. Both Bluetooth controllers connected and disconnected during the same session, and native touch remained usable after the display correction.
 
-**Build provenance for this verified Deck test:**
+For this experimental multi-controller/hotplug test, the Steam shortcut explicitly enabled `LEPTON_GAMEPAD_HOTPLUG_PROBE=true` and `LEPTON_GAMEPAD_HOTPLUG_AUTO=true`. Touch initially failed on controller connect because the watcher inherited nested Gamescope `DISPLAY=:2`, while the native-touch property was on host `DISPLAY=:0`. Setting `LEPTON_TOUCH_DISPLAY=:0` fixed the behaviour. The watcher's default was subsequently corrected to `:0`; that new default has not yet been retested in a transferred bundle without the explicit override.
 
-- `image-14/patches/0007-eventhub-preserve-evdev-axes.patch` is committed and applied during Android source preparation.
-- Working `system/lib64/libinputreader.so` SHA-256: `3f4aaaca90bb0ade2cce6690b20f7d20ec0fb57d77f57294ab95d19077c5fd70`.
-- Nonworking old-stage `system/lib64/libinputreader.so` SHA-256: `65d09719c2f68a3171128fcec9a4ddcca0ddd82cdd5ad5e64598dc41d07e5d01`.
-- Verified bundle: `lepton-x86_64-steamdeck-controller-inputreader-20261028.tar.gz`. This bundle was prepared by **manually copying the corrected library into the Fedora staging directory**; the repository's current packaging script still defaults to an existing staged rootfs and does not automatically refresh it after an Android rebuild. Do not assume a fresh package uses the corrected library without checking the hash. The staging automation and provenance guard remain follow-up work.
+**Security limitation:** `LEPTON_GAMEPAD_HOTPLUG_PROBE=true` bind-mounts the host's *entire* `/dev/input` directory read-only into the Android container for experimental hotplug. Read-only access does **not** prevent reading events from unrelated host input devices. This feature is opt-in and is **not suitable as a general/default deployment** until exposure is narrowed.
 
-The experimental controller passthrough presently selects the first matching Steam virtual Xbox input device. Do not assume multi-controller or hotplug support. RetroArch may also require manual right-stick and trigger bindings.
+**Build and bundle provenance:** The working controller test used an existing previously validated Android rootfs with an updated InputReader library compiled from the prepared Android source tree containing patches `0007-eventhub-preserve-evdev-axes.patch` and `0008-inputreader-separate-steam-input-pads.patch`. The test bundle was `lepton-x86_64-steamdeck-clean-install-controller-test-20261029.tar.gz`. This was a functional test of the assembled installation, **not** verification of a freshly rebuilt, complete Android rootfs. `package-lepton-deck.sh` packages an existing stage and refreshes selected host-side scripts; it does not rebuild Android or substitute individual libraries. A full-from-source image/rootfs rebuild and whole-output verification are separate follow-up work.
+
+RetroArch's controller assignment and per-core bindings may differ from other Android applications.
 
 ## Upstream, attribution and licenses
 
