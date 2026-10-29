@@ -168,6 +168,29 @@ grep -Fq 'no-force-stop' "$repo/compat_tool/liblepton/mounting.sh" || {
     echo 'ERROR: Fedora source missing tested automatic launch call' >&2; exit 1;
 }
 
+# Pin the Android InputReader binary for the tested two-controller build.
+# The stage is materialized independently of Git; without this check an old
+# library could silently replace the patched one in a fresh Deck install.
+inputreader_relpath="compat_tool/images/rootfs/system/lib64/libinputreader.so"
+inputreader_sha256="c745652ec34ab8937cb8d344bdac72d01e3549639c1b02edc78bff418d3fa560"
+verify_inputreader() {
+    local root="$1" actual
+    [[ -f "$root/$inputreader_relpath" ]] || {
+        echo "ERROR: missing staged Android InputReader library" >&2
+        return 1
+    }
+    actual="$(sha256sum "$root/$inputreader_relpath" | awk '{print $1}')"
+    if [[ "$actual" != "$inputreader_sha256" ]]; then
+        echo "ERROR: Android InputReader checksum mismatch" >&2
+        echo "  expected: $inputreader_sha256" >&2
+        echo "  actual:   $actual" >&2
+        echo "  file:     $root/$inputreader_relpath" >&2
+        return 1
+    fi
+    printf 'PASS: tested two-controller InputReader (%s)\n' "$actual"
+}
+verify_inputreader "$stage"
+
 [[ ! -e "$archive" && ! -e "$checksum" ]] || {
     echo "ERROR: output already exists; refusing overwrite: $archive" >&2
     exit 1
@@ -268,6 +291,7 @@ sed -i "s/lepton-x86_64-steamdeck-v308.tar.gz/$(basename -- "$archive")/g" \
 [[ -f "$tmp/payload/compat_tool/images/rootfs/system/etc/init/hw/init.rc" ]]
 [[ -x "$tmp/payload/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure" ]]
 [[ -s "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]]
+verify_inputreader "$tmp/payload"
 for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
