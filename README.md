@@ -99,6 +99,37 @@ GAMESCOPE_WAYLAND_DISPLAY=wayland-0 bash compat_tool/test-0100.sh
 
 Once host prerequisites and configuration are satisfied, continue in test-number order. `test-0200.sh` verifies container lifecycle without starting Android `/init`, while later tests exercise Android initialization and the graphics stack. Do not run `.ci_scripts/run-tests.sh` directly on a normal Fedora desktop: the CI harness includes system-wide changes and a forced Podman reset.
 
+## Steam Deck shortcut and display-mode helper (development branch)
+
+The Deck bundle includes `compat_tool/tools/lepton-add-game`, a standard-library
+Python script to register a non-Steam APK shortcut, its Lepton compatibility
+tool mapping, and its Gamescope launch options. For example, after **fully
+exiting Steam** from Desktop Mode:
+
+```bash
+python3 "$HOME/.local/share/lepton-x86_64-dev/compat_tool/tools/lepton-add-game" \
+    "$HOME/Android_Games/RetroArch.apk"
+```
+
+Restart Steam to see the new shortcut. Add `--hotplug` to opt in to the
+experimental broad `/dev/input` mount and live gamepad hotplug. Without it,
+the default only passes identified controllers present at startup. The helper
+does not set Steam Input layouts: enable **Touchscreen Native Support** in the
+shortcut's controller layout manually.
+
+The helper refuses to modify Steam's binary shortcuts or text compatibility
+mapping if it cannot recognise their format, if the APK is already registered,
+or if Steam is running. When more than one Steam user directory exists, pass
+`--userdata ~/.local/share/Steam/userdata/USER_ID`. This tool has not yet
+been tested against the Deck's real Steam config; validate in Desktop Mode
+before relying on it.
+
+The `lepton-gamescope-bridge` keeps its known Gaming Mode SDL/X11 fullscreen
+path. On KDE Plasma Wayland Desktop Mode it selects a **windowed Wayland
+Gamescope** at 1280×800 (configurable with `LEPTON_RESOLUTION=WIDTHxHEIGHT`).
+Override detection using `LEPTON_DISPLAY_MODE=gaming` or `desktop`.
+Desktop Wayland behaviour still requires an on-device test.
+
 ## Steam Deck input notes (experimental)
 
 The checked-in `compat_tool/tools/lepton-gamescope-bridge` reflects a tested nested Gamescope configuration with `--default-touch-mode 4`. **That switch alone is not enough** for native touch on the Steam Deck. The Lepton Steam shortcut's Steam Input configuration must also enable:
