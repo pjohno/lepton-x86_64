@@ -75,9 +75,10 @@ def read_binary(data):
     root, end = node(11)
     if end != len(data):
         fail("Unexpected bytes after shortcuts.vdf root")
-    if "shortcuts" not in root or not isinstance(root["shortcuts"], dict):
-        fail("Missing Steam shortcuts object")
-    return root["shortcuts"], data, len(data) - 1
+    # The 11-byte header above is the "shortcuts" object itself.
+    # node(11) already returns its numbered child entries ("0", "1", ...).
+    # No second nested "shortcuts" object is present in Steam binary VDF.
+    return root, data, len(data) - 1
 
 
 def string(key, value):
@@ -158,6 +159,8 @@ def main():
     parser.add_argument("--name", help="Name displayed in Steam (default: APK stem)")
     parser.add_argument("--hotplug", action="store_true",
                         help="Enable experimental /dev/input mount and live gamepad hotplug")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Validate shortcut and compatibility mapping without modifying Steam files")
     parser.add_argument("--userdata", type=Path,
                         help="Steam userdata/<id> directory (required if multiple users)")
     args = parser.parse_args()
@@ -230,6 +233,11 @@ def main():
         '\t\t\t\t\t\t}\n'
     )
     new_config = (decoded[:end] + new_mapping + decoded[end:]).encode("utf-8")
+    if args.dry_run:
+        print("PASS: shortcut and compatibility mapping are valid; no Steam files modified")
+        print("Proposed shortcut:", name, "| Steam AppID:", appid)
+        print("Hotplug:", "enabled (experimental)" if args.hotplug else "off")
+        return
     # Each replacement is atomic. If the second write fails, restore the
     # first file, including the original absence of shortcuts.vdf.
     atomic_replace(shortcuts, new_shortcuts)
