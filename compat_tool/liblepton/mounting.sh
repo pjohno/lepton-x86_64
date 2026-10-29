@@ -533,7 +533,7 @@ function setup_podman_mounts()
     # exposes more host input devices to Android than the individual bind.
     if ! is_sysbake &&
        [[ "${LEPTON_GAMEPAD_PASSTHROUGH:-true}" == "true" ]] &&
-       [[ "${LEPTON_GAMEPAD_HOTPLUG_PROBE:-false}" == "true" ]] &&
+       [[ "${LEPTON_GAMEPAD_HOTPLUG:-false}" == "true" ]] &&
        [[ -d /dev/input ]]; then
         podman_mount_entry /dev/input /lepton/host-input ro
     fi
