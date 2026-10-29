@@ -99,7 +99,7 @@ GAMESCOPE_WAYLAND_DISPLAY=wayland-0 bash compat_tool/test-0100.sh
 
 Once host prerequisites and configuration are satisfied, continue in test-number order. `test-0200.sh` verifies container lifecycle without starting Android `/init`, while later tests exercise Android initialization and the graphics stack. Do not run `.ci_scripts/run-tests.sh` directly on a normal Fedora desktop: the CI harness includes system-wide changes and a forced Podman reset.
 
-## Steam Deck shortcut and display-mode helper (development branch)
+## Steam Deck shortcut and display-mode helper
 
 The Deck bundle includes `compat_tool/tools/lepton-add-game`, a standard-library
 Python script to register a non-Steam APK shortcut, its Lepton compatibility
@@ -120,15 +120,20 @@ shortcut's controller layout manually.
 The helper refuses to modify Steam's binary shortcuts or text compatibility
 mapping if it cannot recognise their format, if the APK is already registered,
 or if Steam is running. When more than one Steam user directory exists, pass
-`--userdata ~/.local/share/Steam/userdata/USER_ID`. This tool has not yet
-been tested against the Deck's real Steam config; validate in Desktop Mode
-before relying on it.
+`--userdata ~/.local/share/Steam/userdata/USER_ID`.
+
+**Verified on Steam Deck, 29 October 2026:** A dry run validated Steam's
+existing shortcuts and compatibility mapping without writing files; a new
+2048 shortcut was then created, selected Lepton automatically, and launched
+in both Desktop Mode and Gaming Mode. This is a functional test of the
+current Deck configuration, not broad coverage of other Steam versions.
 
 The `lepton-gamescope-bridge` keeps its known Gaming Mode SDL/X11 fullscreen
 path. On KDE Plasma Wayland Desktop Mode it selects a **windowed Wayland
 Gamescope** at 1280×800 (configurable with `LEPTON_RESOLUTION=WIDTHxHEIGHT`).
 Override detection using `LEPTON_DISPLAY_MODE=gaming` or `desktop`.
-Desktop Wayland behaviour still requires an on-device test.
+The Desktop Wayland Gamescope window was verified on the Steam Deck, and
+the new 2048 shortcut launched successfully in Desktop and Gaming modes.
 
 ## Steam Deck input notes (experimental)
 
@@ -142,7 +147,7 @@ With this combination, touch worked in the tested 2048 application and RetroArch
 
 **Experimental clean-install test, 29 October 2026:** On a freshly cleared Steam Deck, RetroArch launched in Gaming Mode through `lepton-gamescope-bridge`. The built-in Deck controller operated on Port 1, and two Bluetooth controllers were recognised independently on Ports 2 and 3. Both Bluetooth controllers connected and disconnected during the same session, and native touch remained usable after the display correction.
 
-The original experimental hotplug test enabled two development switches. The user-facing switch is now **`LEPTON_GAMEPAD_HOTPLUG=true`**, which enables both the experimental input mount and automatic watcher; the unified switch still needs a Deck smoke test. Touch initially failed on controller connect because the watcher inherited nested Gamescope `DISPLAY=:2`, while the native-touch property was on host `DISPLAY=:0`. Setting `LEPTON_TOUCH_DISPLAY=:0` fixed the behaviour. The watcher's default was subsequently corrected to `:0`; that new default has not yet been retested in a transferred bundle without the explicit override.
+The original experimental hotplug test enabled two development switches. The user-facing switch is now **`LEPTON_GAMEPAD_HOTPLUG=true`**, which enables both the experimental input mount and automatic watcher; the unified switch has passed a Deck smoke test. Touch initially failed on controller connect because the watcher inherited nested Gamescope `DISPLAY=:2`, while the native-touch property was on host `DISPLAY=:0`. Setting `LEPTON_TOUCH_DISPLAY=:0` fixed the behaviour. The watcher's default was subsequently corrected to `:0`; the new default was exercised in the transferred host scripts during the single-switch smoke test.
 
 **Security limitation:** `LEPTON_GAMEPAD_HOTPLUG=true` bind-mounts the host's *entire* `/dev/input` directory read-only into the Android container for experimental hotplug. Read-only access does **not** prevent reading events from unrelated host input devices. This feature is opt-in and is **not suitable as a general/default deployment** until exposure is narrowed.
 
