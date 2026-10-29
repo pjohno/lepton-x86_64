@@ -137,7 +137,7 @@ for script in compat_tool/lepton compat_tool/tools/lepton-gamescope-bridge compa
     bash -n "$repo/$script"
 done
 [[ -f "$repo/compat_tool/tools/lepton-add-game" ]] || { echo 'ERROR: missing shortcut installer' >&2; exit 1; }
-python3 -m py_compile "$repo/compat_tool/tools/lepton-add-game"
+python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$repo/compat_tool/tools/lepton-add-game"
 [[ -f "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]] || {
     echo "ERROR: missing Steam Input keylayout in Fedora source" >&2
     exit 1
@@ -292,7 +292,7 @@ sed -i "s/lepton-x86_64-steamdeck-v308.tar.gz/$(basename -- "$archive")/g" \
 for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
-python3 -m py_compile "$tmp/payload/compat_tool/tools/lepton-add-game"
+python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$tmp/payload/compat_tool/tools/lepton-add-game"
 grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/mounting.sh"
 for script in compat_tool/lepton compat_tool/tools/lepton-gamescope-bridge compat_tool/tools/lepton-controller-hotplug-experiment; do
     bash -n "$tmp/payload/$script"
