@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""Add an Android APK as a Steam non-Steam shortcut using Lepton.
+
+Run with Steam fully exited. Uses Python's standard library only.
+Refuses unknown VDF formats rather than overwriting Steam configuration.
+"""
+import argparse
+import os
+from pathlib import Path
+import re
+import struct
+import sys
+import tempfile
+import zlib
+
+TOOL = "lepton_x86_64_dev"
+INSTALL = Path.home() / ".local/share/lepton-x86_64-dev"
+STEAM = Path.home() / ".local/share/Steam"
+
+
+def fail(message):
+    raise ValueError(message)
+
+
+def steam_running():
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            comm = (entry / "comm").read_text().strip()
+        except (OSError, UnicodeError):
+            continue
+        if comm in {"steam", "steam.sh", "steamwebhelper"}:
+            return True
+    return False
+
+
+def cstr(data, index):
+    end = data.find(b"\x00", index)
+    if end < 0:
+        fail("Malformed Steam binary VDF: unterminated string")
+    return data[index:end].decode("utf-8"), end + 1
+
+
+def read_binary(data):
+    """Return shortcuts data, existing entry names, and root closing offset."""
+    if not data:
+        return {}, b"", 0
+    if data[:11] != b"\x00shortcuts\x00":
+        fail("Unrecognized shortcuts.vdf root; refusing to edit")
+    def node(pos):
+        fields = {}
+        while pos < len(data):
+            kind = data[pos]
+            pos += 1
+            if kind == 8:
+                return fields, pos
+            key, pos = cstr(data, pos)
+            if kind == 0:
+                value, pos = node(pos)
+            elif kind == 1:
+                value, pos = cstr(data, pos)
+            elif kind == 2:
+                if pos + 4 > len(data): fail("Truncated VDF integer")
+                value = struct.unpack_from("<I", data, pos)[0]
+                pos += 4
+            elif kind == 7:
+                if pos + 8 > len(data): fail("Truncated VDF uint64")
+                value = struct.unpack_from("<Q", data, pos)[0]
+                pos += 8
+            else:
+                fail("Unsupported VDF field type %s; refusing to edit" % kind)
+            fields[key] = value
+        fail("Truncated VDF object")
+    root, end = node(11)
+    # Binary VDF commonly has two trailing 0x08 terminators: one for the
+    # "shortcuts" map and another for the implicit outer map. Other writers
+    # omit the implicit outer terminator. Accept only these two shapes, and
+    # insert new entries before the shortcuts map's own closing byte.
+    if data[end:] not in (b"", b"\x08"):
+        fail("Unexpected bytes after shortcuts.vdf root")
+    return root, data, end - 1
+
+
+def string(key, value):
+    return b"\x01" + key.encode() + b"\x00" + value.encode() + b"\x00"
+
+
+def integer(key, value):
+    return b"\x02" + key.encode() + b"\x00" + struct.pack("<I", value)
+
+
+def shortcut_entry(slot, appid, name, apk, options):
+    exe = '"' + str(apk) + '"'
+    start_dir = '"' + str(apk.parent) + '"'
+    content = b"\x00" + str(slot).encode() + b"\x00"
+    content += integer("appid", appid)
+    for key, val in [
+        ("AppName", name), ("Exe", exe), ("StartDir", start_dir),
+        ("icon", ""), ("ShortcutPath", ""), ("LaunchOptions", options),
+    ]:
+        content += string(key, val)
+    for key, val in [
+        ("IsHidden", 0), ("AllowDesktopConfig", 1),
+        ("AllowOverlay", 1), ("OpenVR", 0), ("Devkit", 0),
+    ]:
+        content += integer(key, val)
+    content += string("DevkitGameID", "")
+    content += integer("DevkitOverrideAppID", 0)
+    content += integer("LastPlayTime", 0)
+    content += b"\x00tags\x00\x08\x08"
+    return content
+
+
+def find_mapping_block(text):
+    """Find CompatToolMapping's braces, ignoring braces inside quoted values."""
+    matches = list(re.finditer(r'"CompatToolMapping"\s*\{', text, re.I))
+    if len(matches) != 1:
+        fail("Expected one CompatToolMapping block in Steam config.vdf")
+    start = text.find("{", matches[0].start())
+    depth = 0
+    quoted = False
+    escape = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if quoted:
+            if escape: escape = False
+            elif c == "\\": escape = True
+            elif c == '"': quoted = False
+        elif c == '"':
+            quoted = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return start, i
+    fail("Unterminated CompatToolMapping block")
+
+
+def atomic_replace(path, payload):
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(prefix=".lepton-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(payload)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(temp, mode)
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("apk", type=Path, help="APK file to add")
+    parser.add_argument("--name", help="Name displayed in Steam (default: APK stem)")
+    parser.add_argument("--hotplug", action="store_true",
+                        help="Enable experimental /dev/input mount and live gamepad hotplug")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Validate shortcut and compatibility mapping without modifying Steam files")
+    parser.add_argument("--userdata", type=Path,
+                        help="Steam userdata/<id> directory (required if multiple users)")
+    args = parser.parse_args()
+
+    apk = args.apk.expanduser().resolve(strict=True)
+    if not apk.is_file() or apk.suffix.lower() != ".apk":
+        fail("Expected an existing .apk file")
+    if steam_running():
+        fail("Exit Steam completely (including Gaming Mode) before editing its configuration")
+    if not (INSTALL / "compat_tool/tools/lepton-gamescope-bridge").is_file():
+        fail("Lepton installation not found at " + str(INSTALL))
+    if not (STEAM / "compatibilitytools.d" / (TOOL + ".vdf")).is_file():
+        fail("Lepton is not registered with Steam; install the .vdf and restart Steam")
+    name = args.name or apk.stem
+    if not name or any(x in name for x in "\x00\r\n"):
+        fail("Invalid shortcut name")
+    userdata = STEAM / "userdata"
+    users = sorted(p for p in userdata.iterdir()
+                   if p.is_dir() and p.name.isdigit())
+    if args.userdata:
+        selected = args.userdata.expanduser().resolve()
+        if selected not in [p.resolve() for p in users]:
+            fail("--userdata must point to an existing numeric Steam user directory")
+    elif len(users) == 1:
+        selected = users[0]
+    else:
+        fail("Found %d Steam users; specify --userdata" % len(users))
+    shortcuts = selected / "config/shortcuts.vdf"
+    config = STEAM / "config/config.vdf"
+    if not config.is_file():
+        fail("Steam config.vdf not found")
+    original = shortcuts.read_bytes() if shortcuts.exists() else b""
+    entries, data, insertion = read_binary(original)
+    exe = '"' + str(apk) + '"'
+    for value in entries.values():
+        if isinstance(value, dict) and value.get("Exe") == exe:
+            fail("A shortcut for this APK already exists: " + value.get("AppName", str(apk)))
+    slot = 0
+    while str(slot) in entries:
+        slot += 1
+    appid = zlib.crc32((exe + name).encode("utf-8")) | 0x80000000
+    for value in entries.values():
+        if isinstance(value, dict) and value.get("appid") == appid:
+            fail("Shortcut AppID collision; try a different --name")
+
+    options = (
+        "APP_WANTS_FLATSCREEN=true "
+        + ("LEPTON_GAMEPAD_HOTPLUG=true " if args.hotplug else "")
+        + "LEPTON_ADB=" + str(INSTALL / "tools/platform-tools/adb") + " "
+        + "PATH=" + str(INSTALL / "tools/bin") + ":$PATH "
+        + str(INSTALL / "compat_tool/tools/lepton-gamescope-bridge") + " %command%"
+    )
+    new_shortcuts = data[:insertion] + shortcut_entry(
+        slot, appid, name, apk, options
+    ) + (data[insertion:] if data else b"\x08")
+    if not data:
+        # Include the conventional implicit outer map terminator as well.
+        new_shortcuts = b"\x00shortcuts\x00" + new_shortcuts + b"\x08"
+
+    original_config = config.read_bytes()
+    decoded = original_config.decode("utf-8")
+    start, end = find_mapping_block(decoded)
+    if re.search(r'"\s*' + str(appid) + r'\s*"\s*\{', decoded[start:end]):
+        fail("Steam config already has a mapping for this AppID; refusing to overwrite")
+    new_mapping = (
+        '\n\t\t\t\t\t\t"' + str(appid) + '"\n'
+        '\t\t\t\t\t\t{\n'
+        '\t\t\t\t\t\t\t"name"\t\t"' + TOOL + '"\n'
+        '\t\t\t\t\t\t\t"config"\t\t""\n'
+        '\t\t\t\t\t\t\t"priority"\t\t"250"\n'
+        '\t\t\t\t\t\t}\n'
+    )
+    new_config = (decoded[:end] + new_mapping + decoded[end:]).encode("utf-8")
+    if args.dry_run:
+        print("PASS: shortcut and compatibility mapping are valid; no Steam files modified")
+        print("Proposed shortcut:", name, "| Steam AppID:", appid)
+        print("Hotplug:", "enabled (experimental)" if args.hotplug else "off")
+        return
+    # Each replacement is atomic. If the second write fails, restore the
+    # first file, including the original absence of shortcuts.vdf.
+    atomic_replace(shortcuts, new_shortcuts)
+    try:
+        atomic_replace(config, new_config)
+    except Exception:
+        if original:
+            atomic_replace(shortcuts, original)
+        else:
+            shortcuts.unlink(missing_ok=True)
+        raise
+    print("Added Steam shortcut:", name)
+    print("APK:", apk)
+    print("Steam AppID:", appid)
+    print("Compatibility tool:", TOOL)
+    print("Hotplug:", "enabled (experimental)" if args.hotplug else "off (safe startup mounts)")
+    print("Restart Steam and find the new entry under Non-Steam games.")
+    print("Steam Input native touchscreen layout must be enabled manually.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, OSError, UnicodeError) as exc:
+        print("ERROR:", exc, file=sys.stderr)
+        sys.exit(1)
