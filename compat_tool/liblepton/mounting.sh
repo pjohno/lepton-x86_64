@@ -494,12 +494,12 @@ function setup_podman_mounts()
         fi
     done
 
-    # Restore the bind-mounted Steam Input controller from the tested Deck
-    # runtime. Podman's --device node is hidden by Android's /dev tmpfs.
-    # Match the Steam virtual Xbox controller identity, not an event number.
-    # Further controllers and hotplugging are separate follow-up work.
-    # Passthrough is on by default. Set LEPTON_GAMEPAD_PASSTHROUGH=false
-    # (lowercase) to opt out; setting it to true explicitly is optional.
+    # Bind each Steam Input virtual controller present at container startup.
+    # Podman's --device nodes are hidden by Android's /dev tmpfs, so explicit
+    # per-device binds are needed. This does not expose unrelated host inputs.
+    # Later controller connections still require experimental hotplug opt-in.
+    # Passthrough defaults to enabled; set LEPTON_GAMEPAD_PASSTHROUGH=false
+    # to opt out.
     if ! is_sysbake && [[ "${LEPTON_GAMEPAD_PASSTHROUGH:-true}" == "true" ]]; then
         local gamepad_event gamepad_sysfs gamepad_name gamepad_vendor gamepad_product
         for gamepad_event in /dev/input/event*; do
@@ -518,12 +518,12 @@ function setup_podman_mounts()
                   "${gamepad_product}" == "11ff" ]]; then
                 println "Passing Steam Input controller ${gamepad_event} to Android"
                 podman_mount_entry "${gamepad_event}" "${gamepad_event}" rw
-                podman_mount_entry \
-                    "${LEPTON_DIR}/Vendor_28de_Product_11ff.kl" \
-                    "/system/usr/keylayout/Vendor_28de_Product_11ff.kl" ro
-                break
             fi
         done
+        # One shared keylayout for every matching Steam Input virtual pad.
+        podman_mount_entry \
+            "${LEPTON_DIR}/Vendor_28de_Product_11ff.kl" \
+            "/system/usr/keylayout/Vendor_28de_Product_11ff.kl" ro
     fi
 
     # Experimental hotplug proof: make host evdev nodes visible at a stable
