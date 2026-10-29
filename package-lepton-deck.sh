@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Build a Steam Deck transferable bundle from an already-prepared Fedora stage.
+# Local directories are configured in .build-env; command-line options override.
 # Usage: ./package-lepton-deck.sh [STAGE_DIR] [OUT_DIR] [--bundle-id ID] [--deck-ip IPv4]
 #        ./package-lepton-deck.sh [STAGE_DIR] [OUT_DIR] [--bundle-id ID] --deck-ip IPv4 --transfer-only
 set -Eeuo pipefail
 
-stage="${HOME}/lepton-deck-stage-v308"
-outdir="${HOME}/lepton-deck-bundles"
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# This is a trusted, developer-maintained shell config already used by builds.
+[[ ! -f "$repo/.build-env" ]] || source "$repo/.build-env"
+stage="${LEPTON_DECK_STAGE_DIR:-}"
+outdir="${LEPTON_DECK_BUNDLE_DIR:-${HOME}/lepton-deck-bundles}"
 deck_ip=""
-bundle_id="v308-stable-0700"
+bundle_id="${LEPTON_DECK_BUNDLE_ID:-dev-$(date -u +%Y%m%d-%H%M%S)}"
 transfer_only=false
 positionals=()
 
@@ -21,7 +24,11 @@ Usage:
 Without --deck-ip, package locally only. With --deck-ip, copy the resulting
 archive + checksum to deck@IP:~/Downloads/lepton-deck-bundles/ and verify it.
 --transfer-only sends an already-built archive without repackaging.
---bundle-id names a distinct archive; default: v308-stable-0700.
+Reads .build-env from the repository root. Configure LEPTON_DECK_STAGE_DIR,
+LEPTON_DECK_BUNDLE_DIR and LEPTON_OUTPUT_DIR there (see .build-env.example).
+Positional directory arguments override the configured paths.
+--bundle-id names a distinct archive; default: timestamped dev bundle.
+--transfer-only requires the same bundle ID previously used to package.
 Neither mode modifies the Deck's existing Lepton installation.
 HELP
 }
@@ -110,7 +117,15 @@ if [[ "$transfer_only" == true ]]; then
     exit 0
 fi
 
+[[ -n "$stage" ]] || {
+    echo 'ERROR: set LEPTON_DECK_STAGE_DIR in .build-env or supply STAGE_DIR' >&2
+    exit 2
+}
 stage="$(realpath -e -- "$stage")"
+[[ -n "${LEPTON_OUTPUT_DIR:-}" ]] || {
+    echo 'ERROR: set LEPTON_OUTPUT_DIR in .build-env to locate Android build outputs' >&2
+    exit 2
+}
 
 for program in rsync tar gzip sha256sum awk grep mktemp install; do
     command -v "$program" >/dev/null || { echo "ERROR: missing $program" >&2; exit 1; }
@@ -168,28 +183,29 @@ grep -Fq 'no-force-stop' "$repo/compat_tool/liblepton/mounting.sh" || {
     echo 'ERROR: Fedora source missing tested automatic launch call' >&2; exit 1;
 }
 
-# Pin the Android InputReader binary for the tested two-controller build.
-# The stage is materialized independently of Git; without this check an old
-# library could silently replace the patched one in a fresh Deck install.
+# The staging rootfs can lag behind the Android build. Take the tested
+# library directly from the configured build output and overlay it only
+# in the temporary bundle payload; do not mutate the staging directory.
 inputreader_relpath="compat_tool/images/rootfs/system/lib64/libinputreader.so"
 inputreader_sha256="c745652ec34ab8937cb8d344bdac72d01e3549639c1b02edc78bff418d3fa560"
-verify_inputreader() {
-    local root="$1" actual
-    [[ -f "$root/$inputreader_relpath" ]] || {
-        echo "ERROR: missing staged Android InputReader library" >&2
+inputreader_source="${LEPTON_OUTPUT_DIR%/}/out/target/product/lepton_x86_64/system/lib64/libinputreader.so"
+verify_inputreader_file() {
+    local file="$1" actual
+    [[ -f "$file" ]] || {
+        echo "ERROR: missing Android InputReader library: $file" >&2
         return 1
     }
-    actual="$(sha256sum "$root/$inputreader_relpath" | awk '{print $1}')"
+    actual="$(sha256sum "$file" | awk '{print $1}')"
     if [[ "$actual" != "$inputreader_sha256" ]]; then
         echo "ERROR: Android InputReader checksum mismatch" >&2
         echo "  expected: $inputreader_sha256" >&2
         echo "  actual:   $actual" >&2
-        echo "  file:     $root/$inputreader_relpath" >&2
+        echo "  file:     $file" >&2
         return 1
     fi
     printf 'PASS: tested two-controller InputReader (%s)\n' "$actual"
 }
-verify_inputreader "$stage"
+verify_inputreader_file "$inputreader_source"
 
 [[ ! -e "$archive" && ! -e "$checksum" ]] || {
     echo "ERROR: output already exists; refusing overwrite: $archive" >&2
@@ -229,6 +245,7 @@ install -m 755 "$repo/compat_tool/tools/lepton-controller-hotplug-experiment" \
     "$tmp/payload/compat_tool/tools/lepton-controller-hotplug-experiment"
 install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
     "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
+install -m 644 "$inputreader_source" "$tmp/payload/$inputreader_relpath"
 
 # A Fedora sysbake may carry security.selinux xattrs, which cannot be restored
 # by Deck users. Keep every user.* attribute and its file-path record intact.
@@ -291,7 +308,7 @@ sed -i "s/lepton-x86_64-steamdeck-v308.tar.gz/$(basename -- "$archive")/g" \
 [[ -f "$tmp/payload/compat_tool/images/rootfs/system/etc/init/hw/init.rc" ]]
 [[ -x "$tmp/payload/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure" ]]
 [[ -s "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]]
-verify_inputreader "$tmp/payload"
+verify_inputreader_file "$tmp/payload/$inputreader_relpath"
 for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
