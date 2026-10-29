@@ -203,6 +203,9 @@ rsync -a --no-owner --no-group -- "$stage/" "$tmp/payload/"
 
 # Refresh all tested shell fixes without touching the staged materialized
 # Android rootfs (the Fedora checkout holds only an external rootfs symlink).
+# Earlier stages did not ship compat_tool/tools; create the destination before
+# overlaying the newer launch helpers.
+mkdir -p -- "$tmp/payload/compat_tool/liblepton" "$tmp/payload/compat_tool/tools"
 for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     install -m 755 "$repo/compat_tool/liblepton/$script" \
         "$tmp/payload/compat_tool/liblepton/$script"
