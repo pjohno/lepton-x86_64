@@ -17,6 +17,15 @@ Lepton will not install or load kernel modules."
 
     printf 'ERROR: %s\n' "$message" >&2
 
+    # Desktop Wayland has no outer X11 window to tag; show a regular dialog.
+    if [[ "$display_mode" == desktop ]]; then
+        if command -v kdialog >/dev/null 2>&1; then
+            QT_QPA_PLATFORM=wayland timeout 60s kdialog \
+                --title "Lepton Binder Unavailable" --error "$message" || true
+        fi
+        return 1
+    fi
+
     # Show a scaled Qt dialog through X11, tagged for Steam Gamescope.
     local title="Lepton Binder Unavailable"
     local win="" dialog_pid
@@ -61,12 +70,47 @@ fi
 }
 
 export SteamAppId="$app_id"
-outer_display="${DISPLAY:?DISPLAY is not set}"
 
-# Choose the display resolution once, at launch.
-# An explicit override is useful if Steam exposes a fixed virtual resolution.
+# Gaming Mode must keep its tested SDL/X11 fullscreen path. A KDE Plasma
+# Wayland desktop can instead use Gamescope's native Wayland window backend.
+# Wayland variables alone are not sufficient: Gaming Mode is also Wayland.
+display_mode="${LEPTON_DISPLAY_MODE:-auto}"
+case "$display_mode" in
+    auto)
+        session_hint="${XDG_CURRENT_DESKTOP:-} ${XDG_SESSION_DESKTOP:-} ${DESKTOP_SESSION:-}"
+        session_hint="${session_hint,,}"
+        if [[ "${XDG_SESSION_TYPE:-}" == wayland &&
+              " $session_hint " =~ (kde|plasma) ]]; then
+            display_mode=desktop
+        else
+            display_mode=gaming
+        fi
+        ;;
+    desktop|gaming) ;;
+    *)
+        echo "ERROR: LEPTON_DISPLAY_MODE must be auto, desktop or gaming" >&2
+        exit 2
+        ;;
+esac
+outer_display="${DISPLAY:-}"
+if [[ "$display_mode" == desktop ]]; then
+    [[ -n "${WAYLAND_DISPLAY:-}" && -n "${XDG_RUNTIME_DIR:-}" ]] || {
+        echo "ERROR: Desktop Wayland requires WAYLAND_DISPLAY and XDG_RUNTIME_DIR" >&2
+        exit 1
+    }
+else
+    [[ -n "$outer_display" ]] || {
+        echo "ERROR: Gaming Mode needs an X11 DISPLAY for Steam window tagging" >&2
+        exit 1
+    }
+fi
+
+# Default to an 800p movable window on Desktop rather than using the full
+# desktop resolution; retain the tested Gaming Mode resolution detection.
 resolution="${LEPTON_RESOLUTION:-}"
-
+if [[ -z "$resolution" && "$display_mode" == desktop ]]; then
+    resolution=1280x800
+fi
 if [[ -z "$resolution" ]]; then
     resolution="$(DISPLAY="$outer_display" xdpyinfo 2>/dev/null |
         awk '/dimensions:/ {print $2; exit}')"
@@ -80,11 +124,21 @@ fi
 width="${resolution%x*}"
 height="${resolution#*x}"
 
-echo "Lepton Gamescope resolution: ${width}x${height}"
-
+echo "Lepton Gamescope mode: $display_mode; resolution: ${width}x${height}"
 
 lepton_check_binder || exit 1
 
+if [[ "$display_mode" == desktop ]]; then
+    # A normal KDE window, no fullscreen flag and no X11 Steam window tagging.
+    # The inner gamescope sets WAYLAND_DISPLAY for the Lepton container.
+    ENABLE_GAMESCOPE_WSI=0 gamescope --backend wayland --expose-wayland \
+        -W "$width" -H "$height" -w "$width" -h "$height" \
+        --default-touch-mode 4 \
+        -- sh -c 'export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"; exec "$@"' sh "$@"
+    exit $?
+fi
+
+# Preserve the previously tested Gaming Mode path unchanged.
 SDL_VIDEODRIVER=x11 ENABLE_GAMESCOPE_WSI=0 \
 gamescope --backend sdl --expose-wayland -f \
     -W "$width" -H "$height" -w "$width" -h "$height" \
