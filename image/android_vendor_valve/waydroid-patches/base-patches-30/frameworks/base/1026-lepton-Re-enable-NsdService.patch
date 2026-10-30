@@ -1,0 +1,33 @@
+From: Michael Tews <michael@tews.dev>
+Date: Sat, 17 Oct 2026 13:05:50 +0200
+Subject: [PATCH 1/1] lepton: Re-enable NsdService
+
+Signed-off-by: Michael Tews <michael@tews.dev>
+
+---
+ services/java/com/android/server/SystemServer.java | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index 9fbc88e2211..0b5d86326d0 100644
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -1584,7 +1584,6 @@ public final class SystemServer {
+             }
+             t.traceEnd();
+ 
+-            /*
+             t.traceBegin("StartNsdService");
+             try {
+                 serviceDiscovery = NsdService.create(context);
+@@ -1595,6 +1594,7 @@ public final class SystemServer {
+             }
+             t.traceEnd();
+ 
++            /*
+             t.traceBegin("StartSystemUpdateManagerService");
+             try {
+                 ServiceManager.addService(Context.SYSTEM_UPDATE_SERVICE,
+-- 
+2.56.0
+
