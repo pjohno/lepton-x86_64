@@ -1,6 +1,6 @@
 function logcat_debug_dir()
 {
-    print "${STEAMVR_LOGS_DIR}/lepton-logcats/${LEPTON_CONTEXT}"
+    print "${STEAM_LOG_PATH}/lepton-logcats/${LEPTON_CONTEXT}"
 }
 
 function logcat_debug_clear()
@@ -10,7 +10,7 @@ function logcat_debug_clear()
 
 function logcat_debug_clear_all()
 {
-    rm -rf "${STEAMVR_LOGS_DIR}/lepton-logcats"
+    rm -rf "${STEAM_LOG_PATH}/lepton-logcats"
 }
 
 function logcat_debug()

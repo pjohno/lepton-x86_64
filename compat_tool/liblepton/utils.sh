@@ -82,7 +82,7 @@ function wait_for_container_file()
     fi
 }
 
-STEAMVR_LOGS_DIR="$(steamvr logpath || true)"
+STEAM_LOG_PATH="$HOME/.steam/steam/logs"
 
 function lepton_version()
 {
@@ -100,7 +100,7 @@ function lepton_rootfs_version()
 function lepton_log_file()
 {
     local CONTEXT="${1:-${LEPTON_CONTEXT}}"
-    print "${1:-/${STEAMVR_LOGS_DIR}/lepton-${CONTEXT}.log}"
+    print "${1:-/${STEAM_LOG_PATH}/lepton-${CONTEXT}.log}"
 }
 
 
