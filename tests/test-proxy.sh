@@ -36,15 +36,18 @@ tee /home/steamos/.local/share/Steam/steamapps/appmanifest_testapp.acf <<EOF
 }
 EOF
 
-python -m venv proxy-venv
-source proxy-venv/bin/activate
-
-pip install pproxy
+export PATH="$HOME/.local/bin:$PATH"
 
 (
+    python -m venv proxy-venv
+    source proxy-venv/bin/activate
+
+    pip install pproxy
+    sed -i 's/loop = asyncio.get_event_loop()/loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)/' proxy-venv/lib/python3.14/site-packages/pproxy/server.py
+
     sudo touch /tmp/proxy.log
     sudo chown steamos:steamos /tmp/proxy.log
-    script -q -c "sudo pproxy -vv -l http://:8080 > /tmp/proxy.log 2>&1" /dev/null
+    script -q -c "source proxy-venv/bin/activate; pproxy -vv -l http://0.0.0.0:8080 > /tmp/proxy.log 2>&1" /dev/null
 ) &
 
 sleep 3
@@ -63,6 +66,8 @@ sleep 3
 
 if [[ "$(cat /tmp/proxy.log |grep -o " -> example.com")" != " -> example.com" ]]; then
     test_log "Android did not use the proxy as expected."
+    ps fax
+    cat /tmp/proxy.log
     test_failure
 fi
 
