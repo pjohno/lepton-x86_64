@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# Complete fresh Android 14 x86_64 -> Steam Deck bundle workflow.
+# Never uses Valve's destructive CI sysbake helpers or deploys to Steam.
+set -Eeuo pipefail
+
+IMAGE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO="$(cd -- "$IMAGE_DIR/.." && pwd -P)"
+CONFIG="$REPO/.build-env"
+MODE=''
+BUNDLE_ID=''
+SYSBAKE_TIMEOUT=600
+
+usage() {
+    cat <<'HELP'
+Usage:
+  bash image-14/do_build_x86_64.sh --check --bundle-id ID [--sysbake-timeout SECONDS]
+  bash image-14/do_build_x86_64.sh --execute --bundle-id ID [--sysbake-timeout SECONDS]
+
+Set LEPTON_OUTPUT_DIR in the repository's ignored .build-env to a NEW,
+NONEXISTENT Android source/output directory before running either command.
+The other build scripts source the same .build-env; this wrapper does not
+silently override their settings or reuse an existing AOSP build.
+
+--check: inspect host requirements and fresh output paths; change nothing.
+--execute: prepare AOSP, compile system/vendor, package rootfs, stage host
+           files, provision Deck utilities, generate isolated sysbake, and
+           create/check a local Steam Deck bundle.
+
+The Ubuntu 26.04 builder is created from .buildscripts_x86_64/ if absent.
+This command NEVER transfers to Steam Deck or changes Steam installations.
+HELP
+}
+fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
+info() { printf '[INFO] %s\n' "$*"; }
+pass() { printf '[PASS] %s\n' "$*"; }
+step() { printf '\n=== %s ===\n' "$*"; }
+
+while (( $# )); do
+    case "$1" in
+        --check|--execute)
+            [[ -z "$MODE" ]] || fail 'Choose exactly one mode'
+            MODE="$1"; shift ;;
+        --bundle-id)
+            (( $# >= 2 )) || fail '--bundle-id requires an ID'
+            BUNDLE_ID="$2"; shift 2 ;;
+        --sysbake-timeout)
+            (( $# >= 2 )) || fail '--sysbake-timeout requires seconds'
+            SYSBAKE_TIMEOUT="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; fail "Unknown argument: $1" ;;
+    esac
+done
+[[ -n "$MODE" && -n "$BUNDLE_ID" ]] || { usage >&2; fail 'Mode and --bundle-id are required'; }
+[[ "$BUNDLE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${#BUNDLE_ID} -le 64 ]] ||
+    fail 'Bundle ID must be 1-64 letters, digits, dots, hyphens or underscores'
+[[ "$SYSBAKE_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail 'Invalid sysbake timeout'
+[[ $(id -u) -ne 0 ]] || fail 'Run as a normal user (without sudo)'
+[[ $(uname -m) == x86_64 ]] || fail 'x86_64 build host required'
+[[ -f "$CONFIG" ]] || fail "Missing $CONFIG"
+# .build-env is a trusted, developer-maintained shell configuration.
+source "$CONFIG"
+: "${LEPTON_OUTPUT_DIR:?Set LEPTON_OUTPUT_DIR in .build-env}"
+: "${LEPTON_LOG_DIR:?Set LEPTON_LOG_DIR in .build-env}"
+: "${LEPTON_BUILD_TARGET:?Set LEPTON_BUILD_TARGET in .build-env}"
+
+BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder-ubuntu26:latest}"
+[[ "$BUILDER" == 'lepton-builder-ubuntu26:latest' ]] ||
+    fail 'The clean AMD x86_64 workflow requires lepton-builder-ubuntu26:latest'
+[[ "$LEPTON_BUILD_TARGET" == 'aosp_lepton_x86_64-ap2a-userdebug' ]] ||
+    fail 'Unexpected Android build target'
+
+TARGET="$(realpath -m -- "$LEPTON_OUTPUT_DIR")"
+TARGET_PARENT="$(dirname -- "$TARGET")"
+LOG_DIR="$(realpath -m -- "$LEPTON_LOG_DIR")"
+[[ "$TARGET" != / && "$TARGET" != "$HOME" && "$TARGET" != "$REPO" &&
+   "$TARGET" != "$REPO/"* && "$REPO" != "$TARGET/"* ]] ||
+    fail 'Unsafe Android source/output directory'
+[[ "$LOG_DIR" != / && "$LOG_DIR" != "$TARGET" && "$LOG_DIR" != "$TARGET/"* &&
+   "$TARGET" != "$LOG_DIR/"* ]] || fail 'Logs and build output must be separate'
+[[ -d "$TARGET_PARENT" && -w "$TARGET_PARENT" ]] ||
+    fail "Output parent does not exist or is not writable: $TARGET_PARENT"
+[[ ! -e "$LEPTON_OUTPUT_DIR" && ! -L "$LEPTON_OUTPUT_DIR" &&
+   ! -e "$TARGET" && ! -L "$TARGET" ]] ||
+    fail "Refusing to reuse an existing Android checkout: $TARGET"
+
+STAGE="$TARGET/deck-stage-$BUNDLE_ID"
+BUNDLE_DIR="$(realpath -m -- "${LEPTON_DECK_BUNDLE_DIR:-$TARGET/deck-bundles}")"
+[[ "$BUNDLE_DIR" != / && "$BUNDLE_DIR" != "$HOME" &&
+   "$BUNDLE_DIR" != "$REPO" && "$BUNDLE_DIR" != "$STAGE" &&
+   "$BUNDLE_DIR" != "$STAGE/"* ]] || fail 'Unsafe bundle output directory'
+ARCHIVE="$BUNDLE_DIR/lepton-x86_64-steamdeck-$BUNDLE_ID.tar.gz"
+[[ ! -e "$ARCHIVE" && ! -L "$ARCHIVE" &&
+   ! -e "$ARCHIVE.sha256" && ! -L "$ARCHIVE.sha256" ]] ||
+    fail "Bundle already exists: $ARCHIVE"
+
+BUILDER_DIR="$IMAGE_DIR/.buildscripts_x86_64"
+BUILDER_FILE="$BUILDER_DIR/Containerfile.ubuntu26"
+[[ -f "$BUILDER_FILE" ]] ||
+    fail "Missing x86_64 builder Containerfile: $BUILDER_FILE (apply directory-layout change first)"
+[[ -f "$IMAGE_DIR/scripts/provision-deck-tools.sh" &&
+   -f "$BUILDER_DIR/Containerfile.deck-tools" ]] || fail 'Missing Deck tools source files'
+
+for cmd in bash git podman rsync realpath df awk grep sha256sum curl unzip \
+           python3 make cargo cc weston systemctl getfattr setfattr \
+           timeout flock fuse-overlayfs simg2img sqfs2tar fuse2fs \
+           fusermount3 tar gzip; do
+    command -v "$cmd" >/dev/null 2>&1 || fail "Missing host dependency: $cmd"
+done
+[[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]] ||
+    fail 'FUSE is not accessible to the current user'
+
+info "Source commit: $(git -C "$REPO" rev-parse HEAD)"
+info "Android checkout (must be new): $TARGET"
+info "Builder: $BUILDER"
+info "Stage: $STAGE"
+info "Bundle: $ARCHIVE"
+info "Sysbake maximum runtime: ${SYSBAKE_TIMEOUT}s"
+
+if podman image exists "$BUILDER"; then
+    pass "Builder available: $(podman image inspect "$BUILDER" --format '{{.Id}}')"
+else
+    info "Builder absent; --execute will build it from $BUILDER_FILE"
+fi
+
+if [[ "$MODE" == --check ]]; then
+    # Valve-derived preflight requires an existing builder. Run it when possible;
+    # otherwise --execute must first build that builder.
+    if podman image exists "$BUILDER"; then
+        bash "$IMAGE_DIR/scripts/preflight-x86_64.sh" fresh
+        bash "$IMAGE_DIR/scripts/prepare-x86_64.sh" --check
+    else
+        info 'Full preflight requires the builder image; it will run after builder creation'
+    fi
+    pass 'Fresh pipeline paths/dependencies checked; no changes made'
+    exit 0
+fi
+
+if ! podman image exists "$BUILDER"; then
+    step 'Build Ubuntu 26.04 host toolchain (builder image not present)'
+    podman build -t "$BUILDER" -f "$BUILDER_FILE" "$BUILDER_DIR"
+fi
+
+step 'Preflight: new AOSP checkout'
+bash "$IMAGE_DIR/scripts/preflight-x86_64.sh" fresh
+bash "$IMAGE_DIR/scripts/prepare-x86_64.sh" --check
+
+step 'Prepare Android 14 source and patches'
+bash "$IMAGE_DIR/scripts/prepare-x86_64.sh" --execute
+bash "$IMAGE_DIR/scripts/preflight-x86_64.sh" existing
+
+step 'Compile fresh x86_64 system/vendor images'
+bash "$IMAGE_DIR/scripts/build-images-x86_64.sh" --check
+bash "$IMAGE_DIR/scripts/build-images-x86_64.sh" --execute
+# The full preflight applies the initial free-space threshold after compilation,
+# which may be too strict for rootfs extraction; validate the outputs directly.
+for part in system vendor; do
+    [[ -s "$TARGET/out/target/product/lepton_x86_64/$part.img" ]] ||
+        fail "Missing newly compiled Android image: $part.img"
+done
+
+step 'Package fresh Android 14 rootfs'
+bash "$IMAGE_DIR/scripts/package-repro-rootfs.sh" "$TARGET"
+
+step 'Create standalone compatibility-tool stage'
+bash "$IMAGE_DIR/scripts/deploy-compat-x86_64.sh" --check --stage-dir "$STAGE"
+bash "$IMAGE_DIR/scripts/deploy-compat-x86_64.sh" --execute --stage-dir "$STAGE"
+
+step 'Build and verify Steam Deck tools'
+bash "$IMAGE_DIR/scripts/provision-deck-tools.sh" --execute --stage-dir "$STAGE"
+bash "$IMAGE_DIR/scripts/provision-deck-tools.sh" --check --stage-dir "$STAGE"
+
+step 'Bake Android system data with private Podman storage'
+bash "$IMAGE_DIR/scripts/sysbake-isolated-x86_64.sh" --check --stage-dir "$STAGE"
+bash "$IMAGE_DIR/scripts/sysbake-isolated-x86_64.sh" --execute \
+    --stage-dir "$STAGE" --timeout "$SYSBAKE_TIMEOUT"
+
+step 'Record build provenance in staged bundle'
+MANIFEST="$TARGET/.lepton-resolved-manifest.xml"
+[[ -s "$MANIFEST" ]] || fail 'Prepared AOSP manifest snapshot is missing'
+PRODUCT="$TARGET/out/target/product/lepton_x86_64"
+for part in system vendor; do
+    [[ -s "$PRODUCT/$part.img" ]] || fail "Compiled Android image missing: $part.img"
+done
+[[ -s "$STAGE/compat_tool/sysbake/system/packages.xml" &&
+   -s "$STAGE/compat_tool/sysbake.xattrs" ]] || fail 'Baked Android data missing'
+
+PROVENANCE="$STAGE/tools/BUILD-PROVENANCE.txt"
+{
+    printf 'Lepton x86_64 Android 14 build provenance\n'
+    printf 'Source commit: %s\n' "$(git -C "$REPO" rev-parse HEAD)"
+    if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then
+        printf 'Source working tree: dirty (not an exact source snapshot)\n'
+    else
+        printf 'Source working tree: clean\n'
+    fi
+    printf 'AOSP resolved manifest SHA256: %s\n' "$(sha256sum "$MANIFEST" | awk '{print $1}')"
+    printf 'Android target: %s\n' "$LEPTON_BUILD_TARGET"
+    printf 'Builder image ID: %s\n' "$(podman image inspect "$BUILDER" --format '{{.Id}}')"
+    printf 'Android system.img SHA256: %s\n' "$(sha256sum "$PRODUCT/system.img" | awk '{print $1}')"
+    printf 'Android vendor.img SHA256: %s\n' "$(sha256sum "$PRODUCT/vendor.img" | awk '{print $1}')"
+    printf 'Baked packages.xml SHA256: %s\n' "$(sha256sum "$STAGE/compat_tool/sysbake/system/packages.xml" | awk '{print $1}')"
+    printf 'Google ADB and inotify versions: see tools/PROVENANCE.txt\n'
+} > "$PROVENANCE"
+
+step 'Package the distributable bundle (local only)'
+bash "$REPO/package-lepton-deck.sh" "$STAGE" "$BUNDLE_DIR" --bundle-id "$BUNDLE_ID"
+( cd "$BUNDLE_DIR" && sha256sum -c "$(basename -- "$ARCHIVE").sha256" )
+gzip -t "$ARCHIVE"
+# Enumerate the archive fully, checking both critical content and excluded work.
+tar -tzf "$ARCHIVE" | awk '
+    /^\.\/compat_tool\/images\/rootfs\/system\/build.prop$/ {rootfs=1}
+    /^\.\/compat_tool\/sysbake\/system\/packages.xml$/ {sysbake=1}
+    /^\.\/compat_tool\/sysbake.xattrs$/ {xattrs=1}
+    /^\.\/tools\/platform-tools\/adb$/ {adb=1}
+    /^\.\/tools\/bin\/inotifywait$/ {inotify=1}
+    /^\.\/tools\/BUILD-PROVENANCE.txt$/ {provenance=1}
+    /\.sysbake-work\./ || /podman-storage/ {unwanted++}
+    END {
+        if (!rootfs || !sysbake || !xattrs || !adb || !inotify || !provenance || unwanted) {
+            print "[FAIL] Archive content validation failed" > "/dev/stderr"
+            exit 1
+        }
+        print "[PASS] Archive has rootfs, sysbake, attributes, Deck tools, and provenance; no temporary sysbake work"
+    }
+'
+pass "Local Android 14 x86_64 Steam Deck bundle: $ARCHIVE"
+info 'No transfer, Steam registration, or existing installation was modified.'

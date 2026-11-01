@@ -2,6 +2,9 @@
 
 **Status:** experimental. This covers a fresh Android rootfs and transferable *host utilities*, not full Steam Deck installation or fresh system-data baking. The existing Steam Deck Lepton installation remains the known-good reference until a complete new build has passed runtime tests.
 
+The x86_64-only build container definitions live in `image-14/.buildscripts_x86_64/`.
+Valve-derived `.buildscripts/` machinery remains in its original location.
+
 ## Outputs and separation
 
 - AOSP checkout: `$LEPTON_OUTPUT_DIR` (configured in ignored `.build-env`).

@@ -47,6 +47,10 @@ The experimental developer workflow uses Fedora Linux, rootless Podman, an Ubunt
 
 Copy `.build-env.example` to `.build-env` and configure its local paths. The `.build-env` file is machine-specific and excluded from Git. Prepare the builder images described by the build scripts before invoking source preparation or image compilation.
 
+The x86_64-specific Ubuntu 26.04 and Steam Deck tool builder definitions are
+under `image-14/.buildscripts_x86_64/`. The original Valve-derived scripts remain
+under `image-14/.buildscripts/`.
+
 From the repository root:
 
 ```bash

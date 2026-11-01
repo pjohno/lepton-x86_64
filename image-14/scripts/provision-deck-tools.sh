@@ -107,8 +107,8 @@ commit="$(git -C "$TEMP/inotify-tools" rev-parse HEAD)"
 [[ "$commit" == "$INOTIFY_COMMIT_PREFIX"* ]] || fail "Unrecognized inotify-tools source commit: $commit"
 
 echo '[INFO] Building inotify-tools with Debian 12 toolchain (Podman)'
-podman build -q -f "$ROOT/image-14/.buildscripts/Containerfile.deck-tools" \
-    -t lepton-deck-tools-debian12:local "$ROOT/image-14/.buildscripts" >/dev/null
+podman build -q -f "$ROOT/image-14/.buildscripts_x86_64/Containerfile.deck-tools" \
+    -t lepton-deck-tools-debian12:local "$ROOT/image-14/.buildscripts_x86_64" >/dev/null
 podman run --rm --userns=keep-id --security-opt=label=disable \
     -v "$TEMP:/work" -w /work/inotify-tools \
     lepton-deck-tools-debian12:local /bin/bash -euc '
