@@ -76,7 +76,15 @@ LOG_DIR="$(realpath -m -- "$LEPTON_LOG_DIR")"
 STATE="$TARGET/.lepton-clean14-state"
 GLSLANG="$TARGET/out/host/glslang14/StandAlone/glslang"
 BOOTSTRAP="$ROOT/image-14/scripts/bootstrap-glslang14.sh"
-BUILDER="lepton-builder-glslang14:latest"
+BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder-glslang14:latest}"
+case "$BUILDER" in
+  lepton-builder-glslang14:latest|lepton-builder-ubuntu26:latest) ;;
+  *) fail "Unsupported image builder: $BUILDER" ;;
+esac
+GLSLANG_MOUNT=()
+if [[ "$BUILDER" == lepton-builder-glslang14:latest ]]; then
+  GLSLANG_MOUNT=(-v "$GLSLANG:/usr/bin/glslangValidator:ro")
+fi
 
 [[ -f "$TARGET/.lepton-clean14-owner" ]] ||
   fail "Checkout is not owned by the preparation workflow"
@@ -112,7 +120,9 @@ info "Builder: $BUILDER"
   fail "Insufficient free space"
 
 if [[ "$ACTION" == "--check" ]]; then
-  if [[ -x "$GLSLANG" ]]; then
+  if [[ "$BUILDER" == lepton-builder-ubuntu26:latest ]]; then
+    info "[PASS] Ubuntu 26.04 builder supplies glslangValidator"
+  elif [[ -x "$GLSLANG" ]]; then
     info "[PASS] glslang already available"
   else
     info "[INFO] glslang will be bootstrapped during --execute"
@@ -124,14 +134,16 @@ if [[ "$ACTION" == "--check" ]]; then
   exit 0
 fi
 
-# The bootstrap script has its own persistent log.
-if [[ ! -x "$GLSLANG" ]]; then
-  info "[START] Bootstrapping glslang 14"
-  bash "$BOOTSTRAP" --execute
+# The legacy Ubuntu 22 builder needs the separately compiled glslang 14.
+# Ubuntu 26 supplies glslangValidator directly and must not use the legacy mount.
+if [[ "$BUILDER" == lepton-builder-glslang14:latest ]]; then
+  if [[ ! -x "$GLSLANG" ]]; then
+    info "[START] Bootstrapping glslang 14"
+    bash "$BOOTSTRAP" --execute
+  fi
+  [[ -x "$GLSLANG" ]] ||
+    fail "glslang bootstrap did not produce an executable"
 fi
-
-[[ -x "$GLSLANG" ]] ||
-  fail "glslang bootstrap did not produce an executable"
 
 mkdir -p -- "$LOG_DIR"
 
@@ -237,7 +249,7 @@ podman run --rm -i --cidfile "$CID_FILE" \
   -e LEPTON_BUILD_JOBS="$LEPTON_BUILD_JOBS" \
   -v "$ROOT/image-14:/workspace:ro" \
   -v "$TARGET:/workspace/output:rw" \
-  -v "$GLSLANG:/usr/bin/glslangValidator:ro" \
+  "${GLSLANG_MOUNT[@]}" \
   -w /workspace/output \
   "$BUILDER" /bin/bash -se <<'INNER' &
 set -Eeo pipefail

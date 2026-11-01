@@ -201,7 +201,13 @@ trap cleanup EXIT
 
 printf 'Copying staged bundle (no rootfs rebuild)...\n'
 mkdir -p -- "$tmp/payload"
-rsync -a --no-owner --no-group -- "$stage/" "$tmp/payload/"
+# Copy only distributable components, never temporary build workspaces.
+[[ -d "$stage/compat_tool" && -d "$stage/tools" ]] || {
+    echo "ERROR: missing stage components" >&2
+    exit 1
+}
+rsync -a --no-owner --no-group -- "$stage/compat_tool/" "$tmp/payload/compat_tool/"
+rsync -a --no-owner --no-group -- "$stage/tools/" "$tmp/payload/tools/"
 
 # Refresh all tested shell fixes without touching the staged materialized
 # Android rootfs (the Fedora checkout holds only an external rootfs symlink).

@@ -1,0 +1,34 @@
+# Ubuntu 26.04 Android 14 x86_64 build environment.
+# A host-build container only: AMD RADV/RadeonSI remain selected by main's BoardConfig.
+# Derived from the successfully exercised Ubuntu 26.04 experimental builder;
+# a clean, end-to-end AMD-only build is still to be verified.
+FROM docker.io/library/ubuntu:26.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV USER=root
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates curl git git-lfs \
+      build-essential cmake pkg-config \
+      python3 python-is-python3 python3-mako python3-yaml python3-ply \
+      meson ninja-build \
+      clang-22 llvm-22-dev libclang-22-dev \
+      libclc-22-dev libllvmspirvlib-22-dev llvm-spirv-22 \
+      spirv-tools spirv-tools-dev \
+      glslang-tools \
+      libdrm-dev libzstd-dev libelf-dev zlib1g-dev \
+      openjdk-8-jdk \
+      bison flex rustc bindgen \
+      libwayland-dev wayland-protocols \
+      libx11-dev libxrandr-dev libxxf86vm-dev \
+      libxshmfence-dev \
+      bc ccache vboot-utils gperf lzop maven pngcrush \
+      rsync android-sdk-libsparse-utils squashfs-tools \
+      zip unzip zstd repo \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/usr/lib/llvm-22/bin:${PATH}"
+
+WORKDIR /workspace
+CMD ["/bin/bash"]

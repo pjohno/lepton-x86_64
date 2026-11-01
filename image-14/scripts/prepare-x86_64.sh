@@ -25,6 +25,11 @@ CONFIG="$ROOT/.build-env"
 [[ -f "$CONFIG" ]] || { echo "ERROR: Missing $CONFIG" >&2; exit 1; }
 # Trusted local developer-controlled shell configuration only.
 source "$CONFIG"
+BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder:latest}"
+case "$BUILDER" in
+  lepton-builder:latest|lepton-builder-ubuntu26:latest) ;;
+  *) echo "ERROR: Unsupported source builder: $BUILDER" >&2; exit 1 ;;
+esac
 for variable in LEPTON_OUTPUT_DIR LEPTON_BUILD_TARGET LEPTON_BUILD_JOBS LEPTON_MIN_FREE_GIB LEPTON_LOG_DIR; do
   [[ -n "${!variable:-}" ]] || { echo "ERROR: Missing config: $variable" >&2; exit 1; }
 done
@@ -86,7 +91,7 @@ for name in \
   "$IMAGE/patches/0008-inputreader-separate-steam-input-pads.patch"; do
   [[ -f "$name" ]] || err "Missing required file: $name"
 done
-podman image exists lepton-builder:latest || err 'Missing lepton-builder:latest image'
+podman image exists "$BUILDER" || err "Missing builder image: $BUILDER"
 
 # Pinned revision verification: never reset an initialized submodule.
 PENDING=()
@@ -111,7 +116,7 @@ free_gib=$((free_kib / 1024 / 1024))
 info "Destination: $TARGET"
 info "Available space: $free_gib GiB; required: $LEPTON_MIN_FREE_GIB GiB"
 (( free_gib >= LEPTON_MIN_FREE_GIB )) || err 'Insufficient free space'
-info "Builder: $(podman image inspect lepton-builder:latest --format '{{.Id}}')"
+info "Builder: $BUILDER ($(podman image inspect "$BUILDER" --format '{{.Id}}'))"
 info "Source commit: $(git -C "$ROOT" rev-parse HEAD)"
 
 MARKER="$TARGET/.lepton-clean14-owner"
@@ -187,7 +192,7 @@ run_in_builder() {
     -v "$IMAGE:/workspace:ro" \
     -v "$TARGET:/workspace/output:rw" \
     -w /workspace/output \
-    lepton-builder:latest /bin/bash -se; then
+    "$BUILDER" /bin/bash -se; then
     result=0
   else
     result=$?
@@ -225,7 +230,7 @@ for source in /workspace/android_vendor_valve/manifest_scripts/manifests-34/*.xm
   fi
 done
 echo "[$(date -u +%H:%M:%SZ)] [START] Synchronizing Android repositories (4 jobs)"
-.repo/repo/repo sync -j4 --progress
+.repo/repo/repo sync -j4
 echo "[$(date -u +%H:%M:%SZ)] [PASS] Android source synchronization finished"
 .repo/repo/repo manifest -r -o .lepton-resolved-manifest.xml
 INNER

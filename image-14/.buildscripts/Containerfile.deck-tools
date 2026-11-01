@@ -1,0 +1,6 @@
+# Build SteamOS-compatible (glibc <= 2.43) inotify-tools utilities.
+# Deliberately separate from the newer Ubuntu 26.04 Android compiler image.
+FROM docker.io/library/debian:12-slim
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    autoconf automake libtool pkg-config build-essential make ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*

@@ -29,6 +29,11 @@ fi
 
 # This is a trusted, developer-controlled local configuration.
 source "$CONFIG"
+BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder:latest}"
+case "$BUILDER" in
+    lepton-builder:latest|lepton-builder-ubuntu26:latest) ;;
+    *) echo "[FAIL] Unsupported source builder: $BUILDER" >&2; exit 1 ;;
+esac
 
 for key in LEPTON_OUTPUT_DIR LEPTON_BUILD_TARGET \
            LEPTON_BUILD_JOBS LEPTON_MIN_FREE_GIB LEPTON_LOG_DIR; do
@@ -53,6 +58,7 @@ echo "=== Lepton Android 14 x86_64 Preflight ==="
 echo "Mode:        $MODE"
 echo "Destination: $TARGET"
 echo "Build:       $LEPTON_BUILD_TARGET"
+echo "Builder:     $BUILDER"
 echo "Jobs:        $LEPTON_BUILD_JOBS"
 echo "Logs:        $LOGS"
 echo
@@ -156,17 +162,19 @@ done
 
 # Container builder.
 if command -v podman >/dev/null 2>&1; then
-    if podman image exists lepton-builder:latest; then
+    if podman image exists "$BUILDER"; then
         pass "Podman builder image available"
-        podman image inspect lepton-builder:latest \
+        podman image inspect "$BUILDER" \
             --format 'Builder ID: {{.Id}}'
     else
-        fail "Podman builder image missing"
+        fail "Podman builder image missing: $BUILDER"
     fi
 fi
 
 # The derived builder is required for compilation, not source download.
-if [[ "$MODE" == existing || "$MODE" == full ]]; then
+if [[ "$BUILDER" == lepton-builder-ubuntu26:latest ]]; then
+    info "Ubuntu 26.04 builder supplies glslangValidator; no legacy bootstrap required"
+elif [[ "$MODE" == existing || "$MODE" == full ]]; then
     if command -v podman >/dev/null 2>&1 &&
        podman image exists lepton-builder-glslang14:latest; then
         pass "glslang-capable builder image available"
@@ -228,13 +236,17 @@ if [[ "$MODE" == existing || "$MODE" == full ]]; then
         pass "No interrupted patch operation"
     fi
 
-    glslang="$TARGET/out/host/glslang14/StandAlone/glslang"
-    if [[ -x "$glslang" ]]; then
-        pass "Compiled glslang available"
-    elif [[ -d "$TARGET/external/angle/third_party/vulkan-deps/glslang/src" ]]; then
-        info "glslang will be bootstrapped by build-images-x86_64.sh"
+    if [[ "$BUILDER" == lepton-builder-ubuntu26:latest ]]; then
+        pass "Native glslang supplied by Ubuntu 26.04 builder"
     else
-        fail "Neither compiled glslang nor its source was found"
+        glslang="$TARGET/out/host/glslang14/StandAlone/glslang"
+        if [[ -x "$glslang" ]]; then
+            pass "Compiled glslang available"
+        elif [[ -d "$TARGET/external/angle/third_party/vulkan-deps/glslang/src" ]]; then
+            info "glslang will be bootstrapped by build-images-x86_64.sh"
+        else
+            fail "Neither compiled glslang nor its source was found"
+        fi
     fi
 fi
 

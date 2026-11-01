@@ -1,0 +1,5 @@
+#!/bin/sh
+# The executable and its shared library are built by provision-deck-tools.sh.
+base="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
+export LD_LIBRARY_PATH="$base/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$base/native/inotifywait" "$@"

@@ -5,6 +5,9 @@
 LEPTON_OUTPUT_DIR="${HOME}/lepton-build"
 
 LEPTON_BUILD_TARGET="aosp_lepton_x86_64-ap2a-userdebug"
+# Select one builder for both source preparation and image compilation.
+# Legacy .build-env files without this setting retain the original builder workflow.
+LEPTON_BUILD_CONTAINER="lepton-builder-ubuntu26:latest"
 LEPTON_BUILD_JOBS=6
 LEPTON_MIN_FREE_GIB=200
 LEPTON_LOG_DIR="${HOME}/lepton-build-logs/clean14"
