@@ -520,7 +520,7 @@ kill "${LOGCAT_PID}"
 
 test_log "Testing strace"
 
-if [[ -f "/home/steamos/.local/share/Steam/logs/lepton-logcats/test-apk.apk/strace-com.example.neon42.log" ]]; then
+if [[ -f "/home/steamos/.steam/steam/logs/lepton-logcats/test-apk.apk/strace-com.example.neon42.log" ]]; then
     test_log "test failed because the strace log existed before the test!"
     test_failure
 fi
@@ -537,9 +537,9 @@ sleep 30
 
 ./lepton stop test-apk.apk
 
-cat /home/steamos/.local/share/Steam/logs/lepton-logcats/test-apk.apk/strace-com.example.neon42.debug
+cat /home/steamos/.steam/steam/logs/lepton-logcats/test-apk.apk/strace-com.example.neon42.debug
 
-if [[ ! -f "/home/steamos/.local/share/Steam/logs/lepton-logcats/test-apk.apk/strace-com.example.neon42.log" ]]; then
+if [[ ! -f "/home/steamos/.steam/steam/logs/lepton-logcats/test-apk.apk/strace-com.example.neon42.log" ]]; then
     test_log "test failed because the strace log does not exist after the test!"
     test_failure
 fi

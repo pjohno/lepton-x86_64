@@ -37,7 +37,7 @@ podman system reset --force
 /usr/share/deckard/steamvr_first_init.sh
 
 mkdir -p /home/steamos/.local/share/Steam/config
-mkdir -p /home/steamos/.local/share/Steam/logs
+mkdir -p /home/steamos/.steam/steam/logs
 
 # Makes it easier to figure out if something is wrong on gitlab ci:
 export LEPTON_ALLOW_KMSG=true

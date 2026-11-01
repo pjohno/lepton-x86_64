@@ -4,7 +4,7 @@ function collect_debug_logs()
     #local LEPTON_ROOTFS_ID=3029111
     #local LEPTON_TOOL_ID=3029112
     local STEAM_BASE_FOLDER="${STEAM_BASE_FOLDER:-$(realpath -e ~/.steam/steam || echo ~/.local/share/Steam)}"
-    local LOG_PATH="${STEAMVR_LOGS_DIR}"
+    local LOG_PATH="${STEAM_LOG_PATH}"
     local CONSOLE_LOG="${LOG_PATH}/console_log.txt"
 
     local LEPTON_COMPAT_VERSION="$(pacman -Q | grep -E lepton-compat)"
