@@ -9,8 +9,8 @@ mkdir -p "${WORKDIR}"
 
 pushd "${WORKDIR}"
 
-tar -xf "${OWD}"/compat_tool.tar.zst -p
-tar -xf "${OWD}"/rootfs.tar.zst -p
+tar -xpf "${OWD}"/compat_tool.tar.zst
+tar -xpf "${OWD}"/rootfs.tar.zst
 
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 mkdir -p $XDG_RUNTIME_DIR
