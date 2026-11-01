@@ -6,8 +6,9 @@ set -Eeuo pipefail
 MODE=--check
 STAGE=
 TIMEOUT=600
+RENDERING=software
 usage() {
-    echo "Usage: $0 [--check|--execute] --stage-dir ABSOLUTE_PATH [--timeout SECONDS]"
+    echo "Usage: $0 [--check|--execute] --stage-dir ABSOLUTE_PATH [--timeout SECONDS] [--rendering software|amd]"
 }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 info() { printf '[INFO] %s\n' "$*"; }
@@ -17,10 +18,12 @@ while (( $# )); do
         --check|--execute) MODE="$1"; shift ;;
         --stage-dir) (( $# >= 2 )) || fail '--stage-dir requires a value'; STAGE="$2"; shift 2 ;;
         --timeout) (( $# >= 2 )) || fail '--timeout requires a value'; TIMEOUT="$2"; shift 2 ;;
+        --rendering) (( $# >= 2 )) || fail '--rendering requires a value'; RENDERING="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "Unknown argument: $1" ;;
     esac
 done
+[[ "$RENDERING" == software || "$RENDERING" == amd ]] || fail "Unknown rendering mode: $RENDERING"
 [[ -n "$STAGE" && "$STAGE" = /* ]] || fail 'Supply an absolute --stage-dir path'
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail '--timeout must be a positive integer'
 [[ "$(id -u)" != 0 ]] || fail 'Run as an unprivileged user (no sudo)'
@@ -32,7 +35,14 @@ ROOTFS="$TOOL/images/rootfs"
 [[ -f "$TOOL/lepton" && -f "$TOOL/liblepton/baking.sh" ]] || fail 'Lepton stage missing'
 [[ -d "$ROOTFS" && ! -L "$ROOTFS" && -x "$ROOTFS/system/bin/sh" ]] || fail 'Android rootfs missing'
 grep -qx 'ro.build.version.sdk=34' "$ROOTFS/system/build.prop" || fail 'Expected Android 14 API 34'
-[[ -f "$ROOTFS/vendor/lib64/hw/vulkan.radeon.so" ]] || fail 'AMD Vulkan rootfs missing'
+if [[ "$RENDERING" == software ]]; then
+    [[ -f "$ROOTFS/vendor/lib64/hw/vulkan.pastel.so" ]] || fail 'SwiftShader Vulkan missing'
+    [[ -f "$ROOTFS/vendor/lib64/hw/gralloc.default.so" ]] || fail 'Software gralloc missing'
+    grep -Fq 'gbm-software-vintf.xml' "$TOOL/liblepton/mounting.sh" ||
+        fail 'Software GBM HAL masking fix missing from staged Lepton'
+else
+    [[ -f "$ROOTFS/vendor/lib64/hw/vulkan.radeon.so" ]] || fail 'AMD Vulkan rootfs missing'
+fi
 [[ -f "$TOOL/images/rootfs_overlay/system/etc/init/hw/init.rc" || -d "$TOOL/images/rootfs_overlay" ]] || fail 'Rootfs overlay missing'
 [[ ! -e "$TOOL/sysbake" && ! -L "$TOOL/sysbake" && ! -e "$TOOL/sysbake.xattrs" && ! -L "$TOOL/sysbake.xattrs" ]] || fail 'Existing sysbake present: refusing overwrite'
 grep -Fq 'never bake the build host address' "$TOOL/liblepton/baking.sh" || fail 'Missing baked Ethernet cleanup fix'
@@ -48,6 +58,7 @@ if systemctl --user is-active --quiet lepton-sysbake.slice; then
     fail 'lepton-sysbake.slice is already active; will not interfere'
 fi
 info "Mode: $MODE"
+info "Rendering: $RENDERING"
 info "Stage: $STAGE"
 info "Podman storage: fresh directory inside $STAGE/.sysbake-work.* (not user's default store)"
 info "Runroot: private directory under $RUNTIME"
@@ -175,7 +186,12 @@ export HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" XDG_DATA_HOME="$WO
 export PATH="$WORK/bin:$STAGE/tools/bin:/usr/bin:/bin"
 export XDG_RUNTIME_DIR="$RUNTIME" GAMESCOPE_WAYLAND_DISPLAY="$SOCKET"
 export LEPTON_ISOLATED_SYSBAKE=1 LEPTON_LOCK_PATH="$WORK/lock"
-export LEPTON_ALLOW_LOCAL_SYSBAKE=1 LEPTON_FORCE_SOFTWARE=false
+if [[ "$RENDERING" == software ]]; then
+    export LEPTON_FORCE_SOFTWARE=true
+else
+    export LEPTON_FORCE_SOFTWARE=false
+fi
+export LEPTON_ALLOW_LOCAL_SYSBAKE=1
 export LEPTON_ALLOW_KMSG=false LEPTON_GAMEPAD_PASSTHROUGH=false
 export TERM=dumb TMPDIR="$WORK/tmp"
 unset SteamAppId STEAM_COMPAT_INSTALL_PATH STEAM_COMPAT_DATA_PATH

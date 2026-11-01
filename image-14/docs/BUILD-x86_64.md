@@ -36,9 +36,30 @@ The workflow invokes, in sequence:
 3. `package-repro-rootfs.sh` (flattened Android rootfs).
 4. `deploy-compat-x86_64.sh --stage-dir ... --execute`.
 5. `provision-deck-tools.sh --execute` (pinned ADB and built inotify-tools).
-6. `sysbake-isolated-x86_64.sh --execute` (fresh Android boot, private Podman
-   storage and isolated headless Weston session).
+6. `sysbake-isolated-x86_64.sh --execute` (fresh Android boot using
+   SwiftShader software rendering, private Podman storage and an isolated
+   headless Weston session).
 7. `package-lepton-deck.sh` with local checksum and archive checks.
+
+### Sysbake graphics backend
+
+The x86_64 build wrapper uses **software rendering by default** for sysbake.
+Android uses ANGLE, SwiftShader (`vulkan.pastel`) and the default software
+gralloc allocator. During software mode, Lepton masks the x86_64 GBM allocator
+and mapper HAL declarations to prevent Android from selecting GPU-dependent
+buffer allocation.
+
+This avoids requiring an AMD GPU or `/dev/dri` passthrough for sysbake.
+The resulting Android image retains its AMD RADV and GBM drivers for
+hardware-accelerated runtime use on Steam Deck and compatible AMD systems.
+
+For debugging, the standalone sysbake runner also supports
+`--rendering amd`. This requires a fresh stage without existing sysbake data.
+The main build wrapper always selects the software default.
+
+The software path has been verified on Fedora x86_64 using rootless Podman.
+Portability to other host GPU configurations has not yet been independently
+tested.
 
 The generated bundle includes `tools/BUILD-PROVENANCE.txt` containing the
 Lepton commit, source-tree state, resolved AOSP manifest hash, builder image

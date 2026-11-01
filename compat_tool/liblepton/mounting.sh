@@ -641,6 +641,21 @@ function setup_podman_mounts()
         fi
         disable_minigbm
         disable_qti_display
+
+        # x86_64 software mode: the GBM 4.0 HAL is declared in VINTF
+        # and may be started lazily even with gralloc=default.
+        # Hide these HAL declarations so Android uses software gralloc.
+        if [[ "$(uname -m)" == "x86_64" ]]; then
+            local empty_manifest="${PREFIX}/gbm-software-vintf.xml"
+            printf '%s\n' '<manifest version="1.0" type="device"></manifest>' > "${empty_manifest}"
+
+            local fragment
+            for fragment in gbm_mesa.allocator@4.0.xml gbm_mesa.mapper@4.0.xml; do
+                if [[ -f "${LEPTON_DIR}/../images/rootfs/vendor/etc/vintf/manifest/${fragment}" ]]; then
+                    podman_mount_entry "${empty_manifest}" "/vendor/etc/vintf/manifest/${fragment}" ro,U
+                fi
+            done
+        fi
     else
         if [[ "${LEPTON_USE_QCOM_DRIVER:-false}" == "true" ]]; then
             disable_minigbm
