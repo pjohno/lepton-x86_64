@@ -1,13 +1,17 @@
 # Android 14 Google services investigation
 
-Status: research only. GApps installation, account sign-in, and Google services
-used by sideloaded games have **not** been validated in Lepton.
+Status: experimental local Google-services installation and Google account
+sign-in have been tested on Fedora. Kingdom still exits with native SIGILL;
+gameplay and Steam Deck compatibility are not established. See
+[the Fedora results](../../FEDORA-DEBUGGING.md#optional-google-play-experiment-and-persistent-registration)
+and [setup/play instructions](../../tests/runtime/README.md#persistent-setup-then-installplay).
 The `feature/android14-gapps` branch starts from the NDK work merged into
 `feature/ubuntu26-build-pipeline` at `08dd1d7`.
 
-The requested scope is **optional Google services for sideloaded games**, without
-installing or using Play Store. Games continue to be installed from local APKs
-through Lepton. A Store download/installation workflow is outside this experiment.
+The scope is **optional Google services for sideloaded games**. Initial testing
+excluded Store; the user subsequently approved its inclusion as a dependency
+after Kingdom's SDK explicitly required it. Games continue to be installed from
+local APKs through Lepton. A Store game-download workflow is outside this experiment.
 
 ## Existing local image
 
@@ -123,24 +127,29 @@ Waydroid; running it directly is not a Lepton installer.
   Whether Lepton can sign in must be tested. Successful sign-in would not by
   itself establish compatibility with every game's integrity or DRM requirements.
 
-## Proposed experiment
+## Current workflow and remaining work
 
 1. Inventory the existing Android 14 x86_64 Google APIs payload, record source and
    hashes, and check package signatures, ABI, libraries, and permission dependencies.
-   Exclude Play Store from the payload.
-2. Add an opt-in extraction/injection workflow to the existing main scripts,
-   following the NDK payload approach. Keep proprietary payloads outside Git.
-   No `--with-gapps` option is implemented yet.
+   The original services-only payload excludes Store. The optional Store-enabled
+   experiment uses matching Android 14 revision 14 Google Play image packages.
+2. `tests/runtime/stage-google-services.sh` stages the local Google payload via
+   the main deployment script; `--with-play-store` explicitly includes Store.
+   Proprietary payloads remain outside Git. No production `--with-gapps` build
+   option is implemented yet.
 3. Build a disposable GApps stage with required AOSP dependencies restored and
    fresh sysbake. Use a separate persistent runtime context on Fedora.
-4. Test boot, package registration, service stability, and persistence. Confirm
-   that no Play Store package is installed. Test account sign-in only if required.
+4. Test boot, package registration, service stability, and persistence. Fedora
+   testing required writable network sysctls in the private runtime network
+   namespace, LocaleManagerService and CrossProfileAppsService. Google account
+   sign-in succeeded after the latter fix; the registered identity survived
+   restarts. The default Valve cleanup path remains unchanged without opt-in.
 5. Install the same local game APK set in native and services-enabled stages;
    compare launch results and logcat. Supply required splits/assets. Restart the
    context and test its Google-services interactions and state persistence.
-6. Classify remaining failures by dependency, licensing, integrity, or runtime
-   behavior. Package the tested variant with the existing deploy script and
-   validate on Steam Deck.
+6. Kingdom's remaining native SIGILL requires further diagnosis; neither missing
+   GApps nor failed account setup explains that result alone. Production build
+   integration and Steam Deck validation remain future work.
 
 GApps should remain opt-in while these checks are unresolved. NDK translation
 is independent: native x86_64 Google components do not eliminate the need for

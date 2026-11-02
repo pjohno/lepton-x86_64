@@ -41,6 +41,9 @@ shared build cache. The original source, packaged images and runtime stages are
 not edited. Use `--check` for preflight. A prepared, previously built Android 14
 checkout and local Ubuntu builder are required; this does not download anything.
 If interrupted, recover using the same arguments plus `--restore-build --execute`.
+`--with-google-services` also restores CrossProfileAppsService, required by the
+tested GMS version. This remains a local framework experiment, not a default
+change to the Android patch set.
 
 `stage-services-test.sh --source-stage DIR --stage-dir NEW_DIR --services-jar FILE
 --baseline-jar FILE --execute` uses the main deployment script to create a new
@@ -49,6 +52,71 @@ services.jar, discards its stale preoptimized artifacts and copies the existing
 host tools. Generate fresh sysbake with the normal isolated sysbake script before
 using `run-apk.sh`. The runner records Android's registered services in
 `services.txt`. See the Fedora guide for observed Kingdom results.
+
+## Optional Google services and network experiment
+
+`stage-google-services.sh --source-stage DIR --stage-dir NEW_DIR --google-images
+LOGICAL_PARTITIONS_DIR --execute` adds only Google Play services, Google Services
+Framework, their x86_64 native libraries and supporting permission configuration
+from a local Android 14 Google image. It uses the main deploy script, leaves
+source stages unchanged and requires fresh isolated sysbake. Play Store is
+excluded unless `--with-play-store` is supplied with matching Google Play image
+partitions. Neither mode downloads files or certifies the resulting environment.
+
+The app runner records `connectivity.txt` and `ip-address.txt`. On the tested
+Fedora Podman configuration, Android netd cannot provision Ethernet while
+`/proc/sys` is read-only. `--network-sysctls` enables the experimental
+`LEPTON_NETWORK_SYSCTLS=true` runtime option, allowing netd sysctl writes only
+along the private pasta network path. Sysbake still has no network. The default
+runtime configuration is unchanged. This option produced an IPv4 address and a
+validated default network in the Fedora test. Do not infer Google certification
+or game compatibility from network validation.
+
+## Persistent setup, then install/play
+
+The default runner remains disposable. Add `--profile NAME` to opt into a private
+profile under the stage, preserving Android data, Google identity, account state,
+external storage and installed APKs. Normal Valve cleanup behavior is unchanged
+unless this explicit profile override is used. The separate
+`fix/apk-install-persistence` branch has not been merged by this experiment.
+
+First open setup without installing a game (run from a Wayland desktop):
+
+```bash
+source .build-env
+stage="$LEPTON_OUTPUT_DIR/native-bridge-research/lepton-google-play-test-v2"
+bash tests/runtime/run-apk.sh --stage-dir "$stage" --runtime-dir compat_tool \
+  --profile kingdom --setup-only --expect-abi arm64-v8a \
+  --network-sysctls --rendering amd --display desktop --seconds 900 --execute
+```
+
+The Store opens for account setup. If necessary, register the displayed GSF
+Android ID at Google's uncertified-device page, then sign in manually. This is
+not manufacturer certification or a guarantee of Play Integrity. Stop setup
+with Ctrl+C when finished; the profile is retained. ID lookup uses host SQLite
+inside Podman's user namespace, never the guest sqlite3 utility.
+
+Install and launch a local APK/APKM with the **same** stage and profile:
+
+```bash
+bash tests/runtime/run-apk.sh --stage-dir "$stage" --runtime-dir compat_tool \
+  --profile kingdom --app --apk "$PWD/apks/Kingdom.apkm" --expect-abi arm64-v8a \
+  --network-sysctls --rendering amd --display desktop --seconds 600 --execute
+```
+
+Repeat this command for later launches. The runner hashes the APK set and checks
+package presence; unchanged installed packages are reused. Changed APKs are
+installed as updates while retaining Android data. The first game pins its
+package name to that profile. Profiles are locked against concurrent use and
+retain a stable Podman graphroot/runroot configuration. Host debug ports are not
+forwarded, allowing independent test profiles without ADB-port collisions.
+
+A changed framework/payload fingerprint requires explicit
+`--accept-runtime-update` after review; this retains the existing Google identity
+and account data. Do not delete the profile to test an ordinary restart.
+Profiles contain personal data: they stay outside Git and are separate from the
+compatibility tool's distributable rootfs/sysbake. Keep experimental runtime
+profiles local; this is not yet a production Steam registration workflow.
 
 For fast host-side regression tests without booting Android or using the network:
 

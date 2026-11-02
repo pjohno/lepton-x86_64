@@ -46,6 +46,11 @@ function create_prefix()
 
 function prepare_baked_data_for_removal()
 {
+    # A persistent development profile keeps all Android state, including Google
+    # identity and account data, when its temporary launcher prefix is removed.
+    if [[ "${LEPTON_NO_CLEANUP:-false}" != false ]]; then
+        return 0
+    fi
     # Clear workdirs first
     if is_app; then
         local APP_WORKDIR="$(app_workdir $@)"
@@ -791,7 +796,7 @@ function cleanup_container()
     # Kill the container
     kill_container "${CONTEXT}"
 
-    if [[ -n "${OTHER_STEAM_COMPAT_DATA_PATH}" ]]; then
+    if [[ -n "${OTHER_STEAM_COMPAT_DATA_PATH}" && "${LEPTON_NO_CLEANUP:-false}" == false ]]; then
         rm -f "${OTHER_STEAM_COMPAT_DATA_PATH}"/baked/data_overlay/system/users/0/settings_global.xml || true
         rm -f "${OTHER_STEAM_COMPAT_DATA_PATH}"/baked/data_overlay/system/users/0/settings_system.xml || true
         rm -f "${OTHER_STEAM_COMPAT_DATA_PATH}"/baked/data_overlay/system/users/0/settings_secure.xml || true

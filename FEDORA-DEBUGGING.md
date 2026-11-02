@@ -176,6 +176,52 @@ process-survival and installed-ABI checks (`.jni-smoke-work.ke0W7GTJ`).
 | Baseline | `71af177e8921251cb60c5c5f28dff1e6846fbb564fde9e78c576fbf33ef75ed4` |
 | Locale enabled | `6a3a4ade6e77894673af77daea35a4d20b0854b1a710bd0c4d549ee826dbfdd4` |
 
+### Optional Google Play experiment and persistent registration
+
+A final experiment on 2 November 2026 added the genuine GMS and GSF packages
+from the local Google APIs image, then a matching Google Play payload from
+Google's official Android 14 x86_64 revision 14 image. The latter archive was
+verified against the SHA-1 in Google's repository metadata:
+`01d32617fd1937e540faf8731d70cf50e35af854`.
+
+Findings and fixes:
+
+- The initial container had no IPv4 address or default network. Android netd was
+  unable to write required sysctls. The opt-in `--network-sysctls` test option
+  enabled IPv4 provisioning, a validated default network, and Google check-in.
+- Services-only mode registered GMS and GSF, but Kingdom's Play Games SDK reported
+  `SERVICE_INVALID` with explicit missing-Play-Store warnings. The Store package
+  was then included with the user's approval as a dependency; game installation
+  continued to use local APKs.
+- GMS repeatedly crashed on a missing CrossProfileAppsService. A services.jar
+  experiment restoring that service alongside LocaleManagerService removed the
+  observed crash loop. The user then successfully signed into Google.
+- The user registered the persistent profile's GSF Android ID. The same ID
+  survived framework replacement and repeated boots. After the install/play run,
+  a read-only snapshot check confirmed one saved Google account. No account
+  names or credentials are part of these notes.
+- Guest sqlite3 aborts on ICU initialization when invoked directly through Podman
+  exec. Its repeated lookup was stopped and replaced with host-side read-only
+  SQLite via `read-gsf-id.py`; it must not be used as a polling command.
+- `--profile` now separates one-time setup/registration from install/play. The
+  default disposable runner still accepts reinstalls. A second AAAAXY launch
+  with the same profile passed and explicitly skipped package installation.
+
+The final Kingdom test used `lepton-google-play-test-v2/.runtime-profile.kingdom`:
+GMS, GSF, Play Store, validated networking, locale and cross-profile services,
+registered GSF identity, and a saved Google account. Kingdom installed all ARM64
+splits and still exited with `SIGILL` before gameplay. The previous JNI abort
+and missing-Store warnings were absent. The tombstone again had no useful
+instruction address, so the remaining native/translation/environment failure is
+unresolved. GApps and sign-in are not by themselves a fix for this game.
+
+The Google-enabled services.jar hash is
+`95b2d03af5a723b1fa4bb164ee47fc3e4eede5f5cc02539ed68c4667ce903fad`.
+Its build evidence is under `native-bridge-research/google-framework-test-v1`;
+the shared incremental build was restored to its original baseline afterward.
+The working NDK stage and default Android framework patch set remain unchanged.
+See [runtime test instructions](tests/runtime/README.md) for the two-phase commands.
+
 Omit `--app` for the purpose-built JNI smoke APK, which must return
 `LEPTON_JNI_SMOKE_PASS value=42`. `tests/runtime/build-jni-smoke.sh --help` describes
 building either ABI from an existing Android 14 checkout without an image rebuild.

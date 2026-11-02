@@ -17,6 +17,11 @@ RUNTIME_SOURCE=''
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 APK_PREFLIGHT_DIR=''
 APKM=false
+NETWORK_SYSCTLS=false
+PROFILE=''
+SETUP_ONLY=false
+FRESH_PROFILE=true
+ACCEPT_RUNTIME_UPDATE=false
 
 usage() {
     cat <<'HELP'
@@ -29,6 +34,10 @@ For a regular game APK, add --app. Optional game/debug settings:
   --seconds N                Observe the game for N seconds (default 20)
   --ndk-auxv-shim FILE        Preload experimental guest auxv compatibility shim
   --runtime-dir DIR          Test updated compat_tool scripts with stage images/sysbake
+  --network-sysctls          Allow netd sysctl writes in the private network namespace
+  --profile NAME             Reuse private Android data; install only changed APKs
+  --setup-only               Boot a profile for registration/sign-in; no APK required
+  --accept-runtime-update    Explicitly retain a profile across a framework update
 App mode records all logcat buffers, package/activity diagnostics and a screenshot.
 It checks process survival, which does not prove rendering or gameplay works.
 
@@ -53,6 +62,10 @@ while (($#)); do
         --expect-abi) (($# >= 2)) || fail '--expect-abi requires name'; EXPECT_ABI="$2"; shift 2 ;;
         --timeout) (($# >= 2)) || fail '--timeout requires integer'; TIMEOUT="$2"; shift 2 ;;
         --app) APP_MODE=true; shift ;;
+        --network-sysctls) NETWORK_SYSCTLS=true; shift ;;
+        --profile) PROFILE="${2:?}"; shift 2 ;;
+        --setup-only) SETUP_ONLY=true; shift ;;
+        --accept-runtime-update) ACCEPT_RUNTIME_UPDATE=true; shift ;;
         --rendering) (($# >= 2)) || fail '--rendering requires mode'; RENDERING="$2"; shift 2 ;;
         --display) (($# >= 2)) || fail '--display requires mode'; DISPLAY_MODE="$2"; shift 2 ;;
         --seconds) (($# >= 2)) || fail '--seconds requires integer'; OBSERVE_SECONDS="$2"; shift 2 ;;
@@ -67,14 +80,22 @@ done
 [[ "$OBSERVE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail 'Seconds must be a positive integer'
 [[ "$RENDERING" == software || "$RENDERING" == amd ]] || fail 'Rendering must be software or amd'
 [[ "$DISPLAY_MODE" == headless || "$DISPLAY_MODE" == desktop ]] || fail 'Display must be headless or desktop'
-[[ -n "$STAGE" && -n "$APK" ]] || { usage >&2; fail 'Supply stage and APK'; }
+[[ -n "$STAGE" && ( -n "$APK" || "$SETUP_ONLY" == true ) ]] || { usage >&2; fail 'Supply stage and APK, or --setup-only'; }
+if [[ -n "$PROFILE" ]]; then
+    [[ "$PROFILE" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$ ]] || fail 'Invalid profile name'
+    [[ "$APP_MODE" == true || "$SETUP_ONLY" == true ]] || fail 'Profiles require --app or --setup-only'
+fi
+[[ "$SETUP_ONLY" == false || ( -n "$PROFILE" && -z "$APK" ) ]] || fail '--setup-only requires --profile and no APK'
+[[ "$ACCEPT_RUNTIME_UPDATE" == false || -n "$PROFILE" ]] || fail '--accept-runtime-update requires --profile'
 [[ $(id -u) != 0 ]] || fail 'Run as an ordinary Fedora user, without sudo'
 [[ $(uname -m) == x86_64 ]] || fail 'x86_64 host required'
 STAGE="$(realpath -e -- "$STAGE")" || fail 'Stage not found'
-APK="$(realpath -e -- "$APK")" || fail 'APK not found'
+if [[ "$SETUP_ONLY" == false ]]; then
+    APK="$(realpath -e -- "$APK")" || fail 'APK not found'
+    [[ -f "$APK" && ! -L "$APK" ]] || fail 'APK must be a regular file'
+    [[ "$APK" != "$STAGE/"* ]] || fail 'Put test APK outside the source stage'
+fi
 [[ -d "$STAGE" && ! -L "$STAGE" ]] || fail 'Stage must be a real directory'
-[[ -f "$APK" && ! -L "$APK" ]] || fail 'APK must be a regular file'
-[[ "$APK" != "$STAGE/"* ]] || fail 'Put test APK outside the source stage'
 TOOL="$STAGE/compat_tool"
 RUNTIME_SOURCE="$(realpath -e -- "${RUNTIME_SOURCE:-$TOOL}")"
 [[ -f "$RUNTIME_SOURCE/lepton" && -f "$RUNTIME_SOURCE/liblepton/mounting.sh" ]] || fail 'Runtime source must be a compat_tool directory'
@@ -110,6 +131,7 @@ cleanup_apk_preflight() {
 trap cleanup_apk_preflight EXIT
 METADATA_APK="$APK"
 NATIVE_APKS=("$APK")
+if [[ "$SETUP_ONLY" == false ]]; then
 if [[ "${APK,,}" == *.apkm ]]; then
     [[ "$APP_MODE" == true ]] || fail 'APKM bundles require --app'
     APKM=true
@@ -133,7 +155,8 @@ if [[ "$APP_MODE" == true ]]; then
 else
     unzip -Z1 "$APK" | grep -Fx "lib/$EXPECT_ABI/libleptonjni.so" >/dev/null || fail "APK missing lib/$EXPECT_ABI/libleptonjni.so"
 fi
-if [[ "$EXPECT_ABI" == x86_64 && "$APP_MODE" == false ]]; then
+fi
+if [[ "$EXPECT_ABI" == x86_64 && "$APP_MODE" == false && "$SETUP_ONLY" == false ]]; then
     [[ ! -e "$ROOTFS/system/lib64/libndk_translation.so" ]] || fail 'Baseline stage unexpectedly contains NDK translator'
 elif [[ "$EXPECT_ABI" == arm64-v8a ]]; then
     [[ -f "$ROOTFS/system/lib64/libndk_translation.so" ]] || fail 'NDK stage missing translator'
@@ -150,20 +173,65 @@ if [[ "$DISPLAY_MODE" == desktop ]]; then
     DESKTOP_SOCKET="${GAMESCOPE_WAYLAND_DISPLAY:-${WAYLAND_DISPLAY:-wayland-0}}"
     [[ "$DESKTOP_SOCKET" != */* && -S "$RUNTIME/$DESKTOP_SOCKET" ]] || fail 'Desktop Wayland socket unavailable'
 fi
+if [[ -n "$PROFILE" ]]; then
+    WORK="$STAGE/.runtime-profile.$PROFILE"
+    PROFILE_FINGERPRINT="$(
+        { printf '%s\n' "$STAGE"; sha256sum "$ROOTFS/system/build.prop" "$ROOTFS/system/framework/services.jar";
+          for marker in "$STAGE/google-services.sha256" "$STAGE/services-experiment.sha256"; do
+              [[ ! -f "$marker" ]] || cat "$marker"
+          done; } | sha256sum | cut -d' ' -f1
+    )"
+    if [[ -e "$WORK" || -L "$WORK" ]]; then
+        [[ -d "$WORK" && ! -L "$WORK" && -O "$WORK" ]] || fail 'Unsafe profile directory'
+        [[ -f "$WORK/profile-fingerprint" ]] || fail 'Profile metadata missing'
+        if [[ "$(cat "$WORK/profile-fingerprint")" != "$PROFILE_FINGERPRINT" && "$ACCEPT_RUNTIME_UPDATE" != true ]]; then
+            fail 'Runtime changed; use --accept-runtime-update to retain this profile after review'
+        fi
+        FRESH_PROFILE=false
+        if [[ "$SETUP_ONLY" == false && -f "$WORK/profile-package" ]]; then
+            [[ "$(cat "$WORK/profile-package")" == "$PACKAGE" ]] || fail 'Profile already belongs to another game'
+        fi
+    fi
+fi
 if [[ "$MODE" == --check ]]; then
     pass 'JNI smoke test preflight passed; no test state modified'
     exit 0
 fi
 
-WORK="$(mktemp -d "$STAGE/.jni-smoke-work.XXXXXXXX")"
+if [[ -n "$PROFILE" ]]; then
+    if [[ "$FRESH_PROFILE" == true ]]; then
+        mkdir -m 700 -- "$WORK"
+        printf '%s\n' "$PROFILE_FINGERPRINT" > "$WORK/profile-fingerprint"
+    fi
+    exec {PROFILE_LOCK}>"$WORK/.lock"
+    flock -n "$PROFILE_LOCK" || fail 'Profile already in use'
+    if [[ "$(cat "$WORK/profile-fingerprint")" != "$PROFILE_FINGERPRINT" ]]; then
+        cp "$WORK/profile-fingerprint" "$WORK/profile-fingerprint.previous"
+        printf '%s\n' "$PROFILE_FINGERPRINT" > "$WORK/profile-fingerprint"
+    fi
+    info "Persistent profile: $PROFILE (Android data retained)"
+else
+    WORK="$(mktemp -d "$STAGE/.jni-smoke-work.XXXXXXXX")"
+fi
 # Stages on shared disks may inherit a setgid group outside Podman's mapping.
 # Overlay upper/work directories must belong to the mapped primary group.
 chgrp "$(id -gn)" "$WORK"
 chmod g-s "$WORK"
-RUNROOT="$(mktemp -d "$RUNTIME/lepton-jni-smoke-run.XXXXXXXX")"
+if [[ -n "$PROFILE" ]]; then
+    # Podman records the runroot path in its database; keep that path stable too.
+    profile_key="$(printf '%s' "$WORK" | sha256sum | cut -c1-16)"
+    RUNROOT="$RUNTIME/lepton-profile-$profile_key"
+    [[ ! -L "$RUNROOT" ]] || fail 'Unsafe profile runroot'
+    mkdir -p -- "$RUNROOT"
+    chmod 700 -- "$RUNROOT"
+    [[ -O "$RUNROOT" ]] || fail 'Profile runroot is not owned by current user'
+else
+    RUNROOT="$(mktemp -d "$RUNTIME/lepton-jni-smoke-run.XXXXXXXX")"
+fi
 GRAPHROOT="$WORK/podman-storage"
 SOCKET="lepton-jni-smoke-$$"
 CONTEXT="jnismoke-$$"
+[[ -z "$PROFILE" ]] || CONTEXT="profile-$PROFILE"
 WESTON_PID=''
 LAUNCH_PID=''
 LOGCAT_PID=''
@@ -195,7 +263,7 @@ cleanup() {
         kill "$WESTON_PID" 2>/dev/null
         wait "$WESTON_PID" 2>/dev/null
     fi
-    if [[ "$RUNROOT" == "$RUNTIME"/lepton-jni-smoke-run.* && -d "$RUNROOT" ]]; then
+    if [[ ( "$RUNROOT" == "$RUNTIME"/lepton-jni-smoke-run.* || "$RUNROOT" == "$RUNTIME"/lepton-profile-* ) && -d "$RUNROOT" ]]; then
         rm -rf -- "$RUNROOT" 2>/dev/null || true
     fi
     if ((rc)); then
@@ -203,15 +271,21 @@ cleanup() {
     else
         printf '[INFO] Test logs retained at %s\n' "$WORK"
     fi
+    if [[ -n "${PROFILE_LOCK:-}" ]]; then
+        flock -u "$PROFILE_LOCK" || true
+        exec {PROFILE_LOCK}>&-
+    fi
     exit "$rc"
 }
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'if [[ "$SETUP_ONLY" == true ]]; then exit 0; else exit 130; fi' INT
+trap 'if [[ "$SETUP_ONLY" == true ]]; then exit 0; else exit 143; fi' TERM
 
-if [[ "$APKM" == true ]]; then
+if [[ "$APKM" == true && ( ! -f "$WORK/apks-source.sha256" || "$(cat "$WORK/apks-source.sha256")" != "$(sha256sum "$APK" | cut -d' ' -f1)" ) ]]; then
     info 'Extracting base, selected ABI and feature/asset APK splits'
+    if [[ -d "$WORK/apks" ]]; then mv "$WORK/apks" "$WORK/apks.previous.$(date +%s)"; fi
     python3 "$SCRIPT_DIR/unpack-apkm.py" "$APK" --abi "$EXPECT_ABI" --output "$WORK/apks"
+    sha256sum "$APK" | cut -d' ' -f1 > "$WORK/apks-source.sha256"
 fi
 cleanup_apk_preflight
 
@@ -223,9 +297,11 @@ touch "$WORK/home/.steam/steam.pipe"
 rsync -a --no-owner --no-group --exclude '/images/rootfs' \
       --exclude '/sysbake' --exclude '/sysbake.xattrs' \
       "$RUNTIME_SOURCE/" "$WORK/compat_tool/"
-ln -s -- "$ROOTFS" "$WORK/compat_tool/images/rootfs"
-cp -a --no-preserve=ownership -- "$TOOL/sysbake" "$WORK/compat_tool/sysbake"
-cp -a -- "$TOOL/sysbake.xattrs" "$WORK/compat_tool/sysbake.xattrs"
+if [[ "$FRESH_PROFILE" == true ]]; then
+    ln -s -- "$ROOTFS" "$WORK/compat_tool/images/rootfs"
+    cp -a --no-preserve=ownership -- "$TOOL/sysbake" "$WORK/compat_tool/sysbake"
+    cp -a -- "$TOOL/sysbake.xattrs" "$WORK/compat_tool/sysbake.xattrs"
+fi
 if [[ -n "$NDK_AUXV_SHIM" ]]; then
     mkdir -p "$WORK/compat_tool/images/rootfs_overlay/system/lib64"
     cp -- "$NDK_AUXV_SHIM" "$WORK/compat_tool/images/rootfs_overlay/system/lib64/liblepton_ndk_auxv.so"
@@ -279,7 +355,26 @@ LEPTON_FORCE_SOFTWARE=false
 export LEPTON_FORCE_SOFTWARE
 export LEPTON_ALLOW_KMSG=false LEPTON_GAMEPAD_PASSTHROUGH=false
 export LEPTON_NO_PORT_FORWARDING=true TERM=dumb TMPDIR="$WORK/tmp"
+export LEPTON_NO_DEBUG_PORTS=true
+export LEPTON_NETWORK_SYSCTLS="$NETWORK_SYSCTLS"
+if [[ -n "$PROFILE" ]]; then export LEPTON_NO_CLEANUP=true; fi
 unset SteamAppId STEAM_COMPAT_INSTALL_PATH STEAM_COMPAT_DATA_PATH
+if [[ -n "$PROFILE" ]]; then
+    # Use the normal persistent external-storage layout as well as /data.
+    export STEAM_COMPAT_DATA_PATH="$WORK/compatdata"
+    export STEAM_COMPAT_LIBRARY_PATHS="$WORK/compatdata"
+    export LEPTON_PROFILE_EXTERNAL_STORAGE=/lepton/profile-external
+    mkdir -p "$STEAM_COMPAT_DATA_PATH"
+    # Android leaves this host-owned upper directory at 0550 after shutdown.
+    # The launcher must be able to replace its external-storage symlink again.
+    if [[ -d "$WORK/compatdata/baked/data_overlay/media" ]]; then
+        chmod u+rwx -- "$WORK/compatdata/baked/data_overlay/media"
+    fi
+    if [[ -f "$WORK/profile-code-path" ]]; then
+        LEPTON_PROFILE_CODE_PATH="$(cat "$WORK/profile-code-path")"
+        export LEPTON_PROFILE_CODE_PATH
+    fi
+fi
 unset CONTAINER_HOST CONTAINER_CONNECTION PODMAN_CONNECTION
 
 [[ "$(realpath -m "$(podman info --format '{{.Store.GraphRoot}}')")" == "$(realpath -m "$GRAPHROOT")" ]] || fail 'Podman graphroot not isolated'
@@ -353,7 +448,46 @@ done
 podman exec "$container" /system/bin/pm list packages > "$WORK/installed-packages-before.txt"
 podman exec "$container" /system/bin/getprop > "$WORK/properties.txt"
 podman exec "$container" /system/bin/service list > "$WORK/services.txt"
+podman exec "$container" /system/bin/dumpsys connectivity > "$WORK/connectivity.txt"
+podman exec "$container" /system/bin/ip address > "$WORK/ip-address.txt"
+if [[ "$SETUP_ONLY" == true ]]; then
+    info "Setup profile ready for ${OBSERVE_SECONDS}s; no game installed"
+    podman exec "$container" /system/bin/logcat -b all > "$WORK/setup-logcat.log" 2>&1 &
+    LOGCAT_PID=$!
+    if podman exec "$container" /system/bin/pm path com.android.vending | grep '^package:' >/dev/null; then
+        podman exec "$container" /system/bin/am start -a android.intent.action.MAIN \
+            -c android.intent.category.LAUNCHER -p com.android.vending > "$WORK/setup-activity.log" 2>&1 || true
+    else
+        podman exec "$container" /system/bin/am start -a android.settings.SETTINGS > "$WORK/setup-activity.log" 2>&1 || true
+    fi
+    for ((i=0;i<OBSERVE_SECONDS;i++)); do
+        if [[ ! -s "$WORK/gsf-android-id.txt" ]] && ((i % 5 == 0)); then
+            podman unshare python3 "$SCRIPT_DIR/read-gsf-id.py" \
+                "$WORK/compatdata/baked/data_overlay/data/com.google.android.gsf/databases/gservices.db" \
+                > "$WORK/gsf-android-id.txt" 2> "$WORK/gsf-id-error.log" || true
+            if [[ "$(cat "$WORK/gsf-android-id.txt")" == 0 ]]; then : > "$WORK/gsf-android-id.txt"; fi
+            if [[ -s "$WORK/gsf-android-id.txt" ]]; then
+                info "GSF Android ID: $(cat "$WORK/gsf-android-id.txt")"
+                info 'For uncertified-device registration: https://www.google.com/android/uncertified/'
+            fi
+        fi
+        sleep 1
+    done
+    pass "Setup finished; Android identity and account data retained in $WORK"
+    exit 0
+fi
+APK_SIGNATURE="$(sha256sum "$APK" | cut -d' ' -f1):$EXPECT_ABI"
+REUSE_INSTALL=false
+if [[ -n "$PROFILE" && -f "$WORK/installed-apk.signature" && "$(cat "$WORK/installed-apk.signature")" == "$APK_SIGNATURE" ]]; then
+    if podman exec "$container" /system/bin/pm path "$PACKAGE" | grep '^package:' >/dev/null; then
+        REUSE_INSTALL=true
+    fi
+fi
 podman exec "$container" /system/bin/mkdir -p /data/local/tmp
+if [[ "$REUSE_INSTALL" == true ]]; then
+    info 'Reusing installed APK set; package installation skipped'
+    echo 'Success' > "$WORK/install.log"
+else
 info 'Installing APK'
 if [[ "$APKM" == true ]]; then
     podman cp "$WORK/apks" "$container:/data/local/tmp/lepton-apks"
@@ -372,8 +506,16 @@ else
     timeout --foreground "${TIMEOUT}s" podman exec "$container" /system/bin/pm install -r --abi "$EXPECT_ABI" /data/local/tmp/lepton-smoke.apk | tee "$WORK/install.log"
 fi
 grep -qx 'Success' "$WORK/install.log" || fail 'Android package installation failed'
+if [[ -n "$PROFILE" ]]; then
+    printf '%s\n' "$APK_SIGNATURE" > "$WORK/installed-apk.signature"
+    printf '%s\n' "$PACKAGE" > "$WORK/profile-package"
+fi
+fi
 if [[ "$APP_MODE" == true ]]; then
     podman exec "$container" /system/bin/pm path "$PACKAGE" > "$WORK/apk-paths.txt"
+    if [[ -n "$PROFILE" ]]; then
+        sed -n 's|^package:\(.*\)/base\.apk$|\1|p' "$WORK/apk-paths.txt" > "$WORK/profile-code-path"
+    fi
     info "Launching $PACKAGE/$ACTIVITY for ${OBSERVE_SECONDS}s"
     podman exec "$container" /system/bin/logcat -c
     podman exec "$container" /system/bin/logcat -b all > "$WORK/app-logcat.log" 2>&1 &

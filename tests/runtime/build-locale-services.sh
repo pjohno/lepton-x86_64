@@ -9,6 +9,7 @@ MODE=--check
 BUILDER=lepton-builder-ubuntu26:latest
 JOBS=6
 RESTORE_ONLY=false
+WITH_GOOGLE_SERVICES=false
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 while (($#)); do
     case "$1" in
@@ -18,6 +19,7 @@ while (($#)); do
         --jobs) JOBS="${2:?}"; shift 2 ;;
         --check|--execute) MODE="$1"; shift ;;
         --restore-build) RESTORE_ONLY=true; shift ;;
+        --with-google-services) WITH_GOOGLE_SERVICES=true; shift ;;
         -h|--help)
             echo 'Usage: bash tests/runtime/build-locale-services.sh --aosp DIR --output-dir NEW_DIR [--check|--execute] [--jobs N] [--builder IMAGE]'
             echo 'Normally rebuilds the baseline afterward. Use --restore-build with an existing experiment to recover interrupted build outputs.'
@@ -72,7 +74,7 @@ mkdir -p -- "$OUTPUT"
 exec > >(tee "$OUTPUT/build.log") 2>&1
 sha256sum "$AOSP/$SOURCE" "$AOSP/$JAR" > "$OUTPUT/before.sha256"
 cp -- "$AOSP/$JAR" "$OUTPUT/services-baseline.jar"
-python3 - "$AOSP/$SOURCE" "$OUTPUT/SystemServer.java" <<'PY'
+python3 - "$AOSP/$SOURCE" "$OUTPUT/SystemServer.java" "$WITH_GOOGLE_SERVICES" <<'PY'
 from pathlib import Path
 import sys
 source = Path(sys.argv[1]).read_text()
@@ -87,7 +89,20 @@ block = '''        /*
         */'''
 if source.count(block) != 1:
     raise SystemExit("Expected exactly one disabled LocaleManagerService block")
-Path(sys.argv[2]).write_text(source.replace(block, block.removeprefix('        /*\n').removesuffix('\n        */'), 1))
+source = source.replace(block, block.removeprefix('        /*\n').removesuffix('\n        */'), 1)
+if sys.argv[3] == 'true':
+    cross = '''            /*
+            t.traceBegin("StartCrossProfileAppsService");
+            mSystemServiceManager.startService(CrossProfileAppsService.class);
+            t.traceEnd();
+
+            t.traceBegin("StartPeopleService");'''
+    if source.count(cross) != 1:
+        raise SystemExit('Expected exactly one disabled CrossProfileAppsService block')
+    source = source.replace(cross, cross.removeprefix('            /*\n').replace(
+        '            t.traceBegin("StartPeopleService");',
+        '            /*\n            t.traceBegin("StartPeopleService");'), 1)
+Path(sys.argv[2]).write_text(source)
 PY
 echo '[INFO] Building services with read-only SystemServer source override'
 build_services "$OUTPUT/SystemServer.java"

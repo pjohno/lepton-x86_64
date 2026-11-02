@@ -103,7 +103,11 @@ function podman_network_options()
     PODMAN_NETWORK_OPTIONS+=" --map-gw"
 
     if [[ "${LEPTON_NO_PORT_FORWARDING:-false}" != "false" ]]; then
-        PODMAN_NETWORK_OPTIONS+=" -t $(adb_port) -t $(lldb_port) -t $(gdb_port)"
+        if [[ "${LEPTON_NO_DEBUG_PORTS:-false}" == true ]]; then
+            PODMAN_NETWORK_OPTIONS+=" -t none -u none"
+        else
+            PODMAN_NETWORK_OPTIONS+=" -t $(adb_port) -t $(lldb_port) -t $(gdb_port)"
+        fi
     else
         PODMAN_NETWORK_OPTIONS+=" -t auto"
         PODMAN_NETWORK_OPTIONS+=" -u auto"
@@ -128,6 +132,12 @@ function setup_podman_network()
         export LEPTON_GDB_PORT="${LEPTON_GDB_PORT:-$((1337 + $(lepton_port_offset)))}"
         export LEPTON_LLDB_PORT="${LEPTON_LLDB_PORT:-$((2337 + $(lepton_port_offset)))}"
         podman_cmdline "$(podman_network_options)"
+        if [[ "${LEPTON_NETWORK_SYSCTLS:-false}" == true ]]; then
+            # Android netd configures IPv6 sysctls even on IPv4-only networks.
+            # This applies only to our private pasta network namespace, never
+            # sysbake's network=none or a host network namespace.
+            podman_cmdline --security-opt unmask=/proc/sys
+        fi
         podman_cmdline "--add-host=host.containers.internal:$(podman_subnet).1"
     fi
 }

@@ -158,7 +158,15 @@ function setup_mounts()
             ln -s "${HOME}/Videos" "${TARGET_PATH}/Movies"
         fi
         if [[ -d "${STEAM_COMPAT_DATA_PATH:-}" ]]; then
-            ln -s "${STEAM_COMPAT_DATA_PATH}/external" "$(data_mount_path)/media/0"
+            local GUEST_EXTERNAL_PATH="${STEAM_COMPAT_DATA_PATH}/external"
+            if [[ -n "${LEPTON_PROFILE_EXTERNAL_STORAGE:-}" ]]; then
+                [[ "$LEPTON_PROFILE_EXTERNAL_STORAGE" == /lepton/* && "$LEPTON_PROFILE_EXTERNAL_STORAGE" != *'/../'* && "$LEPTON_PROFILE_EXTERNAL_STORAGE" != */.. ]] || die 'Invalid profile external-storage path'
+                # Android mounts its own /mnt during init. Experimental profiles
+                # stored on host /mnt need a guest alias outside that subtree.
+                GUEST_EXTERNAL_PATH="$LEPTON_PROFILE_EXTERNAL_STORAGE"
+                podman_mount_entry "${STEAM_COMPAT_DATA_PATH}/external" "$GUEST_EXTERNAL_PATH" rw
+            fi
+            ln -s "$GUEST_EXTERNAL_PATH" "$(data_mount_path)/media/0"
         fi
         podman_mount_entry_optional "${HOME}/Documents" "${HOME}/Documents" rw
         podman_mount_entry_optional "${HOME}/Videos" "${HOME}/Videos" rw
@@ -179,6 +187,12 @@ function setup_mounts()
         mkdir -p "${APP_WORKDIR}"
         mkdir -p "${APP_OVERLAY_UPPERDIR}"
         podman_cmdline -v "${APP_APK_DIR}:/${APP_MOUNT_TARGET#/}:O,upperdir=${APP_OVERLAY_UPPERDIR},workdir=${APP_WORKDIR}"
+        # A persistent development profile installs through pm rather than the
+        # Steam bake path. Restore its code directory before package scanning.
+        if [[ -n "${LEPTON_PROFILE_CODE_PATH:-}" ]]; then
+            [[ "$LEPTON_PROFILE_CODE_PATH" == /data/app/* && "$LEPTON_PROFILE_CODE_PATH" != *'/../'* && "$LEPTON_PROFILE_CODE_PATH" != */.. ]] || die 'Invalid profile code path'
+            podman_mount_entry "$APP_OVERLAY_UPPERDIR" "$LEPTON_PROFILE_CODE_PATH" ro
+        fi
     fi
 
     if [[ -n "${LEPTON_MOUNT_OBB_DIR:-}" ]]; then
@@ -593,7 +607,7 @@ function setup_podman_mounts()
     # Mount persistent data path
     if [[ -d "${STEAM_COMPAT_DATA_PATH:-}" ]]; then
         PERSISTENT_DATA_PATH="${STEAM_COMPAT_DATA_PATH}/internal/$(get_app_id)"
-        if [[ -d "${STEAM_COMPAT_DATA_PATH}/$(get_app_id)" ]]; then
+        if [[ -n "$(get_app_id)" && -d "${STEAM_COMPAT_DATA_PATH}/$(get_app_id)" ]]; then
             if [[ ! -d "${PERSISTENT_DATA_PATH}" ]]; then
                 mkdir -p "$(dirname "${PERSISTENT_DATA_PATH}")"
                 mv "${STEAM_COMPAT_DATA_PATH}/$(get_app_id)" "${PERSISTENT_DATA_PATH}"
