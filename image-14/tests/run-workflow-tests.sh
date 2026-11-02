@@ -8,6 +8,7 @@ done
 bash "$repo/compat_tool/liblepton/ndk_auxv/test.sh"
 python3 -B "$repo/tests/test-add-game-tool-selection.py"
 python3 -B "$repo/tests/runtime/test-apkm.py"
+python3 -B "$repo/tests/runtime/test-locale-build.py"
 for script in "$repo/image-14/do_build_x86_64.sh" \
               "$repo/image-14/scripts/deploy-compat-x86_64.sh" \
               "$repo/image-14/scripts/lib/deck-bundle.sh" \

@@ -31,6 +31,25 @@ retains the full selected APK set beneath the test workspace. APKs must be at
 the archive root with safe, unique filenames. `.xapk` and `.apks` formats are not
 supported by this path.
 
+## Locale-service framework experiment
+
+`build-locale-services.sh --aosp DIR --output-dir NEW_DIR --execute` incrementally
+builds only `services.jar` using an exact, read-only override of SystemServer.java.
+It restores the previously disabled LocaleManagerService in that override, saves
+baseline and experimental jars, then rebuilds the original source to restore the
+shared build cache. The original source, packaged images and runtime stages are
+not edited. Use `--check` for preflight. A prepared, previously built Android 14
+checkout and local Ubuntu builder are required; this does not download anything.
+If interrupted, recover using the same arguments plus `--restore-build --execute`.
+
+`stage-services-test.sh --source-stage DIR --stage-dir NEW_DIR --services-jar FILE
+--baseline-jar FILE --execute` uses the main deployment script to create a new
+stage, checks that the source jar matches the experiment baseline, replaces only
+services.jar, discards its stale preoptimized artifacts and copies the existing
+host tools. Generate fresh sysbake with the normal isolated sysbake script before
+using `run-apk.sh`. The runner records Android's registered services in
+`services.txt`. See the Fedora guide for observed Kingdom results.
+
 For fast host-side regression tests without booting Android or using the network:
 
 ```bash

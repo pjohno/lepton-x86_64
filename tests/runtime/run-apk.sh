@@ -352,6 +352,7 @@ done
 
 podman exec "$container" /system/bin/pm list packages > "$WORK/installed-packages-before.txt"
 podman exec "$container" /system/bin/getprop > "$WORK/properties.txt"
+podman exec "$container" /system/bin/service list > "$WORK/services.txt"
 podman exec "$container" /system/bin/mkdir -p /data/local/tmp
 info 'Installing APK'
 if [[ "$APKM" == true ]]; then

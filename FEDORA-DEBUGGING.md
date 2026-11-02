@@ -142,6 +142,40 @@ APKM SHA-256: `8bb748a916db6988c209780524f60aa214001c5068e1f2486285133f9f1da0cd`
 Evidence after the split-path fix: `.jni-smoke-work.U9nAuY0K` beneath the NDK v2
 stage. APK files remain local and ignored by Git.
 
+### Kingdom locale-service experiment
+
+The follow-up used `tests/runtime/build-locale-services.sh` to re-enable only
+`LocaleManagerService` in a read-only SystemServer.java source override. The
+source file's SHA-256 remained unchanged. The script also rebuilds the baseline
+after saving the experimental jar, avoiding stale experimental build-cache
+outputs. The baseline jar matched its original hash after restoration.
+
+`tests/runtime/stage-services-test.sh` assembled a separate
+`native-bridge-research/lepton-locale-test-v2` stage, checked the baseline jar,
+installed the experimental jar, removed only services preoptimization artifacts,
+and copied existing host tools. Fresh sysbake succeeded using software rendering.
+The packaged working NDK stage was not modified. GApps were not installed.
+
+Kingdom's ARM64 test on this stage registered `locale: [android.app.ILocaleManager]`.
+The missing-locale warning and null-object JNI abort did not recur. Startup
+progressed to a later `SIGILL` after roughly four seconds. That tombstone reports
+no useful instruction address (zero registers and a single unknown frame), so
+neither an unsupported translated instruction nor game environment detection is
+established as the cause. Missing Google-services/Play-Store warnings remain;
+their necessity for reaching gameplay is still unresolved.
+
+The locale change remains experimental, outside the standard framework patch set.
+Evidence: `lepton-locale-test-v2/.jni-smoke-work.LoJ8NSAE`, including
+`services.txt`, `installed-packages-before.txt`, `package.txt`, `app-logcat.log`
+and `native-stacks.txt`. Build evidence is under `locale-service-test-v1`.
+AAAAXY's ARM64 regression run on the locale-enabled stage passed the 20-second
+process-survival and installed-ABI checks (`.jni-smoke-work.ke0W7GTJ`).
+
+| services.jar | SHA-256 |
+| --- | --- |
+| Baseline | `71af177e8921251cb60c5c5f28dff1e6846fbb564fde9e78c576fbf33ef75ed4` |
+| Locale enabled | `6a3a4ade6e77894673af77daea35a4d20b0854b1a710bd0c4d549ee826dbfdd4` |
+
 Omit `--app` for the purpose-built JNI smoke APK, which must return
 `LEPTON_JNI_SMOKE_PASS value=42`. `tests/runtime/build-jni-smoke.sh --help` describes
 building either ABI from an existing Android 14 checkout without an image rebuild.
