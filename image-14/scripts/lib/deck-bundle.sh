@@ -1,74 +1,13 @@
 #!/usr/bin/env bash
-# Build a Steam Deck transferable bundle from an already-prepared Fedora stage.
-# Local directories are configured in .build-env; command-line options override.
-# Usage: ./package-lepton-deck.sh [STAGE_DIR] [OUT_DIR] [--bundle-id ID] [--deck-ip IPv4]
-#        ./package-lepton-deck.sh [STAGE_DIR] [OUT_DIR] [--bundle-id ID] --deck-ip IPv4 --transfer-only
+# Internal deploy-compat-x86_64.sh packaging/transfer implementation.
+# Runs in a subshell so temporary-workspace traps cannot affect the caller.
+package_deck_bundle() (
 set -Eeuo pipefail
-
-repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-# This is a trusted, developer-maintained shell config already used by builds.
-[[ ! -f "$repo/.build-env" ]] || source "$repo/.build-env"
-stage="${LEPTON_DECK_STAGE_DIR:-}"
-outdir="${LEPTON_DECK_BUNDLE_DIR:-${HOME}/lepton-deck-bundles}"
-deck_ip=""
-bundle_id="${LEPTON_DECK_BUNDLE_ID:-dev-$(date -u +%Y%m%d-%H%M%S)}"
-transfer_only=false
-positionals=()
-
-usage() {
-    cat <<'HELP'
-Usage:
-  ./package-lepton-deck.sh [STAGE_DIR] [OUT_DIR] [--bundle-id ID] [--deck-ip IPv4]
-  ./package-lepton-deck.sh [STAGE_DIR] [OUT_DIR] [--bundle-id ID] --deck-ip IPv4 --transfer-only
-
-Without --deck-ip, package locally only. With --deck-ip, copy the resulting
-archive + checksum to deck@IP:~/Downloads/lepton-deck-bundles/ and verify it.
---transfer-only sends an already-built archive without repackaging.
-Reads .build-env from the repository root. Configure LEPTON_DECK_STAGE_DIR,
-LEPTON_DECK_BUNDLE_DIR there (see .build-env.example).
-Positional directory arguments override the configured paths.
---bundle-id names a distinct archive; default: timestamped dev bundle.
---transfer-only requires the same bundle ID previously used to package.
-Neither mode modifies the Deck's existing Lepton installation.
-HELP
+local repo="$1" stage="$2" outdir="$3" bundle_id="$4" deck_ip="$5" transfer_only="$6" mode="$7"
+[[ "$bundle_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${#bundle_id} -le 64 ]] || {
+    echo 'ERROR: bundle ID must contain 1-64 letters, digits, dots, dashes or underscores' >&2
+    exit 2
 }
-
-while (( $# )); do
-    case "$1" in
-        --deck-ip)
-            (( $# >= 2 )) || { echo 'ERROR: --deck-ip needs an IPv4 address' >&2; exit 2; }
-            deck_ip="$2"
-            shift 2
-            ;;
-        --bundle-id)
-            (( $# >= 2 )) || { echo 'ERROR: --bundle-id needs a value' >&2; exit 2; }
-            bundle_id="$2"
-            shift 2
-            ;;
-        --transfer-only)
-            transfer_only=true
-            shift
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        --*)
-            echo "ERROR: unknown option $1" >&2
-            usage >&2
-            exit 2
-            ;;
-        *)
-            positionals+=("$1")
-            shift
-            ;;
-    esac
-done
-
-(( ${#positionals[@]} <= 2 )) || { usage >&2; exit 2; }
-if (( ${#positionals[@]} >= 1 )); then stage="${positionals[0]}"; fi
-if (( ${#positionals[@]} >= 2 )); then outdir="${positionals[1]}"; fi
-
 if [[ -n "$deck_ip" ]]; then
     [[ "$deck_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || {
         echo 'ERROR: --deck-ip must be an IPv4 address, e.g. 192.168.1.50' >&2
@@ -80,13 +19,9 @@ if [[ -n "$deck_ip" ]]; then
     done
 fi
 
-[[ "$bundle_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${#bundle_id} -le 64 ]] || {
-    echo 'ERROR: bundle ID must contain 1-64 letters, digits, dots, dashes or underscores' >&2
-    exit 2
-}
 
-mkdir -p -- "$outdir"
-outdir="$(realpath -e -- "$outdir")"
+outdir="$(realpath -m -- "$outdir")"
+[[ "$outdir" != / && "$outdir" != "$repo" ]] || { echo "ERROR: unsafe bundle output directory" >&2; exit 1; }
 archive="$outdir/lepton-x86_64-steamdeck-${bundle_id}.tar.gz"
 checksum="$archive.sha256"
 
@@ -113,6 +48,12 @@ transfer_bundle() {
 }
 
 if [[ "$transfer_only" == true ]]; then
+    [[ -n "$deck_ip" && -f "$archive" && -f "$checksum" ]] || { echo 'ERROR: transfer requires --deck-ip and an existing archive/checksum' >&2; exit 1; }
+    if [[ "$mode" == --check ]]; then
+        ( cd "$outdir" && sha256sum --check "$(basename -- "$checksum")" )
+        echo 'PASS: transfer preflight; no files or remote state changed'
+        exit 0
+    fi
     transfer_bundle
     exit 0
 fi
@@ -122,6 +63,7 @@ fi
     exit 2
 }
 stage="$(realpath -e -- "$stage")"
+[[ "$outdir" != "$stage" && "$outdir" != "$stage/"* ]] || { echo 'ERROR: bundle output must be outside the source stage' >&2; exit 1; }
 source "$repo/compat_tool/liblepton/ndk_auxv/runtime.sh"
 if ndk_compat_supported "$stage/compat_tool/images/rootfs"; then
     [[ -f "$repo/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" ]] || {
@@ -187,10 +129,15 @@ grep -Fq 'no-force-stop' "$repo/compat_tool/liblepton/mounting.sh" || {
     echo 'ERROR: Fedora source missing tested automatic launch call' >&2; exit 1;
 }
 
-[[ ! -e "$archive" && ! -e "$checksum" ]] || {
+[[ ! -e "$archive" && ! -L "$archive" && ! -e "$checksum" && ! -L "$checksum" ]] || {
     echo "ERROR: output already exists; refusing overwrite: $archive" >&2
     exit 1
 }
+if [[ "$mode" == --check ]]; then
+    echo "PASS: bundle preflight for $archive; no files changed"
+    exit 0
+fi
+mkdir -p -- "$outdir"
 tmp="$(mktemp -d "$outdir/.lepton-bundle-XXXXXXXX")"
 cleanup() {
     local status=$?
@@ -325,3 +272,5 @@ printf 'PASS: %s\n' "$archive"
 printf 'PASS: %s\n' "$checksum"
 ls -lh "$archive" "$checksum"
 if [[ -n "$deck_ip" ]]; then transfer_bundle; fi
+
+)

@@ -56,6 +56,9 @@ See [shim internals and tests](compat_tool/liblepton/ndk_auxv/README.md).
 
 ## Repeatable app tests
 
+The tools are organized under `tests/runtime/`. For fast workflow regressions
+without Android or network access, run `bash image-14/tests/run-workflow-tests.sh`.
+
 The examples below use an existing stage from the development machine. Substitute
 another complete stage as needed. Build the local shim when testing this
 checkout's scripts against an older matching NDK stage:
@@ -65,10 +68,10 @@ source .build-env
 STAGE="$LEPTON_OUTPUT_DIR/native-bridge-research/lepton-ndk-test-v2"
 bash compat_tool/liblepton/ndk_auxv/build.sh --aosp "$LEPTON_OUTPUT_DIR"
 
-bash test-lepton-jni-smoke.sh --stage-dir "$STAGE" --runtime-dir compat_tool \
+bash tests/runtime/run-apk.sh --stage-dir "$STAGE" --runtime-dir compat_tool \
   --apk "$PWD/apks/AAAAXY-arm64.apk" --expect-abi arm64-v8a --app --check
 
-bash test-lepton-jni-smoke.sh --stage-dir "$STAGE" --runtime-dir compat_tool \
+bash tests/runtime/run-apk.sh --stage-dir "$STAGE" --runtime-dir compat_tool \
   --apk "$PWD/apks/AAAAXY-arm64.apk" --expect-abi arm64-v8a --app \
   --rendering amd --display desktop --seconds 300 --execute
 ```
@@ -90,7 +93,7 @@ x86_64 while appearing to test ARM translation. For SuperTuxKart:
 
 ```bash
 for abi in x86_64 arm64-v8a; do
-  bash test-lepton-jni-smoke.sh --stage-dir "$STAGE" --runtime-dir compat_tool \
+  bash tests/runtime/run-apk.sh --stage-dir "$STAGE" --runtime-dir compat_tool \
     --apk "$PWD/apks/SuperTuxKart-1.4.apk" --expect-abi "$abi" --app \
     --rendering amd --display desktop --seconds 90 --execute
 done
@@ -101,7 +104,7 @@ package/activity details, native stacks, and `screen.png` when capture succeeds.
 A surviving process alone does not prove gameplay, controls or sound work.
 
 Omit `--app` for the purpose-built JNI smoke APK, which must return
-`LEPTON_JNI_SMOKE_PASS value=42`. `build-lepton-jni-smoke.sh --help` describes
+`LEPTON_JNI_SMOKE_PASS value=42`. `tests/runtime/build-jni-smoke.sh --help` describes
 building either ABI from an existing Android 14 checkout without an image rebuild.
 
 ## Steam shortcuts for a separate NDK installation

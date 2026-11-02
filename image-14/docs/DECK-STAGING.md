@@ -1,6 +1,6 @@
 # Steam Deck development staging (Ubuntu 26.04 AMD-only build)
 
-**Status:** experimental. This covers a fresh Android rootfs and transferable *host utilities*, not full Steam Deck installation or fresh system-data baking. The existing Steam Deck Lepton installation remains the known-good reference until a complete new build has passed runtime tests.
+**Status:** experimental. This covers fresh Android rootfs staging, isolated system-data baking, local packaging and optional transfer, rather than Steam registration or installation. The existing Steam Deck Lepton installation remains the known-good reference until a complete new build has passed runtime tests.
 
 The x86_64-only build container definitions live in `image-14/.buildscripts_x86_64/`.
 Valve-derived `.buildscripts/` machinery remains in its original location.
@@ -47,12 +47,36 @@ tools/lib/libinotifytools.so.0     # compiled matching shared library
 
 The wrapper sets `LD_LIBRARY_PATH` to the adjacent `tools/lib` folder before running the executable. Version and `ldd` checks verify the arrangement on the build machine. The earlier handoff documented an actual CREATE event test on the Deck for this layout; **newly rebuilt** binaries must still be tested on Deck. Upstream licenses should accompany the bundle. The builder's Debian 12 image tag is not yet digest-pinned; record the actual image ID/digest for release-grade reproducibility. Generated binaries and licenses are staged, not committed to Git. Source scripts and the Containerfile should be committed after review.
 
-## Sysbake is not automated by this change
+## Fresh system data and a local bundle
 
-Do **not** copy an older `sysbake` from October's test stage into a new Android rootfs. The package manager generates `sysbake/system/packages.xml` when Android first boots, and `getfattr -R -d -m '-' sysbake` produces the corresponding `sysbake.xattrs` after baking. The recipe under `.ci_scripts/build-sysbake-14.sh` is for a disposable CI machine and runs destructive host operations, including `podman system reset --force`; never run it directly on Fedora or Steam Deck.
+Generate fresh system data for the new stage using the isolated runner:
 
-A future isolated sysbake runner must prevent global Lepton context cleanup, avoid resetting the user's Podman state, stage both the generated data and restored user xattrs, verify API 34 and successful initialization, and handle mode-000 directories safely. This is a separate acceptance gate before `package-lepton-deck.sh` will accept the stage and before any deployment to a working installation.
+```bash
+bash image-14/scripts/sysbake-isolated-x86_64.sh --check --stage-dir "$stage"
+bash image-14/scripts/sysbake-isolated-x86_64.sh --execute --stage-dir "$stage"
+bash image-14/scripts/deploy-compat-x86_64.sh --package-only --check \
+  --stage-dir "$stage" --bundle-dir "$HOME/lepton-deck-bundles" --bundle-id CLEAN
+bash image-14/scripts/deploy-compat-x86_64.sh --package-only --execute \
+  --stage-dir "$stage" --bundle-dir "$HOME/lepton-deck-bundles" --bundle-id CLEAN
+```
 
-## Distribution and licensing
+Packaging refreshes host scripts from this checkout and retains the stage's
+rootfs and sysbake. Its check mode writes nothing. It refuses to overwrite an
+archive, strips host SELinux labels from the packaged attribute list, and
+preserves Android fake-UID attributes. The source stage is unchanged.
 
-Source files should be the only additions to Git. The produced Deck archive may include redistributable binaries only after checking their upstream notices/license requirements, retaining the corresponding inotify-tools source and attribution, and reviewing Google's SDK distribution terms. Don't include proprietary APKs or private device data.
+To send an already verified bundle later, use the same deployment entrypoint:
+
+```bash
+bash image-14/scripts/deploy-compat-x86_64.sh --transfer-only --check \
+  --bundle-dir "$HOME/lepton-deck-bundles" --bundle-id CLEAN --deck-ip 192.0.2.1
+# Replace the example address; use --execute to actually transfer and verify.
+```
+
+Transfer copies the archive and checksum into the Deck user's Downloads folder;
+it does not install or replace a compatibility tool. Check mode verifies only
+local files and makes no SSH connection.
+
+Do not reuse an older sysbake with a different rootfs. Do not run the CI-only
+`.ci_scripts/build-sysbake-14.sh` on a personal host; it resets Podman storage.
+The normal x86_64 build wrapper uses the isolated sysbake workflow automatically.

@@ -10,12 +10,19 @@ STAGE_DIR=''
 ROOTFS_SOURCE=''
 WITH_NDK=false
 NDK_PAYLOAD=''
+PACKAGE_ONLY=false
+BUNDLE_DIR=''
+BUNDLE_ID=''
+DECK_IP=''
+TRANSFER_ONLY=false
 
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 info() { printf '[INFO] %s\n' "$*"; }
 usage() {
     cat <<'HELP'
 Usage: bash image-14/scripts/deploy-compat-x86_64.sh [--check|--execute] [--stage-dir DIR] [--rootfs-source DIR] [--with-ndk --ndk-payload DIR]
+       bash image-14/scripts/deploy-compat-x86_64.sh --package-only [--check|--execute] --stage-dir DIR --bundle-id ID [--bundle-dir DIR] [--deck-ip IPv4]
+       bash image-14/scripts/deploy-compat-x86_64.sh --transfer-only [--check|--execute] --bundle-id ID --deck-ip IPv4 [--bundle-dir DIR]
 
 Default (legacy): stage Android rootfs under repository compat_tool/images/rootfs.
 --stage-dir DIR: assemble an isolated, complete compatibility-tool source stage
@@ -29,6 +36,13 @@ Default (legacy): stage Android rootfs under repository compat_tool/images/rootf
                   No translator is downloaded. NDK remains opt-in.
 --check: inspect source and existing destination; never modify files.
 --execute: refuse to overwrite existing rootfs/stage or Steam installation.
+--package-only: package an existing complete stage with fresh sysbake and tools;
+                does not rebuild images, generate sysbake or replace the stage.
+--bundle-dir DIR: archive destination (default LEPTON_DECK_BUNDLE_DIR).
+--bundle-id ID: required archive identifier for packaging/transfer.
+--deck-ip IPv4: transfer the archive/checksum after packaging, only in --execute.
+--transfer-only: verify/send an existing archive without repackaging.
+Packaging/transfer --check validates inputs without writing or connecting remotely.
 
 Steam Deck host utilities and fresh sysbake require separate provisioning:
   image-14/scripts/provision-deck-tools.sh --stage-dir DIR --execute
@@ -41,13 +55,28 @@ while (($#)); do
         --rootfs-source) (($# >= 2)) || fail '--rootfs-source requires a path'; ROOTFS_SOURCE="$2"; shift 2 ;;
         --with-ndk) WITH_NDK=true; shift ;;
         --ndk-payload) (($# >= 2)) || fail '--ndk-payload requires a path'; NDK_PAYLOAD="$2"; shift 2 ;;
+        --package-only) PACKAGE_ONLY=true; shift ;;
+        --bundle-dir) (($# >= 2)) || fail '--bundle-dir requires a path'; BUNDLE_DIR="$2"; shift 2 ;;
+        --bundle-id) (($# >= 2)) || fail '--bundle-id requires ID'; BUNDLE_ID="$2"; shift 2 ;;
+        --deck-ip) (($# >= 2)) || fail '--deck-ip requires IPv4'; DECK_IP="$2"; shift 2 ;;
+        --transfer-only) TRANSFER_ONLY=true; PACKAGE_ONLY=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) fail "Unknown argument: $1" ;;
     esac
 done
-[[ -f "$CONFIG" ]] || fail 'Missing .build-env'
 # shellcheck source=/dev/null
-source "$CONFIG"
+if [[ -f "$CONFIG" ]]; then source "$CONFIG";
+elif [[ "$PACKAGE_ONLY" == false ]]; then fail 'Missing .build-env'; fi
+if [[ "$PACKAGE_ONLY" == true ]]; then
+    [[ -z "$ROOTFS_SOURCE" && -z "$NDK_PAYLOAD" && "$WITH_NDK" == false ]] || fail 'Packaging cannot be combined with rootfs/NDK staging options'
+    [[ -n "$BUNDLE_ID" ]] || fail '--bundle-id is required for packaging/transfer'
+    STAGE_DIR="${STAGE_DIR:-${LEPTON_DECK_STAGE_DIR:-}}"
+    BUNDLE_DIR="${BUNDLE_DIR:-${LEPTON_DECK_BUNDLE_DIR:-$HOME/lepton-deck-bundles}}"
+    source "$ROOT/image-14/scripts/lib/deck-bundle.sh"
+    package_deck_bundle "$ROOT" "$STAGE_DIR" "$BUNDLE_DIR" "$BUNDLE_ID" "$DECK_IP" "$TRANSFER_ONLY" "$MODE"
+    exit 0
+fi
+[[ -z "$BUNDLE_DIR" && -z "$BUNDLE_ID" && -z "$DECK_IP" ]] || fail 'Bundle options require --package-only or --transfer-only'
 [[ "$WITH_NDK" == true || -z "$NDK_PAYLOAD" ]] || fail '--ndk-payload requires --with-ndk'
 if [[ "$WITH_NDK" == true ]]; then
     [[ -n "$STAGE_DIR" ]] || fail '--with-ndk requires --stage-dir (existing deployments stay unchanged)'

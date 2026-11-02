@@ -9,12 +9,17 @@ CONFIG="$REPO/.build-env"
 MODE=''
 BUNDLE_ID=''
 SYSBAKE_TIMEOUT=600
+SYSBAKE_RENDERING=software
+WITH_NDK=false
+NDK_PAYLOAD=''
 
 usage() {
     cat <<'HELP'
 Usage:
   bash image-14/do_build_x86_64.sh --check --bundle-id ID [--sysbake-timeout SECONDS]
   bash image-14/do_build_x86_64.sh --execute --bundle-id ID [--sysbake-timeout SECONDS]
+  Optional: --with-ndk --ndk-payload /path/to/extracted/payload
+            --sysbake-rendering software|amd (default software)
 
 Set LEPTON_OUTPUT_DIR in the repository's ignored .build-env to a NEW,
 NONEXISTENT Android source/output directory before running either command.
@@ -46,6 +51,13 @@ while (( $# )); do
         --sysbake-timeout)
             (( $# >= 2 )) || fail '--sysbake-timeout requires seconds'
             SYSBAKE_TIMEOUT="$2"; shift 2 ;;
+        --sysbake-rendering)
+            (( $# >= 2 )) || fail '--sysbake-rendering requires software or amd'
+            SYSBAKE_RENDERING="$2"; shift 2 ;;
+        --with-ndk) WITH_NDK=true; shift ;;
+        --ndk-payload)
+            (( $# >= 2 )) || fail '--ndk-payload requires directory'
+            NDK_PAYLOAD="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "Unknown argument: $1" ;;
     esac
@@ -54,14 +66,24 @@ done
 [[ "$BUNDLE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${#BUNDLE_ID} -le 64 ]] ||
     fail 'Bundle ID must be 1-64 letters, digits, dots, hyphens or underscores'
 [[ "$SYSBAKE_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail 'Invalid sysbake timeout'
+[[ "$SYSBAKE_RENDERING" == software || "$SYSBAKE_RENDERING" == amd ]] || fail 'Invalid sysbake rendering mode'
 [[ $(id -u) -ne 0 ]] || fail 'Run as a normal user (without sudo)'
 [[ $(uname -m) == x86_64 ]] || fail 'x86_64 build host required'
 [[ -f "$CONFIG" ]] || fail "Missing $CONFIG"
 # .build-env is a trusted, developer-maintained shell configuration.
+# shellcheck source=/dev/null
 source "$CONFIG"
 : "${LEPTON_OUTPUT_DIR:?Set LEPTON_OUTPUT_DIR in .build-env}"
 : "${LEPTON_LOG_DIR:?Set LEPTON_LOG_DIR in .build-env}"
 : "${LEPTON_BUILD_TARGET:?Set LEPTON_BUILD_TARGET in .build-env}"
+[[ "$WITH_NDK" == true || -z "$NDK_PAYLOAD" ]] || fail '--ndk-payload requires --with-ndk'
+DEPLOY_ARGS=()
+if [[ "$WITH_NDK" == true ]]; then
+    NDK_PAYLOAD="$(realpath -e -- "${NDK_PAYLOAD:-${LEPTON_NDK_PAYLOAD:-}}")" || fail 'An existing local NDK payload is required'
+    [[ -d "$NDK_PAYLOAD" && -f "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" && -f "$NDK_PAYLOAD/system/lib64/libndk_translation.so" ]] || fail 'Incomplete extracted NDK payload'
+    (cd "$NDK_PAYLOAD" && sha256sum -c "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" >/dev/null) || fail 'NDK payload hash verification failed'
+    DEPLOY_ARGS=(--with-ndk --ndk-payload "$NDK_PAYLOAD")
+fi
 
 BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder-ubuntu26:latest}"
 [[ "$BUILDER" == 'lepton-builder-ubuntu26:latest' ]] ||
@@ -114,7 +136,7 @@ info "Android checkout (must be new): $TARGET"
 info "Builder: $BUILDER"
 info "Stage: $STAGE"
 info "Bundle: $ARCHIVE"
-info "Sysbake maximum runtime: ${SYSBAKE_TIMEOUT}s"
+info "Sysbake: $SYSBAKE_RENDERING rendering, maximum runtime ${SYSBAKE_TIMEOUT}s"
 
 if podman image exists "$BUILDER"; then
     pass "Builder available: $(podman image inspect "$BUILDER" --format '{{.Id}}')"
@@ -162,17 +184,17 @@ step 'Package fresh Android 14 rootfs'
 bash "$IMAGE_DIR/scripts/package-repro-rootfs.sh" "$TARGET"
 
 step 'Create standalone compatibility-tool stage'
-bash "$IMAGE_DIR/scripts/deploy-compat-x86_64.sh" --check --stage-dir "$STAGE"
-bash "$IMAGE_DIR/scripts/deploy-compat-x86_64.sh" --execute --stage-dir "$STAGE"
+bash "$IMAGE_DIR/scripts/deploy-compat-x86_64.sh" --check --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
+bash "$IMAGE_DIR/scripts/deploy-compat-x86_64.sh" --execute --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
 
 step 'Build and verify Steam Deck tools'
 bash "$IMAGE_DIR/scripts/provision-deck-tools.sh" --execute --stage-dir "$STAGE"
 bash "$IMAGE_DIR/scripts/provision-deck-tools.sh" --check --stage-dir "$STAGE"
 
 step 'Bake Android system data with private Podman storage'
-bash "$IMAGE_DIR/scripts/sysbake-isolated-x86_64.sh" --check --stage-dir "$STAGE"
+bash "$IMAGE_DIR/scripts/sysbake-isolated-x86_64.sh" --check --stage-dir "$STAGE" --rendering "$SYSBAKE_RENDERING"
 bash "$IMAGE_DIR/scripts/sysbake-isolated-x86_64.sh" --execute \
-    --stage-dir "$STAGE" --timeout "$SYSBAKE_TIMEOUT"
+    --stage-dir "$STAGE" --timeout "$SYSBAKE_TIMEOUT" --rendering "$SYSBAKE_RENDERING"
 
 step 'Record build provenance in staged bundle'
 MANIFEST="$TARGET/.lepton-resolved-manifest.xml"
@@ -203,7 +225,8 @@ PROVENANCE="$STAGE/tools/BUILD-PROVENANCE.txt"
 } > "$PROVENANCE"
 
 step 'Package the distributable bundle (local only)'
-bash "$REPO/package-lepton-deck.sh" "$STAGE" "$BUNDLE_DIR" --bundle-id "$BUNDLE_ID"
+bash "$IMAGE_DIR/scripts/deploy-compat-x86_64.sh" --package-only --execute \
+    --stage-dir "$STAGE" --bundle-dir "$BUNDLE_DIR" --bundle-id "$BUNDLE_ID"
 ( cd "$BUNDLE_DIR" && sha256sum -c "$(basename -- "$ARCHIVE").sha256" )
 gzip -t "$ARCHIVE"
 # Enumerate the archive fully, checking both critical content and excluded work.

@@ -39,7 +39,7 @@ The workflow invokes, in sequence:
 6. `sysbake-isolated-x86_64.sh --execute` (fresh Android boot using
    SwiftShader software rendering, private Podman storage and an isolated
    headless Weston session).
-7. `package-lepton-deck.sh` with local checksum and archive checks.
+7. `deploy-compat-x86_64.sh --package-only` with local checksum and archive checks.
 
 ### Sysbake graphics backend
 
@@ -55,7 +55,7 @@ hardware-accelerated runtime use on Steam Deck and compatible AMD systems.
 
 For debugging, the standalone sysbake runner also supports
 `--rendering amd`. This requires a fresh stage without existing sysbake data.
-The main build wrapper always selects the software default.
+Select this through the main wrapper with `--sysbake-rendering amd`; software remains the default.
 
 The software path has been verified on Fedora x86_64 using rootless Podman.
 Portability to other host GPU configurations has not yet been independently
@@ -72,3 +72,20 @@ bake timestamps are not all pinned yet.
 machine; its privileged CI setup resets Podman storage. The x86_64 wrapper
 never transfers files to Steam Deck, registers Steam shortcuts, or overwrites
 the known-good Lepton installation.
+
+## Optional NDK payload
+
+The full wrapper forwards `--with-ndk --ndk-payload /path/to/payload` to the
+compatibility deployment step. The payload must already exist outside the new
+Android output tree. Its hashes are checked before the build starts. The stage
+receives a separate NDK-enabled rootfs and fresh sysbake; the compiled system and
+vendor images remain native x86_64. Without these flags the native path is unchanged.
+
+Packaging uses `image-14/scripts/deploy-compat-x86_64.sh --package-only --execute`.
+For existing stages, run that entrypoint directly; no full Android rebuild is
+required. See [Deck staging](DECK-STAGING.md) for check and transfer commands.
+Runtime APK and JNI tests live under `tests/runtime/` at the repository root.
+
+Host-only workflow regression suite: `bash image-14/tests/run-workflow-tests.sh`.
+It builds tiny fixtures and tests archive creation/transfer dispatch without
+running Android, rebuilding images, or connecting to a Deck.

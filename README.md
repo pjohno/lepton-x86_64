@@ -37,7 +37,8 @@ Known limitations:
 | `image-14/scripts/prepare-x86_64.sh` | Prepares an isolated Android 14 source checkout |
 | `image-14/scripts/build-images-x86_64.sh` | Builds Android system/vendor images with the configured builder |
 | `image-14/scripts/package-repro-rootfs.sh` | Packages a separate test rootfs from locally built images |
-| `image-14/scripts/deploy-compat-x86_64.sh` | Stages a local test rootfs and native x86_64 APK extractor (local development script) |
+| `image-14/scripts/deploy-compat-x86_64.sh` | Stages a runtime; packages or transfers complete stages with `--package-only` / `--transfer-only` |
+| `tests/runtime/` | Isolated local APK tests and JNI fixture builder |
 
 Some build components are Git submodules. Confirm that the URLs in `.gitmodules` are publicly accessible before attempting a fresh clone or reporting a reproducible clean build.
 
@@ -174,7 +175,7 @@ The original experimental hotplug test enabled two development switches. The use
 
 **Default multi-controller startup test, 29 October 2026:** With hotplug disabled, two Bluetooth controllers and the built-in Deck controller worked simultaneously. The container mounted only `/dev/input/event10`, `/dev/input/event11`, and `/dev/input/event24` as individual input nodes; it did **not** mount the full host input directory. Later Bluetooth/keyboard hotplug is not supported in this mode.
 
-**Build and bundle provenance:** The working controller test used an existing previously validated Android rootfs with an updated InputReader library compiled from the prepared Android source tree containing patches `0007-eventhub-preserve-evdev-axes.patch` and `0008-inputreader-separate-steam-input-pads.patch`. The test bundle was `lepton-x86_64-steamdeck-clean-install-controller-test-20261029.tar.gz`. This was a functional test of the assembled installation, **not** verification of a freshly rebuilt, complete Android rootfs. `package-lepton-deck.sh` packages an existing stage and refreshes selected host-side scripts; it does not rebuild Android or substitute individual libraries. A full-from-source image/rootfs rebuild and whole-output verification are separate follow-up work.
+**Build and bundle provenance:** The working controller test used an existing previously validated Android rootfs with an updated InputReader library compiled from the prepared Android source tree containing patches `0007-eventhub-preserve-evdev-axes.patch` and `0008-inputreader-separate-steam-input-pads.patch`. The test bundle was `lepton-x86_64-steamdeck-clean-install-controller-test-20261029.tar.gz`. This was a functional test of the assembled installation, **not** verification of a freshly rebuilt, complete Android rootfs. `deploy-compat-x86_64.sh --package-only` packages an existing stage and refreshes selected host-side scripts; it does not rebuild Android or substitute individual libraries. A full-from-source image/rootfs rebuild and whole-output verification are separate follow-up work.
 
 RetroArch's controller assignment and per-core bindings may differ from other Android applications.
 

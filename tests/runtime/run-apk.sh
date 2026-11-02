@@ -17,7 +17,7 @@ RUNTIME_SOURCE=''
 
 usage() {
     cat <<'HELP'
-Usage: bash test-lepton-jni-smoke.sh --stage-dir DIR --apk FILE --expect-abi x86_64|arm64-v8a [--check|--execute] [--timeout SECONDS]
+Usage: bash tests/runtime/run-apk.sh --stage-dir DIR --apk FILE --expect-abi x86_64|arm64-v8a [--check|--execute] [--timeout SECONDS]
 
 For a regular game APK, add --app. Optional game/debug settings:
   --rendering software|amd    Android graphics driver (default software)

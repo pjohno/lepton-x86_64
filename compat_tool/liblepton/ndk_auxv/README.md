@@ -35,7 +35,7 @@ source .build-env
 bash compat_tool/liblepton/ndk_auxv/build.sh --aosp "$LEPTON_OUTPUT_DIR"
 bash compat_tool/liblepton/ndk_auxv/test.sh
 
-bash test-lepton-jni-smoke.sh \
+bash tests/runtime/run-apk.sh \
   --stage-dir "$LEPTON_OUTPUT_DIR/native-bridge-research/lepton-ndk-test-v2" \
   --runtime-dir compat_tool \
   --apk "$PWD/apks/AAAAXY-arm64.apk" --expect-abi arm64-v8a --app \

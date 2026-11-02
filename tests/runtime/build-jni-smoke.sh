@@ -5,7 +5,7 @@ set -Eeuo pipefail
 
 usage() {
     cat <<'USAGE'
-Usage: bash build-lepton-jni-smoke.sh --aosp /absolute/aosp-checkout \
+Usage: bash tests/runtime/build-jni-smoke.sh --aosp /absolute/aosp-checkout \
        --abi x86_64|arm64-v8a --output /absolute/new-test.apk
 
 Produces an APK with Java Activity and exactly one architecture's JNI library.
