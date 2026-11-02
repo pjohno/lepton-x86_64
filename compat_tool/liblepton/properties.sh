@@ -44,8 +44,21 @@ function setup_props()
     props_echo "dalvik.vm.dex2oat64.enabled=true"
     props_echo "dalvik.vm.usejit=true"
 
+    # Android handles browser/app-link flows by default. Steam forwarding is
+    # an explicit option and never captures targeted or non-web VIEW intents.
+    props_echo "persist.lepton.forward_web_intents=${LEPTON_FORWARD_WEB_INTENTS:-false}"
+
     # Video/Rendering props
-    props_echo "debug.stagefright.ccodec=0"
+    # Android 14 x86_64 exposes the Codec2 software store without an OMX HAL.
+    # Disabling Codec2 there leaves MediaCodecList empty (including audio).
+    if [[ "${LEPTON_CODEC2:-false}" == true && "$(uname -m)" == "x86_64" && "$(android_sdk_version)" -ge 34 ]]; then
+        props_echo "debug.stagefright.ccodec=4"
+        # Linear buffers via gralloc BLOB + surface BUFFERQUEUE. Desktop Linux
+        # has no Android ION/system DMA heap; minigbm already provides gralloc.
+        props_echo "debug.stagefright.c2-poolmask=786432"
+    else
+        props_echo "debug.stagefright.ccodec=0"
+    fi
     props_echo "ro.opengles.version=196609"
     props_echo "ro.hardware.camera=v4l2"
 

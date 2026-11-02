@@ -134,7 +134,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Search for launchable activity
     let application = only_child(manifest, "application")?;
-    let activities = filter_children(application, "activity")?;
+    // Launcher intent filters may live on an alias rather than its target.
+    let activities = filter_children(application, "activity")?
+        .chain(filter_children(application, "activity-alias")?);
     let uses_sdk = only_child(manifest, "uses-sdk")?;
 
     // Get the minimum sdk version from the uses-sdk element
@@ -144,6 +146,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     'activities: for activity in activities {
+        // Ignore aliases/activities disabled by default. Apps can expose
+        // alternative launcher icons without making each one launchable.
+        if matches!(peel_element(activity)?.get_attributes()
+            .get("android:enabled").map(String::as_str), Some("false") | Some("0")) {
+            continue;
+        }
         // If we can't find an activity name, continue
         let activity_name = match peel_element(activity)?.get_attributes().get("android:name") {
             Some(name) => name,

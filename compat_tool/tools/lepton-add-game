@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add an Android APK as a Steam non-Steam shortcut using Lepton.
+"""Add an Android APK or saved runtime profile as a Steam non-Steam shortcut.
 
 Run with Steam fully exited. Uses Python's standard library only.
 Refuses unknown VDF formats rather than overwriting Steam configuration.
@@ -8,6 +8,7 @@ import argparse
 import os
 from pathlib import Path
 import re
+import shlex
 import struct
 import sys
 import tempfile
@@ -90,9 +91,9 @@ def integer(key, value):
     return b"\x02" + key.encode() + b"\x00" + struct.pack("<I", value)
 
 
-def shortcut_entry(slot, appid, name, apk, options):
+def shortcut_entry(slot, appid, name, apk, options, start_dir=None):
     exe = '"' + str(apk) + '"'
-    start_dir = '"' + str(apk.parent) + '"'
+    start_dir = '"' + str(start_dir or apk.parent) + '"'
     content = b"\x00" + str(slot).encode() + b"\x00"
     content += integer("appid", appid)
     for key, val in [
@@ -169,7 +170,17 @@ def main():
                         help="Steam compatibility-tool ID (default: lepton_x86_64_dev)")
     parser.add_argument("--install-dir", type=Path,
                         help="Root of the selected tool installation; required for alternate tool IDs")
+    parser.add_argument("--runtime-profile", help="Launch an existing persistent test profile (APK or APKM), without a compatibility-tool mapping")
+    parser.add_argument("--expect-abi", choices=("x86_64", "arm64-v8a"), default="x86_64",
+                        help="ABI for --runtime-profile (default: x86_64)")
     args = parser.parse_args()
+    if args.runtime_profile:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", args.runtime_profile):
+            fail("Invalid runtime profile name")
+        if args.install_dir is None:
+            fail("--runtime-profile requires --install-dir")
+        if args.hotplug:
+            fail("Runtime profile shortcuts do not support --hotplug")
 
     if not re.fullmatch(r"[A-Za-z0-9_]+", args.tool_id):
         fail("Invalid compatibility-tool ID")
@@ -179,7 +190,7 @@ def main():
     if args.install_dir is not None:
         INSTALL = args.install_dir.expanduser().resolve(strict=True)
     registration = STEAM / "compatibilitytools.d" / (TOOL + ".vdf")
-    if args.install_dir is not None and registration.is_file():
+    if not args.runtime_profile and args.install_dir is not None and registration.is_file():
         # An alternate tool must point at the same install path as its VDF.
         vdf = registration.read_text(encoding="utf-8")
         expected = str(INSTALL / "compat_tool")
@@ -187,13 +198,19 @@ def main():
             fail("Tool registration install_path does not match --install-dir")
 
     apk = args.apk.expanduser().resolve(strict=True)
-    if not apk.is_file() or apk.suffix.lower() != ".apk":
-        fail("Expected an existing .apk file")
+    extensions = {".apk", ".apkm"} if args.runtime_profile else {".apk"}
+    if not apk.is_file() or apk.suffix.lower() not in extensions:
+        fail("Expected an existing " + (".apk or .apkm file" if args.runtime_profile else ".apk file"))
+    if args.runtime_profile:
+        runner = INSTALL / "tests/runtime/run-apk.sh"
+        profile = INSTALL / (".runtime-profile." + args.runtime_profile)
+        if not runner.is_file() or not (profile / "profile-fingerprint").is_file():
+            fail("Runtime runner or saved profile missing; complete setup first")
     if steam_running():
         fail("Exit Steam completely (including Gaming Mode) before editing its configuration")
     if not (INSTALL / "compat_tool/tools/lepton-gamescope-bridge").is_file():
         fail("Lepton installation not found at " + str(INSTALL))
-    if not (STEAM / "compatibilitytools.d" / (TOOL + ".vdf")).is_file():
+    if not args.runtime_profile and not (STEAM / "compatibilitytools.d" / (TOOL + ".vdf")).is_file():
         fail("Lepton is not registered with Steam; install the .vdf and restart Steam")
     name = args.name or apk.stem
     if not name or any(x in name for x in "\x00\r\n"):
@@ -215,10 +232,16 @@ def main():
         fail("Steam config.vdf not found")
     original = shortcuts.read_bytes() if shortcuts.exists() else b""
     entries, data, insertion = read_binary(original)
-    exe = '"' + str(apk) + '"'
+    executable = Path("/usr/bin/bash") if args.runtime_profile else apk
+    exe = '"' + str(executable) + '"'
     for value in entries.values():
-        if isinstance(value, dict) and value.get("Exe") == exe:
-            fail("A shortcut for this APK already exists: " + value.get("AppName", str(apk)))
+        if not isinstance(value, dict) or value.get("Exe") != exe:
+            continue
+        if not args.runtime_profile or (
+            str(INSTALL / "tests/runtime/run-apk.sh") in value.get("LaunchOptions", "")
+            and ("--profile " + args.runtime_profile + " ") in value.get("LaunchOptions", "")
+        ):
+            fail("A shortcut for this APK/profile already exists: " + value.get("AppName", str(apk)))
     slot = 0
     while str(slot) in entries:
         slot += 1
@@ -230,33 +253,42 @@ def main():
     options = (
         "APP_WANTS_FLATSCREEN=true "
         + ("LEPTON_GAMEPAD_HOTPLUG=true " if args.hotplug else "")
-        + "LEPTON_ADB=" + str(INSTALL / "tools/platform-tools/adb") + " "
-        + "PATH=" + str(INSTALL / "tools/bin") + ":$PATH "
-        + str(INSTALL / "compat_tool/tools/lepton-gamescope-bridge") + " %command%"
+        + "LEPTON_ADB=" + shlex.quote(str(INSTALL / "tools/platform-tools/adb")) + " "
+        + "PATH=" + shlex.quote(str(INSTALL / "tools/bin")) + ":$PATH "
+        + shlex.quote(str(INSTALL / "compat_tool/tools/lepton-gamescope-bridge")) + " %command%"
     )
+    if args.runtime_profile:
+        options += " " + shlex.join([
+            str(runner), "--stage-dir", str(INSTALL), "--apk", str(apk),
+            "--expect-abi", args.expect_abi, "--app", "--profile", args.runtime_profile,
+            "--rendering", "amd", "--display", "desktop", "--network-sysctls",
+            "--until-exit", "--execute",
+        ])
     new_shortcuts = data[:insertion] + shortcut_entry(
-        slot, appid, name, apk, options
+        slot, appid, name, executable, options, INSTALL if args.runtime_profile else None
     ) + (data[insertion:] if data else b"\x08")
     if not data:
         # Include the conventional implicit outer map terminator as well.
         new_shortcuts = b"\x00shortcuts\x00" + new_shortcuts + b"\x08"
 
-    original_config = config.read_bytes()
-    decoded = original_config.decode("utf-8")
-    start, end = find_mapping_block(decoded)
-    if re.search(r'"\s*' + str(appid) + r'\s*"\s*\{', decoded[start:end]):
-        fail("Steam config already has a mapping for this AppID; refusing to overwrite")
-    new_mapping = (
-        '\n\t\t\t\t\t\t"' + str(appid) + '"\n'
-        '\t\t\t\t\t\t{\n'
-        '\t\t\t\t\t\t\t"name"\t\t"' + TOOL + '"\n'
-        '\t\t\t\t\t\t\t"config"\t\t""\n'
-        '\t\t\t\t\t\t\t"priority"\t\t"250"\n'
-        '\t\t\t\t\t\t}\n'
-    )
-    new_config = (decoded[:end] + new_mapping + decoded[end:]).encode("utf-8")
+    new_config = None
+    if not args.runtime_profile:
+        original_config = config.read_bytes()
+        decoded = original_config.decode("utf-8")
+        start, end = find_mapping_block(decoded)
+        if re.search(r'"\s*' + str(appid) + r'\s*"\s*\{', decoded[start:end]):
+            fail("Steam config already has a mapping for this AppID; refusing to overwrite")
+        new_mapping = (
+            '\n\t\t\t\t\t\t"' + str(appid) + '"\n'
+            '\t\t\t\t\t\t{\n'
+            '\t\t\t\t\t\t\t"name"\t\t"' + TOOL + '"\n'
+            '\t\t\t\t\t\t\t"config"\t\t""\n'
+            '\t\t\t\t\t\t\t"priority"\t\t"250"\n'
+            '\t\t\t\t\t\t}\n'
+        )
+        new_config = (decoded[:end] + new_mapping + decoded[end:]).encode("utf-8")
     if args.dry_run:
-        print("PASS: shortcut and compatibility mapping are valid; no Steam files modified")
+        print("PASS: shortcut is valid; no Steam files modified" if args.runtime_profile else "PASS: shortcut and compatibility mapping are valid; no Steam files modified")
         print("Proposed shortcut:", name, "| Steam AppID:", appid)
         print("Hotplug:", "enabled (experimental)" if args.hotplug else "off")
         return
@@ -264,7 +296,8 @@ def main():
     # first file, including the original absence of shortcuts.vdf.
     atomic_replace(shortcuts, new_shortcuts)
     try:
-        atomic_replace(config, new_config)
+        if new_config is not None:
+            atomic_replace(config, new_config)
     except Exception:
         if original:
             atomic_replace(shortcuts, original)
@@ -274,7 +307,7 @@ def main():
     print("Added Steam shortcut:", name)
     print("APK:", apk)
     print("Steam AppID:", appid)
-    print("Compatibility tool:", TOOL)
+    print("Saved runtime profile:" if args.runtime_profile else "Compatibility tool:", args.runtime_profile or TOOL)
     print("Hotplug:", "enabled (experimental)" if args.hotplug else "off (safe startup mounts)")
     print("Restart Steam and find the new entry under Non-Steam games.")
     print("Steam Input native touchscreen layout must be enabled manually.")

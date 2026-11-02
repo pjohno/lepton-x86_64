@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Register an extracted Lepton bundle alongside existing Steam tools."""
+import argparse
+import json
+from pathlib import Path
+import re
+import sys
+
+
+def register(root, home, execute=False):
+    metadata = json.loads((root / 'BUNDLE.json').read_text())
+    tool = metadata['tool_id']
+    name = metadata['display_name']
+    if not re.fullmatch(r'[A-Za-z0-9_]{1,96}', tool):
+        raise ValueError('Invalid bundle tool ID')
+    if not isinstance(name, str) or any(c in name for c in '\x00\r\n'):
+        raise ValueError('Invalid display name')
+    runtime = root / 'compat_tool'
+    if not (runtime / 'lepton').is_file() or not (runtime / 'sysbake/system/packages.xml').is_file():
+        raise ValueError('Extract a complete bundle before registration')
+    # JSON string escaping is compatible with these quoted VDF string values.
+    q = lambda value: json.dumps(str(value), ensure_ascii=False)
+    body = ('"compatibilitytools"\n{\n  "compat_tools"\n  {\n    ' + q(tool) + '\n    {\n'
+            '      "install_path" ' + q(runtime) + '\n'
+            '      "display_name" ' + q(name) + '\n'
+            '      "from_oslist" "windows"\n      "to_oslist" "linux"\n    }\n  }\n}\n')
+    target = home / '.local/share/Steam/compatibilitytools.d' / (tool + '.vdf')
+    if target.is_symlink():
+        raise ValueError('Refusing a symlink registration: ' + str(target))
+    if target.exists():
+        if target.read_text() != body:
+            raise ValueError('Tool ID already registered elsewhere; choose another --tool-id when packaging')
+        print('Already registered:', tool)
+        return target
+    if execute:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Exclusive creation prevents replacing an existing registration.
+        with target.open('x') as out:
+            out.write(body)
+        print('Registered:', name)
+        print('Restart Steam to load the new compatibility tool.')
+    else:
+        print('PASS: registration available; no files changed:', target)
+    return target
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--check', action='store_true', help='Read-only preflight (default)')
+    modes.add_argument('--execute', action='store_true', help='Create a new registration; refuse conflicts')
+    args = parser.parse_args()
+    register(Path(__file__).resolve().parents[2], Path.home(), args.execute)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print('ERROR:', exc, file=sys.stderr)
+        sys.exit(1)

@@ -24,3 +24,7 @@ compat_tool.tar.zst
 
 # Local Android application test files (never distribute APKs in this repository).
 /apks/
+
+# Python test/import caches
+__pycache__/
+*.pyc

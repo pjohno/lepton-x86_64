@@ -20,8 +20,11 @@ reject() {
     grep -Fq -- "$message" "$work/result"
 }
 run --help > "$work/help"
+grep -q -- '--with-gapps' "$work/help"
 grep -q -- '--with-ndk' "$work/help"
 grep -q -- '--sysbake-rendering' "$work/help"
+reject '--google-images requires --with-gapps' --check --bundle-id fixture --google-images "$work/existing"
+reject 'Invalid tool ID' --check --bundle-id fixture --tool-id '../bad'
 reject 'Invalid sysbake rendering' --check --bundle-id fixture --sysbake-rendering bogus
 reject '--ndk-payload requires --with-ndk' --check --bundle-id fixture --ndk-payload "$work/payload"
 reject 'existing local NDK payload is required' --check --bundle-id fixture --with-ndk

@@ -10,6 +10,9 @@ BUILDER=lepton-builder-ubuntu26:latest
 JOBS=6
 RESTORE_ONLY=false
 WITH_GOOGLE_SERVICES=false
+FIX_VIEW_INTENTS=false
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+VIEW_SOURCE=frameworks/base/services/core/java/com/android/server/wm/ActivityStarter.java
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 while (($#)); do
     case "$1" in
@@ -19,9 +22,11 @@ while (($#)); do
         --jobs) JOBS="${2:?}"; shift 2 ;;
         --check|--execute) MODE="$1"; shift ;;
         --restore-build) RESTORE_ONLY=true; shift ;;
+        --fix-view-intents) FIX_VIEW_INTENTS=true; shift ;;
         --with-google-services) WITH_GOOGLE_SERVICES=true; shift ;;
         -h|--help)
             echo 'Usage: bash tests/runtime/build-locale-services.sh --aosp DIR --output-dir NEW_DIR [--check|--execute] [--jobs N] [--builder IMAGE]'
+            echo 'Optional: --with-google-services restores CrossProfileAppsService; --fix-view-intents retains internal VIEW launches.'
             echo 'Normally rebuilds the baseline afterward. Use --restore-build with an existing experiment to recover interrupted build outputs.'
             exit 0 ;;
         *) fail "Unknown option: $1" ;;
@@ -46,11 +51,13 @@ if [[ "$MODE" == --check ]]; then
     exit 0
 fi
 build_services() {
+    local mounts=()
+    if [[ -n "${2:-}" ]]; then mounts=(-v "$2:/workspace/output/$VIEW_SOURCE:ro"); fi
     podman run --rm --network=none --userns=keep-id --group-add keep-groups \
         --security-opt=label=disable --hostname=lepton-build \
         -e "LEPTON_TEST_JOBS=$JOBS" \
         -v "$AOSP:/workspace/output:rw" \
-        -v "$1:/workspace/output/$SOURCE:ro" \
+        -v "$1:/workspace/output/$SOURCE:ro" "${mounts[@]}" \
         -w /workspace/output "$BUILDER" /bin/bash -ec \
         'source build/envsetup.sh >/dev/null; lunch aosp_lepton_x86_64-ap2a-userdebug; m services -j"$LEPTON_TEST_JOBS"'
 }
@@ -61,8 +68,22 @@ restore_build() {
     current_source_hash="$(sha256sum "$AOSP/$SOURCE")"
     [[ "${current_source_hash%% *}" == "$original_source_hash" ]] || fail 'Original source changed during experiment; review before restoring'
     cp -- "$AOSP/$SOURCE" "$OUTPUT/SystemServer.baseline.java"
-    build_services "$OUTPUT/SystemServer.baseline.java"
-    cmp -s "$OUTPUT/services-baseline.jar" "$AOSP/$JAR" || fail 'Rebuilt baseline differs; review original and current services.jar'
+    local original_view=()
+    if [[ -f "$OUTPUT/ActivityStarter.before.sha256" ]]; then
+        sha256sum -c "$OUTPUT/ActivityStarter.before.sha256" || fail 'Original ActivityStarter changed'
+        cp -- "$AOSP/$VIEW_SOURCE" "$OUTPUT/ActivityStarter.baseline.java"
+        original_view=("$OUTPUT/ActivityStarter.baseline.java")
+    fi
+    build_services "$OUTPUT/SystemServer.baseline.java" "${original_view[@]}"
+    # ProtoLog deliberately chooses a random generated class name on each
+    # rebuild, so equivalent baseline DEX need not be byte-identical. Sources
+    # above are hash-checked and rebuilt; restore the exact original packaged
+    # artifact from its separately hash-checked snapshot.
+    local saved_jar_hash current_saved_jar_hash
+    saved_jar_hash="$(sed -n '2p' "$OUTPUT/before.sha256" | cut -d' ' -f1)"
+    current_saved_jar_hash="$(sha256sum "$OUTPUT/services-baseline.jar")"
+    [[ "${current_saved_jar_hash%% *}" == "$saved_jar_hash" ]] || fail 'Saved baseline jar changed'
+    cp -- "$OUTPUT/services-baseline.jar" "$AOSP/$JAR"
     echo '[PASS] Incremental services build restored to its original baseline'
 }
 if [[ "$RESTORE_ONLY" == true ]]; then
@@ -74,6 +95,11 @@ mkdir -p -- "$OUTPUT"
 exec > >(tee "$OUTPUT/build.log") 2>&1
 sha256sum "$AOSP/$SOURCE" "$AOSP/$JAR" > "$OUTPUT/before.sha256"
 cp -- "$AOSP/$JAR" "$OUTPUT/services-baseline.jar"
+# Research outputs may contain live Podman overlay mounts. Keep Android's
+# source finder out of the experiment subtree during incremental builds.
+if [[ "$OUTPUT" == "$AOSP/native-bridge-research/"* ]]; then
+    touch "$AOSP/native-bridge-research/.find-ignore"
+fi
 python3 - "$AOSP/$SOURCE" "$OUTPUT/SystemServer.java" "$WITH_GOOGLE_SERVICES" <<'PY'
 from pathlib import Path
 import sys
@@ -104,8 +130,14 @@ if sys.argv[3] == 'true':
         '            /*\n            t.traceBegin("StartPeopleService");'), 1)
 Path(sys.argv[2]).write_text(source)
 PY
-echo '[INFO] Building services with read-only SystemServer source override'
-build_services "$OUTPUT/SystemServer.java"
+view_override=()
+if [[ "$FIX_VIEW_INTENTS" == true ]]; then
+    sha256sum "$AOSP/$VIEW_SOURCE" > "$OUTPUT/ActivityStarter.before.sha256"
+    python3 "$SCRIPT_DIR/patch-view-intents.py" "$AOSP/$VIEW_SOURCE" "$OUTPUT/ActivityStarter.java"
+    view_override=("$OUTPUT/ActivityStarter.java")
+fi
+echo '[INFO] Building services with read-only source overrides'
+build_services "$OUTPUT/SystemServer.java" "${view_override[@]}"
 cp -- "$AOSP/$JAR" "$OUTPUT/services-locale.jar"
 sha256sum "$AOSP/$SOURCE" "$OUTPUT/SystemServer.java" "$OUTPUT/services-locale.jar" > "$OUTPUT/after.sha256"
 echo "[PASS] Locale services jar: $OUTPUT/services-locale.jar"

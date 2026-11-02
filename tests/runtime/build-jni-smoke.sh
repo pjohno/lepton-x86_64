@@ -10,6 +10,9 @@ Usage: bash tests/runtime/build-jni-smoke.sh --aosp /absolute/aosp-checkout \
 
 Produces an APK with Java Activity and exactly one architecture's JNI library.
 Logs LEPTON_JNI_SMOKE_PASS value=42 or LEPTON_JNI_SMOKE_FAIL.
+Add --media-smoke to also enumerate codecs, decode generated H.264/Vorbis clips,
+and loop a video surface test. This additionally requires host ffmpeg with
+libx264 and libvorbis; no downloads or external media are used.
 Requires the Android 14 AOSP checkout's JDK17, aapt2, d8, Clang, signapk,
 and test keys, plus host zip/unzip/readelf.
 Never installs or launches the APK. Refuses to overwrite output.
@@ -18,9 +21,11 @@ native-bridge-research/, not inside source or compiled output trees.
 USAGE
 }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
-AOSP='' ABI='' OUTPUT=''
+AOSP='' ABI='' OUTPUT='' MEDIA_SMOKE=false
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 while (($#)); do
     case "$1" in
+        --media-smoke) MEDIA_SMOKE=true; shift ;;
         --aosp) (($# >= 2)) || fail 'missing --aosp value'; AOSP="$2"; shift 2 ;;
         --abi) (($# >= 2)) || fail 'missing --abi value'; ABI="$2"; shift 2 ;;
         --output) (($# >= 2)) || fail 'missing --output value'; OUTPUT="$2"; shift 2 ;;
@@ -77,7 +82,7 @@ esac
 TMP="$(mktemp -d "$(dirname "$OUTPUT")/.jni-smoke.XXXXXXXX")"
 cleanup() { rm -rf -- "$TMP"; }
 trap cleanup EXIT
-mkdir -p "$TMP/src/org/lepton/smoke" "$TMP/classes" "$TMP/dex" "$TMP/apk/lib/$ABI"
+mkdir -p "$TMP/assets" "$TMP/src/org/lepton/smoke" "$TMP/classes" "$TMP/dex" "$TMP/apk/lib/$ABI"
 cat > "$TMP/AndroidManifest.xml" <<'XML'
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -148,19 +153,35 @@ echo "[INFO] Compiling JNI for $ABI ($TRIPLE)"
 "$CLANG" --target="$TRIPLE" -fPIC -shared -nostdlib -fvisibility=hidden \
     -Wl,-soname,libleptonjni.so -o "$TMP/apk/lib/$ABI/libleptonjni.so" "$TMP/jni.c"
 readelf -h "$TMP/apk/lib/$ABI/libleptonjni.so" | grep -Fq "$MACHINE" || fail 'Unexpected JNI architecture'
+if [[ "$MEDIA_SMOKE" == true ]]; then
+    command -v ffmpeg >/dev/null || fail 'Media probe requires ffmpeg'
+    mkdir -p "$TMP/assets"
+    ffmpeg -v error -f lavfi -i testsrc2=size=160x120:rate=15 -t 2 \
+        -c:v libx264 -pix_fmt yuv420p -an "$TMP/assets/probe.mp4"
+    ffmpeg -v error -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 \
+        -c:a libvorbis "$TMP/assets/probe.ogg"
+    cp "$SCRIPT_DIR/media-smoke/MediaProbe.java" "$TMP/src/org/lepton/smoke/"
+    sed -i '/        setContentView(view);/a\        MediaProbe.start(this);' \
+        "$TMP/src/org/lepton/smoke/MainActivity.java"
+fi
 echo '[INFO] Compiling Java and classes.dex'
 "$JDK/bin/javac" -source 8 -target 8 -encoding UTF-8 -classpath "$ANDROIDJAR" \
-    -d "$TMP/classes" "$TMP/src/org/lepton/smoke/MainActivity.java"
+    -d "$TMP/classes" "$TMP/src/org/lepton/smoke/"*.java
 "$D8" --release --min-api 26 --lib "$ANDROIDJAR" --output "$TMP/dex" \
-    "$TMP/classes/org/lepton/smoke/MainActivity.class"
+    "$TMP/classes/org/lepton/smoke/"*.class
 [[ -s "$TMP/dex/classes.dex" ]] || fail 'D8 failed to produce classes.dex'
 echo '[INFO] Linking, aligning and signing APK'
 "$AAPT2" link -o "$TMP/apk/unsigned.apk" -I "$ANDROIDJAR" \
-    --manifest "$TMP/AndroidManifest.xml" --min-sdk-version 26 --target-sdk-version 28
+    --manifest "$TMP/AndroidManifest.xml" -A "$TMP/assets" --min-sdk-version 26 --target-sdk-version 28
 (
     cd "$TMP/apk"
     zip -q -j unsigned.apk "$TMP/dex/classes.dex"
     zip -q -0 unsigned.apk "lib/$ABI/libleptonjni.so"
+    if [[ "$MEDIA_SMOKE" == true ]]; then
+        # AssetFileDescriptor requires uncompressed sample assets.
+        cp -a "$TMP/assets" .
+        zip -q -0 unsigned.apk assets/probe.mp4 assets/probe.ogg
+    fi
 )
 "$ZIPALIGN" -f 4 "$TMP/apk/unsigned.apk" "$TMP/apk/aligned.apk"
 # The caller's Fedora LD_LIBRARY_PATH/JAVA_TOOL_OPTIONS may contain unrelated
@@ -204,5 +225,8 @@ for phase in unsigned aligned signed; do
 done
 cp -- "$TMP/signed.apk" "$OUTPUT"
 echo "[PASS] $ABI JNI test APK: $OUTPUT"
+if [[ "$MEDIA_SMOKE" == true ]]; then
+    echo '[INFO] Also requires LEPTON_MEDIA_SMOKE_PASS and LEPTON_MEDIA_VIDEO_RENDERING_START; run with --media-smoke --codec2'
+fi
 echo '[INFO] Package: org.lepton.smoke; launch: org.lepton.smoke/.MainActivity'
 echo '[INFO] Logcat tag: LeptonJniSmoke; expected: LEPTON_JNI_SMOKE_PASS value=42'

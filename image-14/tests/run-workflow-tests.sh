@@ -7,10 +7,14 @@ for test_name in test-build-pipeline-cli test-deploy-compat-rootfs-source test-d
 done
 bash "$repo/compat_tool/liblepton/ndk_auxv/test.sh"
 python3 -B "$repo/tests/test-add-game-tool-selection.py"
+python3 -B "$repo/tests/test-register-tool.py"
 python3 -B "$repo/tests/runtime/test-apkm.py"
 python3 -B "$repo/tests/runtime/test-locale-build.py"
+python3 -B "$repo/tests/runtime/test-view-intents.py"
+python3 -B "$repo/tests/runtime/test-framework-patches.py"
 python3 -B "$repo/tests/runtime/test-google-services.py"
 bash "$repo/tests/runtime/test-network-sysctls.sh"
+bash "$repo/tests/runtime/test-runtime-properties.sh"
 python3 -B "$repo/tests/runtime/test-profile-lifecycle.py"
 for script in "$repo/image-14/do_build_x86_64.sh" \
               "$repo/image-14/scripts/deploy-compat-x86_64.sh" \

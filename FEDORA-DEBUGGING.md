@@ -226,6 +226,167 @@ Omit `--app` for the purpose-built JNI smoke APK, which must return
 `LEPTON_JNI_SMOKE_PASS value=42`. `tests/runtime/build-jni-smoke.sh --help` describes
 building either ABI from an existing Android 14 checkout without an image rebuild.
 
+## Crossy Road APKM experiment
+
+Tested local `apks/crossyroad.apkm`: Crossy Road 7.14.2, version code 263670,
+package `com.yodo1.crossyroad`, Unity 6000.3.12f1, ARM64. Bundle SHA-256:
+`ed7076af613c32fd0b444a7ec2dbe5264c247534455526f8c0695ae7f3253885`.
+
+The install hook's fallback previously treated `uid:` fields as package names.
+The runner now sets `lepton.active_app_id` before installing, and the fallback
+reads package names without UID tokens. Its misspelled property write was also
+corrected. The persistent `crossyroad` profile successfully reused its installed
+APK set on the next launch.
+
+The first run reached Unity, then the NDK bridge rejected `SEVL` (`0xd50320bf`)
+in both UnityMain and Loading.Preload. The guarded shim now handles the event
+hints SEVL/SEV/WFE without sleeping; unit tests check unchanged registers and PC
+advancement, and leave WFI and memory barriers unhandled. AOSP LLVM assembly and
+disassembly confirmed the instruction encodings.
+
+With the updated shim and the Google-enabled v2 stage, the unsupported-instruction
+failure disappeared, followed by a new `SIGABRT`: `stack corruption detected
+(-fstack-protector)` on UnityMain. Gameplay was not reached. Google login and
+registration were not requested for this separate profile; the signed-in Kingdom
+profile was preserved. Evidence is in `.runtime-profile.crossyroad`, including
+`event-hints-logcat.log` and `event-hints-native-stacks.txt`.
+
+The same bundle and updated shim on the known-working **non-GApps**
+`lepton-ndk-test-v2` stage survived a 60-second run and rendered the age-entry
+screen. After the user entered age, the game stayed alive with a blank screen.
+Logcat identified `Firebase modules failed to initialize: messaging (missing
+dependency)` in `BootController.Awake`, with explicit missing-Play-Store warnings.
+Thus reaching age entry did not establish gameplay compatibility without GApps.
+The Google-enabled retry again hit the stack-protector abort before age entry.
+This comparison also changes the framework and profile, so it does not isolate
+Google services as the cause of the other stage's stack-protector abort.
+A controlled test in the Google-enabled Crossy Road profile temporarily disabled
+GMS, GSF and Store for user 0. The same UnityMain stack-protector abort persisted,
+so it does not require those Google packages to be running. All three packages
+were restored to their default enabled state afterward. The signed-in Kingdom
+profile was never modified. Evidence: `google-retry-logcat.log` and
+`google-disabled-logcat.log` in the Google stage's Crossy Road profile.
+The bridge and ARM64 libc hashes match between the two stages; the framework,
+Google payload/configuration and profile remain differences to investigate.
+The ARM64 JNI regression
+passed (`LEPTON_JNI_SMOKE_PASS value=42`) after the shim change, and the complete
+host workflow regression suite passed.
+
+Reopen the retained non-GApps installation on Fedora:
+
+```bash
+source .build-env
+bash tests/runtime/run-apk.sh \
+  --stage-dir "$LEPTON_OUTPUT_DIR/native-bridge-research/lepton-ndk-test-v2" \
+  --runtime-dir compat_tool --apk "$PWD/apks/crossyroad.apkm" \
+  --app --expect-abi arm64-v8a --profile crossyroad \
+  --rendering amd --display desktop --seconds 900 --execute
+```
+
+## Native Google Play Games control
+
+Local bundle `apks/com.google.android.play.games.apkm`: version 2026.10.70836,
+code 708362480, package `com.google.android.play.games`, x86_64, minimum API 32.
+SHA-256: `23829b72ee769108987160d020e1ec9c6d5bd2f474de3e09c653da87eae64f1a`.
+Its native ABI split contains x86_64 libframesequence/libvpx libraries and no ARM
+libraries. The installed package reports `primaryCpuAbi=x86_64`, no secondary ABI.
+
+The APK reader previously ignored launcher activity aliases. It now checks both
+activities and aliases, skipping ones explicitly disabled by default. The runner
+uses the selected runtime checkout's reader so an updated reader can be tested
+without restaging Android. The original extractor fixture outputs were unchanged;
+a new original binary-manifest fixture covers an enabled launcher alias following
+a disabled alias. Run its regression with:
+
+```bash
+cargo test --offline --release --locked \
+  --manifest-path compat_tool/liblepton/apk_extractor/Cargo.toml
+```
+
+On `lepton-google-play-test-v2`, profile `playgames-native`, the app reached
+Google sign-in without the Unity crash. The user completed sign-in and confirmed
+the Play Games home screen. Android's account service reports one saved account
+(count only; no names or credentials recorded). Both Play Games and Play services
+report primary ABI x86_64 and no secondary ABI. Play services updated from the
+image's 23.18.18 to 26.42.31 (190800-1005867181) during this run. One background
+GMS CancellationException occurred during startup, but subsequent sign-in and
+home-screen navigation succeeded; no native SIGILL/SIGABRT was observed for Play
+Games. Built-in gameplay remains to be verified. The bridge stays installed:
+its library can be inherited
+from zygote by a native app, so its presence in a process map alone does not mean
+ARM code is being translated. The captured map had no ARM guest library paths.
+The runner now saves `app-maps.txt` for subsequent ABI investigations.
+
+## Android-first VIEW intents and browser testing
+
+The native Play Games home screen worked but its Play controls silently did
+nothing. This was a framework policy failure, not evidence of an absent WebView:
+Valve's ActivityStarter interceptor returned START_SUCCESS for every ACTION_VIEW,
+including explicit in-app game activities with empty/relative URLs. Logcat
+recorded intercepted `logos/2010/pacman10-i.html` and GameSnacks URLs.
+
+The production patch now defaults to Android routing. Legacy Steam forwarding
+requires `LEPTON_FORWARD_WEB_INTENTS=true`, and even then applies only to
+untargeted HTTP/HTTPS. Explicit game WebViews, relative assets, content URIs and
+app-link callbacks remain inside Android. A standard deployment needs a rebuilt
+framework for this policy; launcher changes alone cannot fix old images.
+
+The disposable framework build `google-view-intents-test-v3` restores locale and
+cross-profile services and fixes VIEW interception. Its services.jar SHA-256 is
+`d82f1d0afa895cd849ad035fb7f07aaea1b961d02e46715844b09b87fa49b28e`.
+The current native Play Games command adds:
+
+```text
+--services-jar "$LEPTON_OUTPUT_DIR/native-bridge-research/google-view-intents-test-v3/services-locale.jar"
+--accept-runtime-update
+```
+
+The profile kept its saved account and installed APK set. After this change,
+Snake's PrebundledWebGameActivity started and rendered. The user confirmed
+playing with up/down/left/right keys. Mouse/touch gestures were not confirmed;
+Android reports the Wayland pointer as MOUSE. Steam Deck touchscreen behavior
+has not been tested. The older Waydroid fake-touch patch exists in the repository
+but is not present in this prepared Android 14 ViewRootImpl; setting its property
+alone would not enable that feature.
+
+The matching downloaded Google Play image also supplied Chrome 113.0.5672.136
+and TrichromeLibrary. Their APKs are ignored under `apks/`; both were installed
+in this profile using the real package-manager command without rebinding the
+game-code overlay. Chrome reports x86_64 and advertises CustomTabsConnectionService.
+Chrome was selected as this test profile's browser role holder; a BROWSABLE
+HTTPS intent resolves to Chrome's IntentDispatcher. Complete external OAuth
+callback flows with Chrome still need testing. GApps staging now supports
+`--with-browser` to include both matching APKs and x86_64 libraries.
+
+The framework sources in the shared AOSP checkout were never edited. Baseline
+sources were rebuilt and hash-checked, and the exact saved packaged services.jar
+was restored (SHA-256 `71af177e8921251cb60c5c5f28dff1e6846fbb564fde9e78c576fbf33ef75ed4`).
+ProtoLog's intentionally random generated class names prevent assuming rebuilt
+DEX is byte-identical. The source finder now skips disposable research mounts
+using their `.find-ignore` marker.
+
+## Separate media decoding findings
+
+The runtime's `debug.stagefright.ccodec=0` suppresses Codec2 even though the image
+has only the Codec2 software store, with no OMX service. Default decoder listings
+were empty and NuPlayer failed to create an audio/vorbis decoder. Enabling Codec2
+restored the advertised decoders, but did not establish successful decoding.
+
+The new offline media probe generates original AVC test-pattern and Vorbis-tone
+assets, enumerates codecs, requires decoded output and checks video-surface
+rendering. Its first run failed because the default linear allocator required
+Android ION/system DMA heaps absent on this host. BLOB plus BUFFERQUEUE allocation
+(pool mask 786432) got past input allocation, then AVC output failed in
+C2AllocatorGralloc with `cstride=0` / `graphic view map failed 14`.
+
+These remain explicit experiments via `--codec2` / `LEPTON_CODEC2=true`; default
+media configuration is retained until the decode/render test passes. The two
+failed probes are retained under the Google v2 stage as
+`.jni-smoke-work.boSlnDmN` and `.jni-smoke-work.KtTNhnr1`. They expose a concrete
+media-buffer problem relevant to the reported YouTube failure, but do not prove
+that YouTube or protected-content playback is fixed. Snake's launch failure was
+resolved separately by VIEW routing.
+
 ## Steam shortcuts for a separate NDK installation
 
 The shortcut helper accepts a tool ID and matching installation directory.

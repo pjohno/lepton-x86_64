@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lepton contributors <lepton@example.invalid>
+Date: Mon, 2 Nov 2026 18:00:00 +0000
+Subject: [PATCH] lepton: retain locale and cross-profile APIs required by apps
+
+Modern games call LocaleManager and Google services require CrossProfileApps.
+Keep both services available; leave PeopleService disabled.
+
+---
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -1869,7 +1869,6 @@
+         mSystemServiceManager.startService(UiModeManagerService.class);
+         t.traceEnd();
+ 
+-        /*
+         t.traceBegin("StartLocaleManagerService");
+         try {
+             mSystemServiceManager.startService(LocaleManagerService.class);
+@@ -1877,7 +1876,6 @@
+             reportWtf("starting LocaleManagerService service", e);
+         }
+         t.traceEnd();
+-        */
+ 
+         t.traceBegin("StartGrammarInflectionService");
+         try {
+@@ -2714,11 +2712,11 @@
+             mSystemServiceManager.startService(LauncherAppsService.class);
+             t.traceEnd();
+ 
+-            /*
+             t.traceBegin("StartCrossProfileAppsService");
+             mSystemServiceManager.startService(CrossProfileAppsService.class);
+             t.traceEnd();
+ 
++            /*
+             t.traceBegin("StartPeopleService");
+             mSystemServiceManager.startService(PeopleService.class);
+             t.traceEnd();

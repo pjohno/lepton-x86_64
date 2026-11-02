@@ -15,13 +15,18 @@ BUNDLE_DIR=''
 BUNDLE_ID=''
 DECK_IP=''
 TRANSFER_ONLY=false
+WITH_GAPPS=false
+GOOGLE_IMAGES=''
+SERVICES_JAR=''
+TOOL_ID=''
+TOOL_NAME=''
 
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 info() { printf '[INFO] %s\n' "$*"; }
 usage() {
     cat <<'HELP'
-Usage: bash image-14/scripts/deploy-compat-x86_64.sh [--check|--execute] [--stage-dir DIR] [--rootfs-source DIR] [--with-ndk --ndk-payload DIR]
-       bash image-14/scripts/deploy-compat-x86_64.sh --package-only [--check|--execute] --stage-dir DIR --bundle-id ID [--bundle-dir DIR] [--deck-ip IPv4]
+Usage: bash image-14/scripts/deploy-compat-x86_64.sh [--check|--execute] [--stage-dir DIR] [--rootfs-source DIR] [--with-ndk --ndk-payload DIR] [--with-gapps --google-images DIR] [--services-jar FILE]
+       bash image-14/scripts/deploy-compat-x86_64.sh --package-only [--check|--execute] --stage-dir DIR --bundle-id ID [--bundle-dir DIR] [--tool-id ID] [--tool-name NAME] [--deck-ip IPv4]
        bash image-14/scripts/deploy-compat-x86_64.sh --transfer-only [--check|--execute] --bundle-id ID --deck-ip IPv4 [--bundle-dir DIR]
 
 Default (legacy): stage Android rootfs under repository compat_tool/images/rootfs.
@@ -34,6 +39,15 @@ Default (legacy): stage Android rootfs under repository compat_tool/images/rootf
             compatibility shim. Requires --stage-dir and a native source rootfs.
 --ndk-payload DIR: extracted payload directory (or LEPTON_NDK_PAYLOAD in .build-env).
                   No translator is downloaded. NDK remains opt-in.
+--with-gapps: add local Google Play services, GSF, Play Store and matching
+              Chrome/Trichrome. Requires --stage-dir and --google-images.
+              No downloads; Google services stay opt-in.
+--google-images DIR: extracted API 34 system.img, product.img, system_ext.img.
+--services-jar FILE: materialize a tested framework override in the new stage;
+                     discard stale services DEX preoptimization files.
+--tool-id ID: unique Steam tool ID for side-by-side installation. GApps bundles
+              default to lepton_gapps_<bundle-id>; legacy defaults are preserved.
+--tool-name NAME: Steam display name for the packaged tool.
 --check: inspect source and existing destination; never modify files.
 --execute: refuse to overwrite existing rootfs/stage or Steam installation.
 --package-only: package an existing complete stage with fresh sysbake and tools;
@@ -54,6 +68,11 @@ while (($#)); do
         --stage-dir) (($# >= 2)) || fail '--stage-dir requires a path'; STAGE_DIR="$2"; shift 2 ;;
         --rootfs-source) (($# >= 2)) || fail '--rootfs-source requires a path'; ROOTFS_SOURCE="$2"; shift 2 ;;
         --with-ndk) WITH_NDK=true; shift ;;
+        --with-gapps) WITH_GAPPS=true; shift ;;
+        --google-images) GOOGLE_IMAGES="${2:?}"; shift 2 ;;
+        --services-jar) SERVICES_JAR="${2:?}"; shift 2 ;;
+        --tool-id) TOOL_ID="${2:?}"; shift 2 ;;
+        --tool-name) TOOL_NAME="${2:?}"; shift 2 ;;
         --ndk-payload) (($# >= 2)) || fail '--ndk-payload requires a path'; NDK_PAYLOAD="$2"; shift 2 ;;
         --package-only) PACKAGE_ONLY=true; shift ;;
         --bundle-dir) (($# >= 2)) || fail '--bundle-dir requires a path'; BUNDLE_DIR="$2"; shift 2 ;;
@@ -68,21 +87,38 @@ done
 if [[ -f "$CONFIG" ]]; then source "$CONFIG";
 elif [[ "$PACKAGE_ONLY" == false ]]; then fail 'Missing .build-env'; fi
 if [[ "$PACKAGE_ONLY" == true ]]; then
-    [[ -z "$ROOTFS_SOURCE" && -z "$NDK_PAYLOAD" && "$WITH_NDK" == false ]] || fail 'Packaging cannot be combined with rootfs/NDK staging options'
+    [[ -z "$ROOTFS_SOURCE" && -z "$NDK_PAYLOAD" && "$WITH_NDK" == false && "$WITH_GAPPS" == false && -z "$GOOGLE_IMAGES" && -z "$SERVICES_JAR" ]] || fail 'Packaging cannot be combined with rootfs/NDK staging options'
     [[ -n "$BUNDLE_ID" ]] || fail '--bundle-id is required for packaging/transfer'
     STAGE_DIR="${STAGE_DIR:-${LEPTON_DECK_STAGE_DIR:-}}"
     BUNDLE_DIR="${BUNDLE_DIR:-${LEPTON_DECK_BUNDLE_DIR:-$HOME/lepton-deck-bundles}}"
     source "$ROOT/image-14/scripts/lib/deck-bundle.sh"
-    package_deck_bundle "$ROOT" "$STAGE_DIR" "$BUNDLE_DIR" "$BUNDLE_ID" "$DECK_IP" "$TRANSFER_ONLY" "$MODE"
+    package_deck_bundle "$ROOT" "$STAGE_DIR" "$BUNDLE_DIR" "$BUNDLE_ID" "$DECK_IP" "$TRANSFER_ONLY" "$MODE" "$TOOL_ID" "$TOOL_NAME"
     exit 0
 fi
-[[ -z "$BUNDLE_DIR" && -z "$BUNDLE_ID" && -z "$DECK_IP" ]] || fail 'Bundle options require --package-only or --transfer-only'
+[[ -z "$BUNDLE_DIR" && -z "$BUNDLE_ID" && -z "$DECK_IP" && -z "$TOOL_ID" && -z "$TOOL_NAME" ]] || fail 'Bundle options require --package-only or --transfer-only'
 [[ "$WITH_NDK" == true || -z "$NDK_PAYLOAD" ]] || fail '--ndk-payload requires --with-ndk'
 if [[ "$WITH_NDK" == true ]]; then
     [[ -n "$STAGE_DIR" ]] || fail '--with-ndk requires --stage-dir (existing deployments stay unchanged)'
     NDK_PAYLOAD="${NDK_PAYLOAD:-${LEPTON_NDK_PAYLOAD:-}}"
     [[ -n "$NDK_PAYLOAD" ]] || fail '--with-ndk requires --ndk-payload or LEPTON_NDK_PAYLOAD'
     NDK_PAYLOAD="$(realpath -e -- "$NDK_PAYLOAD")" || fail 'NDK payload not found'
+fi
+[[ "$WITH_GAPPS" == true || -z "$GOOGLE_IMAGES" ]] || fail '--google-images requires --with-gapps'
+if [[ "$WITH_GAPPS" == true ]]; then
+    [[ -n "$STAGE_DIR" ]] || fail '--with-gapps requires --stage-dir'
+    GOOGLE_IMAGES="$(realpath -e -- "${GOOGLE_IMAGES:-${LEPTON_GOOGLE_IMAGES:-}}")" || fail 'Local Google logical images required'
+    source "$ROOT/image-14/scripts/lib/google-services.sh"
+    google_services_check "$GOOGLE_IMAGES" true true
+fi
+if [[ -n "$SERVICES_JAR" ]]; then
+    [[ -n "$STAGE_DIR" ]] || fail '--services-jar requires --stage-dir'
+    SERVICES_JAR="$(realpath -e -- "$SERVICES_JAR")" || fail 'Services jar missing'
+    python3 - "$SERVICES_JAR" <<'PYJAR'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as jar:
+    if 'classes.dex' not in jar.namelist():
+        raise SystemExit('Services jar has no classes.dex')
+PYJAR
 fi
 if [[ -n "$ROOTFS_SOURCE" ]]; then
     [[ -n "$STAGE_DIR" ]] || fail '--rootfs-source requires --stage-dir (legacy deployment is unchanged)'
@@ -96,6 +132,9 @@ fi
 [[ -f "$SRC/system/build.prop" ]] || fail 'Android build.prop missing'
 [[ -f "$SRC/vendor/lib64/hw/vulkan.radeon.so" ]] || fail 'AMD Vulkan driver missing'
 grep -qx 'ro.build.version.sdk=34' "$SRC/system/build.prop" || fail 'Expected Android API 34'
+if [[ "$WITH_GAPPS" == true ]]; then
+    google_services_framework_check "${SERVICES_JAR:-$SRC/system/framework/services.jar}"
+fi
 [[ -f "$ROOT/compat_tool/lepton" ]] || fail 'Lepton launcher missing'
 [[ -f "$EXTRACTOR/Makefile" ]] || fail 'APK extractor Makefile missing'
 [[ "$(uname -m)" == x86_64 ]] || fail 'Requires x86_64 host'
@@ -114,6 +153,7 @@ if [[ -n "$STAGE_DIR" ]]; then
     [[ "$STAGE_DIR" != / && "$STAGE_DIR" != "$ROOT" ]] || fail 'Unsafe stage destination'
     [[ "$STAGE_DIR" != "$ROOT/"* && "$STAGE_DIR" != "$SRC" && "$STAGE_DIR" != "$SRC/"* ]] || fail 'Stage must not be inside repository or rootfs'
     [[ "$SRC" != "$STAGE_DIR/"* ]] || fail 'Rootfs source must not be inside destination stage'
+    [[ -z "$GOOGLE_IMAGES" || "$GOOGLE_IMAGES" != "$STAGE_DIR/"* ]] || fail 'Google images cannot be inside stage'
     DEST="$STAGE_DIR/compat_tool/images/rootfs"
 else
     DEST="$LEGACY_DEST"
@@ -158,10 +198,11 @@ if [[ -n "$STAGE_DIR" ]]; then
     TEMP="$(mktemp -d "$parent/.lepton-deck-stage.XXXXXXXX")"
     cleanup() { [[ -z "${TEMP:-}" ]] || rm -rf -- "$TEMP"; }
     trap cleanup EXIT
+    touch "$TEMP/.find-ignore"
     mkdir -p "$TEMP/compat_tool/images"
     # Never dereference existing compat_tool/images/rootfs symlinks.
     rsync -a --no-owner --no-group --exclude='/images/rootfs' \
-        --exclude='/sysbake' --exclude='/sysbake.xattrs' \
+        --exclude='/sysbake' --exclude='/sysbake.xattrs' --exclude='/liblepton/apk_extractor/target/' --exclude=__pycache__/ \
         "$ROOT/compat_tool/" "$TEMP/compat_tool/"
     if [[ "$WITH_NDK" == true ]]; then
         bash "$ROOT/image-14/scripts/inject-ndk-translation.sh" --execute \
@@ -171,6 +212,19 @@ if [[ -n "$STAGE_DIR" ]]; then
     else
         mkdir "$TEMP/compat_tool/images/rootfs"
         rsync -a --no-owner --no-group "$SRC/" "$TEMP/compat_tool/images/rootfs/"
+    fi
+    if [[ -n "$SERVICES_JAR" ]]; then
+        framework="$TEMP/compat_tool/images/rootfs/system/framework"
+        install -m 644 "$SERVICES_JAR" "$framework/services.jar"
+        for abi in x86 x86_64 arm arm64; do
+            for suffix in odex vdex art; do rm -f -- "$framework/oat/$abi/services.$suffix"; done
+        done
+        rm -f -- "$framework/services.jar.prof" "$framework/services.jar.bprof"
+        mkdir -p "$TEMP/compat_tool/provenance/framework"
+        sha256sum "$SERVICES_JAR" > "$TEMP/compat_tool/provenance/framework/services-override.sha256"
+    fi
+    if [[ "$WITH_GAPPS" == true ]]; then
+        google_services_inject "$TEMP/compat_tool/images/rootfs" "$GOOGLE_IMAGES" true true "$TEMP/compat_tool/provenance/gapps"
     fi
     [[ -x "$TEMP/compat_tool/images/rootfs/system/bin/sh" ]] || fail 'Staged Android shell missing'
     [[ -f "$TEMP/compat_tool/images/rootfs/vendor/lib64/hw/vulkan.radeon.so" ]] || fail 'Staged RADV driver missing'

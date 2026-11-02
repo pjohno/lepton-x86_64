@@ -20,3 +20,6 @@ LEPTON_DECK_BUNDLE_DIR="${HOME}/lepton-deck-bundles"
 # Optional local payload for deploy-compat-x86_64.sh --with-ndk.
 # Extract it first; proprietary translator files are never downloaded by deploy.
 # LEPTON_NDK_PAYLOAD="${LEPTON_OUTPUT_DIR}/native-bridge-research/ndk-google-api34-r14-v2/payload"
+
+# Optional local Google Play API 34 logical ext4 images (no download).
+# LEPTON_GOOGLE_IMAGES="/path/to/google-play-api34/logical-partitions"

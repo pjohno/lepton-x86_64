@@ -17,7 +17,21 @@ This fixes two problems seen with AAAAXY 1.8.34's Go 1.27.2 ARM64 library:
   Let the light JIT fall back to the interpreter for unsupported instructions,
   then emulate those three reads. Use a generic Cortex-A53 identity and a
   consistent 1 GHz counter backed by CLOCK_MONOTONIC nanoseconds. XZR writes
-  are discarded. Other instructions retain the bridge interpreter's behaviour.
+  are discarded.
+
+Crossy Road 7.14.2 (Unity 6000.3.12f1) also reaches an unsupported `SEVL`
+(`0xd50320bf`) in Unity's wait loops. The shim handles `SEVL`, `SEV` and `WFE`
+as nonblocking event hints, preserving registers and advancing PC by four.
+Keeping WFE nonblocking avoids waiting for an event discarded by SEVL/SEV.
+Atomic operations and barriers retain their original implementation; WFI and
+all other instructions retain the bridge interpreter's behaviour. See Arm's
+[description of event hints](https://documentation-service.arm.com/static/5f3fa899428f7a6b3328fd44).
+This removes the observed unsupported-instruction failure. On the Google-enabled
+experimental stage, Crossy Road then aborts with `stack corruption detected
+(-fstack-protector)`. On the baseline non-GApps NDK stage it survived 60 seconds
+and rendered age verification, but after age entry its Firebase messaging
+initialization failed because Google dependencies were missing. Neither
+environment has reached gameplay.
 
 The light JIT remains enabled. Heavy optimization is disabled while using this
 shim. This is a compatibility experiment for one translator version, not a

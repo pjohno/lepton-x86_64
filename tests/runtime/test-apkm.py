@@ -74,6 +74,27 @@ class ApkmTests(unittest.TestCase):
                                         capture_output=True, env={**os.environ, "MOCK_PATHS": paths})
                 self.assertEqual(result.stdout.strip(), expected)
 
+    def test_last_installed_package_ignores_uid_tokens(self):
+        repo = Path(__file__).resolve().parents[2]
+        wrapper = (repo / "compat_tool/images/rootfs_overlay/system/bin/cmd").read_text()
+        functions = wrapper.split('if [ "$1" = "package" ]', 1)[0]
+        command = functions + '''
+cmd_real() {
+    if [[ "$*" == *"-U"* ]]; then return 1; fi
+    printf 'package:example.old\npackage:com.yodo1.crossyroad\n'
+}
+dumpsys() {
+    case "$2" in
+        example.old) echo 'firstInstallTime=2026-11-01 12:00:00';;
+        com.yodo1.crossyroad) echo 'firstInstallTime=2026-11-02 12:00:00';;
+        *) return 1;;
+    esac
+}
+last_installed_package
+'''
+        result = subprocess.run(["bash", "-c", command], check=True, text=True, capture_output=True)
+        self.assertEqual(result.stdout.strip(), "com.yodo1.crossyroad")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,13 +14,15 @@ INOTIFY_REPO='https://github.com/inotify-tools/inotify-tools.git'
 MODE='--check'
 STAGE=''
 ADB_ZIP=''
+FROM_STAGE=''
 
 usage() {
     cat <<'HELP'
-Usage: bash image-14/scripts/provision-deck-tools.sh --stage-dir DIR [--check|--execute] [--adb-zip PATH]
+Usage: bash image-14/scripts/provision-deck-tools.sh --stage-dir DIR [--check|--execute] [--adb-zip PATH] [--from-stage DIR]
   --check: verify the four tools already staged; no changes or downloads.
   --execute: download verified Google ADB, compile inotify-tools 4.23.9.0 in a
              Debian 12 Podman builder, then install into an otherwise tool-free stage.
+  --from-stage: reuse verified portable tools from another stage (offline).
   --adb-zip: use a cached official Google platform-tools Linux ZIP (offline ADB).
 
 The versioned Google download is accepted ONLY if its adb matches the pinned
@@ -34,6 +36,7 @@ while (($#)); do
     case "$1" in
         --check|--execute) MODE="$1"; shift ;;
         --stage-dir) (($# >= 2)) || fail '--stage-dir needs a path'; STAGE="$2"; shift 2 ;;
+        --from-stage) FROM_STAGE="${2:?}"; shift 2 ;;
         --adb-zip) (($# >= 2)) || fail '--adb-zip needs a path'; ADB_ZIP="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) fail "Unknown argument: $1" ;;
@@ -65,6 +68,24 @@ check_tools() {
 }
 if [[ "$MODE" == --check ]]; then
     for program in sha256sum ldd grep; do command -v "$program" >/dev/null || fail "Missing $program"; done
+    check_tools
+    exit 0
+fi
+
+if [[ -n "$FROM_STAGE" ]]; then
+    [[ -z "$ADB_ZIP" ]] || fail '--from-stage cannot be combined with --adb-zip'
+    FROM_STAGE="$(realpath -e -- "$FROM_STAGE")"
+    [[ "$FROM_STAGE" != "$STAGE" ]] || fail 'Tool source and destination must differ'
+    (STAGE="$FROM_STAGE"; check_tools)
+    for path in "${paths[@]}"; do
+        [[ ! -e "$STAGE/$path" && ! -L "$STAGE/$path" ]] || fail "Refusing to overwrite $path"
+    done
+    for path in "${paths[@]}"; do
+        install -D -m 755 "$FROM_STAGE/$path" "$STAGE/$path"
+    done
+    if [[ -f "$FROM_STAGE/tools/PROVENANCE.txt" ]]; then
+        install -m 644 "$FROM_STAGE/tools/PROVENANCE.txt" "$STAGE/tools/PROVENANCE.txt"
+    fi
     check_tools
     exit 0
 fi

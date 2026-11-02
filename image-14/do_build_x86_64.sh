@@ -12,6 +12,10 @@ SYSBAKE_TIMEOUT=600
 SYSBAKE_RENDERING=software
 WITH_NDK=false
 NDK_PAYLOAD=''
+WITH_GAPPS=false
+GOOGLE_IMAGES=''
+TOOL_ID=''
+TOOL_NAME=''
 
 usage() {
     cat <<'HELP'
@@ -19,7 +23,11 @@ Usage:
   bash image-14/do_build_x86_64.sh --check --bundle-id ID [--sysbake-timeout SECONDS]
   bash image-14/do_build_x86_64.sh --execute --bundle-id ID [--sysbake-timeout SECONDS]
   Optional: --with-ndk --ndk-payload /path/to/extracted/payload
+            --with-gapps --google-images /path/to/logical-partitions
+            --tool-id lepton_unique_id --tool-name "Lepton GApps"
             --sysbake-rendering software|amd (default software)
+GApps includes Play services, GSF, Play Store, Chrome and Trichrome, extracted
+only from local API 34 images. GApps and NDK remain independent opt-ins.
 
 Set LEPTON_OUTPUT_DIR in the repository's ignored .build-env to a NEW,
 NONEXISTENT Android source/output directory before running either command.
@@ -55,6 +63,10 @@ while (( $# )); do
             (( $# >= 2 )) || fail '--sysbake-rendering requires software or amd'
             SYSBAKE_RENDERING="$2"; shift 2 ;;
         --with-ndk) WITH_NDK=true; shift ;;
+        --with-gapps) WITH_GAPPS=true; shift ;;
+        --google-images) GOOGLE_IMAGES="${2:?}"; shift 2 ;;
+        --tool-id) TOOL_ID="${2:?}"; shift 2 ;;
+        --tool-name) TOOL_NAME="${2:?}"; shift 2 ;;
         --ndk-payload)
             (( $# >= 2 )) || fail '--ndk-payload requires directory'
             NDK_PAYLOAD="$2"; shift 2 ;;
@@ -83,6 +95,23 @@ if [[ "$WITH_NDK" == true ]]; then
     [[ -d "$NDK_PAYLOAD" && -f "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" && -f "$NDK_PAYLOAD/system/lib64/libndk_translation.so" ]] || fail 'Incomplete extracted NDK payload'
     (cd "$NDK_PAYLOAD" && sha256sum -c "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" >/dev/null) || fail 'NDK payload hash verification failed'
     DEPLOY_ARGS=(--with-ndk --ndk-payload "$NDK_PAYLOAD")
+fi
+
+[[ "$WITH_GAPPS" == true || -z "$GOOGLE_IMAGES" ]] || fail '--google-images requires --with-gapps'
+if [[ "$WITH_GAPPS" == true ]]; then
+    GOOGLE_IMAGES="$(realpath -e -- "${GOOGLE_IMAGES:-${LEPTON_GOOGLE_IMAGES:-}}")" || fail 'Local Google logical images required'
+    source "$IMAGE_DIR/scripts/lib/google-services.sh"
+    google_services_check "$GOOGLE_IMAGES" true true
+    DEPLOY_ARGS+=(--with-gapps --google-images "$GOOGLE_IMAGES")
+fi
+BUNDLE_ARGS=()
+if [[ -n "$TOOL_ID" ]]; then
+    [[ "$TOOL_ID" =~ ^[A-Za-z0-9_]{1,96}$ ]] || fail 'Invalid tool ID'
+    BUNDLE_ARGS+=(--tool-id "$TOOL_ID")
+fi
+if [[ -n "$TOOL_NAME" ]]; then
+    [[ "$TOOL_NAME" != *$'\n'* && "$TOOL_NAME" != *$'\r'* ]] || fail 'Invalid tool name'
+    BUNDLE_ARGS+=(--tool-name "$TOOL_NAME")
 fi
 
 BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder-ubuntu26:latest}"
@@ -221,12 +250,14 @@ PROVENANCE="$STAGE/tools/BUILD-PROVENANCE.txt"
     printf 'Android system.img SHA256: %s\n' "$(sha256sum "$PRODUCT/system.img" | awk '{print $1}')"
     printf 'Android vendor.img SHA256: %s\n' "$(sha256sum "$PRODUCT/vendor.img" | awk '{print $1}')"
     printf 'Baked packages.xml SHA256: %s\n' "$(sha256sum "$STAGE/compat_tool/sysbake/system/packages.xml" | awk '{print $1}')"
+    printf 'Optional GApps: %s; NDK: %s\n' "$WITH_GAPPS" "$WITH_NDK"
+    printf 'Google payload/image hashes: compat_tool/provenance/gapps/ (when enabled)\n'
     printf 'Google ADB and inotify versions: see tools/PROVENANCE.txt\n'
 } > "$PROVENANCE"
 
 step 'Package the distributable bundle (local only)'
 bash "$IMAGE_DIR/scripts/deploy-compat-x86_64.sh" --package-only --execute \
-    --stage-dir "$STAGE" --bundle-dir "$BUNDLE_DIR" --bundle-id "$BUNDLE_ID"
+    --stage-dir "$STAGE" --bundle-dir "$BUNDLE_DIR" --bundle-id "$BUNDLE_ID" "${BUNDLE_ARGS[@]}"
 ( cd "$BUNDLE_DIR" && sha256sum -c "$(basename -- "$ARCHIVE").sha256" )
 gzip -t "$ARCHIVE"
 # Enumerate the archive fully, checking both critical content and excluded work.

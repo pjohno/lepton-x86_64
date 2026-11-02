@@ -121,6 +121,11 @@ GAMESCOPE_WAYLAND_DISPLAY=wayland-0 bash compat_tool/test-0100.sh
 
 Once host prerequisites and configuration are satisfied, continue in test-number order. `test-0200.sh` verifies container lifecycle without starting Android `/init`, while later tests exercise Android initialization and the graphics stack. Do not run `.ci_scripts/run-tests.sh` directly on a normal Fedora desktop: the CI harness includes system-wide changes and a forced Podman reset.
 
+## Optional Google services
+
+See [GApps build, installation and fixes](GAPPS.md) for the opt-in pipeline,
+side-by-side Deck bundles, persistent sign-in and APKM Gaming Mode shortcuts.
+
 ## Steam Deck shortcut and display-mode helper
 
 The Deck bundle includes `compat_tool/tools/lepton-add-game`, a standard-library

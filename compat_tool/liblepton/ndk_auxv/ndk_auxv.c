@@ -18,8 +18,19 @@ static int missing_register(unsigned instruction) {
 }
 
 /* Return 0 for unhandled instructions, 1 for success, -1 for clock failure. */
-static int emulate_register(unsigned instruction, unsigned long *regs,
+static int emulate_instruction(unsigned instruction, unsigned long *regs,
                             unsigned long *pc) {
+    /* Event hints may complete without sleeping. Pair SEVL/SEV with a
+     * nonblocking WFE: no guest can sleep waiting for an event we discarded.
+     * Guest lock acquisition and memory ordering still use their original
+     * atomic/barrier instructions. These hints provide no memory barrier.
+     */
+    if (instruction == 0xd50320bfu || /* SEVL */
+        instruction == 0xd503209fu || /* SEV */
+        instruction == 0xd503205fu) { /* WFE */
+        *pc += 4;
+        return 1;
+    }
     if (!missing_register(instruction)) return 0;
     unsigned opcode = instruction & ~31u;
     unsigned long value;
@@ -140,7 +151,7 @@ EXPORT void fallback(void *frontend) {
     if (!base) { raise(4); return; }
     /* success_ at 0x00. A failed translation discards the block and invokes
      * InterpretInsn. The original interpreter still handles (and rejects)
-     * every opcode outside our three explicit register-read additions. */
+     * every opcode outside our explicit register-read and event-hint additions. */
     *(unsigned char *)frontend = 0;
 }
 
@@ -151,12 +162,12 @@ EXPORT void interpret(void *state) {
     if (!base) { raise(4); return; }
     /* CPUState's X0..X30 begin at 0; insn_addr is at 0x310. */
     unsigned long *pc = (void *)((char *)state + 0x310);
-    int result = emulate_register(*(unsigned *)*pc, state, pc);
+    int result = emulate_instruction(*(unsigned *)*pc, state, pc);
     if (result < 0) { raise(4); return; }
     if (result) {
         static unsigned seen;
         if (__atomic_fetch_add(&seen, 1, __ATOMIC_RELAXED) < 4)
-            LOG("Interpreted missing ARM system register");
+            LOG("Interpreted missing ARM register/event hint");
         return;
     }
     void (*original)(void *) = (void *)(base + 0x1d3bc0);

@@ -14,21 +14,35 @@ int clock_gettime(int clock, void *value) {
 }
 int main(void) {
     unsigned long regs[32] = {0}, pc = 100;
-    assert(emulate_register(0xd5380000, regs, &pc) == 1);
+    assert(emulate_instruction(0xd5380000, regs, &pc) == 1);
     assert(regs[0] == 0x410fd030 && pc == 104);
-    assert(emulate_register(0xd53be005, regs, &pc) == 1);
+    assert(emulate_instruction(0xd53be005, regs, &pc) == 1);
     assert(regs[5] == 1000000000UL && pc == 108);
-    assert(emulate_register(0xd53be05e, regs, &pc) == 1);
+    assert(emulate_instruction(0xd53be05e, regs, &pc) == 1);
     assert(regs[30] == 123000000456UL && pc == 112);
     regs[31] = 77;
-    assert(emulate_register(0xd53be01f, regs, &pc) == 1);
+    assert(emulate_instruction(0xd53be01f, regs, &pc) == 1);
     assert(regs[31] == 77 && pc == 116);
-    assert(emulate_register(0xd503201f, regs, &pc) == 0); /* NOP */
-    assert(emulate_register(0xd5380400, regs, &pc) == 0); /* Unhandled MRS */
+    assert(emulate_instruction(0xd503201f, regs, &pc) == 0); /* NOP */
+    assert(emulate_instruction(0xd5380400, regs, &pc) == 0); /* Unhandled MRS */
     assert(pc == 116);
     clock_failure = -1;
     regs[2] = 42;
-    assert(emulate_register(0xd53be042, regs, &pc) == -1);
+    assert(emulate_instruction(0xd53be042, regs, &pc) == -1);
     assert(regs[2] == 42 && pc == 116);
-    puts("PASS: register values, destinations, XZR, PC, unknown opcodes and clock failures");
+    clock_failure = 0;
+    unsigned hints[] = {0xd50320bf, 0xd503209f, 0xd503205f};
+    unsigned long saved[32];
+    for (unsigned i = 0; i < 32; ++i) saved[i] = regs[i];
+    for (unsigned i = 0; i < 3; ++i) {
+        unsigned long previous_pc = pc;
+        assert(emulate_instruction(hints[i], regs, &pc) == 1);
+        assert(pc == previous_pc + 4);
+        for (unsigned r = 0; r < 32; ++r) assert(regs[r] == saved[r]);
+    }
+    unsigned long previous_pc = pc;
+    assert(emulate_instruction(0xd503207f, regs, &pc) == 0); /* WFI */
+    assert(emulate_instruction(0xd5033bbf, regs, &pc) == 0); /* DMB ISH */
+    assert(pc == previous_pc);
+    puts("PASS: register values, destinations, XZR, PC, event hints, unknown opcodes and clock failures");
 }

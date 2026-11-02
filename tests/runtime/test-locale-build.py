@@ -59,6 +59,23 @@ jar.write_text("baseline" if "        /*\\n        t.traceBegin" in source else 
         self.assertEqual((self.output / "services-locale.jar").read_text(), "locale")
         self.assertEqual((self.output / "services-baseline.jar").read_text(), "baseline")
 
+    def test_view_override_is_read_only_and_original_source_is_preserved(self):
+        import importlib.util
+        path = SCRIPT.with_name("patch-view-intents.py")
+        spec = importlib.util.spec_from_file_location("view_patch", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        source = self.aosp / "frameworks/base/services/core/java/com/android/server/wm/ActivityStarter.java"
+        source.parent.mkdir(parents=True)
+        source.write_text(module.original)
+        result = self.run_script("--execute", "--fix-view-intents")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(source.read_text(), module.original)
+        self.assertIn('"persist.lepton.forward_web_intents", false)',
+                      (self.output / "ActivityStarter.java").read_text())
+        self.assertEqual((self.output / "ActivityStarter.baseline.java").read_text(), module.original)
+        self.assertEqual((self.aosp / JAR).read_text(), "baseline")
+
     def test_check_has_no_output_side_effects(self):
         result = self.run_script("--check")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

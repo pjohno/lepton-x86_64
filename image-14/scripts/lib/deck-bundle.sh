@@ -4,6 +4,7 @@
 package_deck_bundle() (
 set -Eeuo pipefail
 local repo="$1" stage="$2" outdir="$3" bundle_id="$4" deck_ip="$5" transfer_only="$6" mode="$7"
+local tool_id="${8:-}" tool_name="${9:-}" install_name
 [[ "$bundle_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${#bundle_id} -le 64 ]] || {
     echo 'ERROR: bundle ID must contain 1-64 letters, digits, dots, dashes or underscores' >&2
     exit 2
@@ -64,6 +65,25 @@ fi
 }
 stage="$(realpath -e -- "$stage")"
 [[ "$outdir" != "$stage" && "$outdir" != "$stage/"* ]] || { echo 'ERROR: bundle output must be outside the source stage' >&2; exit 1; }
+if [[ -z "$tool_id" ]]; then
+    if [[ -f "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk" ]]; then
+        tool_id="lepton_gapps_${bundle_id//[.-]/_}"
+    else
+        tool_id=lepton_x86_64_dev
+    fi
+fi
+[[ "$tool_id" =~ ^[A-Za-z0-9_]{1,96}$ ]] || { echo 'ERROR: invalid tool ID' >&2; exit 2; }
+[[ -n "$tool_name" ]] || tool_name="Lepton x86_64 ($bundle_id)"
+[[ "$tool_name" != *$'\n'* && "$tool_name" != *$'\r'* ]] || { echo 'ERROR: invalid tool name' >&2; exit 2; }
+install_name="$tool_id"
+[[ "$tool_id" != lepton_x86_64_dev ]] || install_name=lepton-x86_64-dev
+if [[ -f "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk" ]]; then
+    source "$repo/image-14/scripts/lib/google-services.sh"
+    google_services_framework_check "$stage/compat_tool/images/rootfs/system/framework/services.jar"
+    if [[ -f "$stage/compat_tool/provenance/gapps/SHA256SUMS" ]]; then
+        (cd "$stage/compat_tool/images/rootfs" && sha256sum -c "$stage/compat_tool/provenance/gapps/SHA256SUMS" >/dev/null)
+    fi
+fi
 source "$repo/compat_tool/liblepton/ndk_auxv/runtime.sh"
 if ndk_compat_supported "$stage/compat_tool/images/rootfs"; then
     [[ -f "$repo/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" ]] || {
@@ -75,7 +95,7 @@ for program in rsync tar gzip sha256sum awk grep mktemp install; do
     command -v "$program" >/dev/null || { echo "ERROR: missing $program" >&2; exit 1; }
 done
 
-for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh; do
     [[ -f "$repo/compat_tool/liblepton/$script" ]] || {
         echo "ERROR: missing Fedora source compat_tool/liblepton/$script" >&2
         exit 1
@@ -119,7 +139,7 @@ grep -q 'binderfs-ensure' "$stage/compat_tool/images/rootfs/system/etc/init/hw/i
 grep -q 'steamlaunch-0' "$repo/compat_tool/liblepton/liblepton.sh" || {
     echo 'ERROR: Fedora installer lacks the tested steamlaunch-0 installation route' >&2; exit 1;
 }
-for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh; do
     bash -n "$repo/compat_tool/liblepton/$script"
 done
 grep -Fq 'no-force-stop' "$repo/compat_tool/liblepton/app_metadata.sh" || {
@@ -160,7 +180,7 @@ mkdir -p -- "$tmp/payload"
     echo "ERROR: missing stage components" >&2
     exit 1
 }
-rsync -a --no-owner --no-group -- "$stage/compat_tool/" "$tmp/payload/compat_tool/"
+rsync -a --no-owner --no-group --exclude='/liblepton/apk_extractor/target/' --exclude=__pycache__/ -- "$stage/compat_tool/" "$tmp/payload/compat_tool/"
 rsync -a --no-owner --no-group -- "$stage/tools/" "$tmp/payload/tools/"
 
 # Refresh all tested shell fixes without touching the staged materialized
@@ -170,10 +190,25 @@ rsync -a --no-owner --no-group -- "$stage/tools/" "$tmp/payload/tools/"
 mkdir -p -- "$tmp/payload/compat_tool/liblepton" "$tmp/payload/compat_tool/tools"
 rsync -a --no-owner --no-group -- "$repo/compat_tool/liblepton/ndk_auxv/" \
     "$tmp/payload/compat_tool/liblepton/ndk_auxv/"
-for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh; do
     install -m 755 "$repo/compat_tool/liblepton/$script" \
         "$tmp/payload/compat_tool/liblepton/$script"
 done
+# Keep Android command routing and launcher alias parsing current too.
+install -m 755 "$repo/compat_tool/images/rootfs_overlay/system/bin/cmd" \
+    "$tmp/payload/compat_tool/images/rootfs_overlay/system/bin/cmd"
+if [[ -x "$repo/compat_tool/liblepton/apk_extractor/bin/apk-info-extractor" ]]; then
+    install -D -m 755 "$repo/compat_tool/liblepton/apk_extractor/bin/apk-info-extractor" \
+        "$tmp/payload/compat_tool/liblepton/apk_extractor/bin/apk-info-extractor"
+fi
+# The persistent test runner also handles split APKM installs. Ship only its
+# source helpers; profiles, APKs and host build workspaces are never included.
+mkdir -p "$tmp/payload/tests/runtime"
+for helper in run-apk.sh unpack-apkm.py read-gsf-id.py; do
+    install -m 755 "$repo/tests/runtime/$helper" "$tmp/payload/tests/runtime/$helper"
+done
+install -m 644 "$repo/tests/runtime/README.md" "$tmp/payload/tests/runtime/README.md"
+install -m 644 "$repo/tests/runtime/STEAM-DECK-GAPPS.md" "$tmp/payload/tests/runtime/STEAM-DECK-GAPPS.md"
 # These launch helpers must track the checked-out Fedora source, not an
 # older stage snapshot. Do not touch the staged Android rootfs.
 install -m 755 "$repo/compat_tool/lepton" "$tmp/payload/compat_tool/lepton"
@@ -183,6 +218,8 @@ install -m 755 "$repo/compat_tool/tools/lepton-controller-hotplug-experiment" \
     "$tmp/payload/compat_tool/tools/lepton-controller-hotplug-experiment"
 install -m 755 "$repo/compat_tool/tools/lepton-add-game" \
     "$tmp/payload/compat_tool/tools/lepton-add-game"
+install -m 755 "$repo/compat_tool/tools/lepton-register-tool" \
+    "$tmp/payload/compat_tool/tools/lepton-register-tool"
 install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
     "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
 
@@ -201,57 +238,49 @@ if grep -q '^security\.selinux=' "$xattrs"; then
     echo 'ERROR: Fedora SELinux labels remain after filtering' >&2; exit 1
 fi
 
-# Ship the registration template for a future fresh install. Existing Steam
-# configurations are not modified by this packaging operation.
-cat > "$tmp/payload/lepton_x86_64_dev.vdf" <<'VDF'
-"compatibilitytools"
-{
-    "compat_tools"
-    {
-        "lepton_x86_64_dev"
-        {
-            "install_path" "/home/deck/.local/share/lepton-x86_64-dev/compat_tool"
-            "display_name" "Lepton x86_64 (development)"
-            "from_oslist" "windows"
-            "to_oslist" "linux"
-        }
-    }
-}
-VDF
-cat > "$tmp/payload/STEAM-DECK-INSTALL.txt" <<'DOC'
-Lepton x86_64 development bundle — Steam Deck (user: deck)
+# Metadata and registration use a distinct ID/directory for optional GApps.
+# The helper resolves the actual extracted path instead of assuming /home/deck.
+python3 - "$tmp/payload" "$bundle_id" "$tool_id" "$tool_name" "$install_name" "$(basename -- "$archive")" <<'PYBUNDLE'
+import json
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+bundle, tool, name, directory, archive = sys.argv[2:]
+(root / 'BUNDLE.json').write_text(json.dumps(dict(
+    format_version=1, bundle_id=bundle, tool_id=tool, display_name=name,
+    install_directory=directory), indent=2) + '\n')
+(root / 'STEAM-DECK-INSTALL.txt').write_text(f'''Lepton Steam Deck bundle: {name}
 
-Extract from the Steam Deck user account (Desktop Mode):
-  mkdir -p "$HOME/.local/share/lepton-x86_64-dev"
-  tar -xzf lepton-x86_64-steamdeck-v308.tar.gz -C "$HOME/.local/share/lepton-x86_64-dev" --no-same-owner
+In Desktop Mode, extract into a NEW directory (existing installs are retained):
+  cd "$HOME/Downloads"
+  sha256sum -c {archive}.sha256 &&
+  mkdir "$HOME/.local/share/{directory}" &&
+  tar -xzf {archive} -C "$HOME/.local/share/{directory}" --no-same-owner
 
-Fresh registration, only if not already registered:
-  mkdir -p "$HOME/.local/share/Steam/compatibilitytools.d"
-  cp "$HOME/.local/share/lepton-x86_64-dev/lepton_x86_64_dev.vdf" "$HOME/.local/share/Steam/compatibilitytools.d/"
-  Restart Steam after initial registration.
+Register this compatibility tool, then restart Steam:
+  python3 "$HOME/.local/share/{directory}/compat_tool/tools/lepton-register-tool" --execute
+The registration refuses conflicting tool IDs. Existing registrations are kept.
 
-To add an APK shortcut, fully exit Steam in Desktop Mode first, then run:
-  python3 "$HOME/.local/share/lepton-x86_64-dev/compat_tool/tools/lepton-add-game" "$HOME/Android_Games/RetroArch.apk"
-The shortcut installer selects Lepton and sets the Gamescope bridge automatically.
-Use --hotplug only to opt in to broader host input access and live gamepad hotplug.
-Steam Input Touchscreen Native Support remains a manual controller-layout setting.
-On KDE Wayland Desktop Mode the bridge uses a windowed Wayland Gamescope.
-On Steam Gaming Mode the bridge retains the tested SDL/X11 fullscreen behavior.
+For a normal APK, fully exit Steam before adding its shortcut:
+  python3 "$HOME/.local/share/{directory}/compat_tool/tools/lepton-add-game" /path/to/game.apk --tool-id {tool} --install-dir "$HOME/.local/share/{directory}"
 
-The steamlaunch-0 app-install path uses Podman and waits for Android package
-services before installing. The automatic game launch does not force-stop a
-already-running app if init triggers it again.
-Do not overwrite a running compatibility tool.
-DOC
+For Google registration/sign-in, then APK/APKM install/play in a persistent
+profile, follow GAPPS.md. Saved profiles and credentials are never bundled.
+For a saved profile shortcut, use lepton-add-game --runtime-profile NAME
+--install-dir "$HOME/.local/share/{directory}"; Steam compatibility forcing
+must remain unchecked for that native launcher shortcut.
 
-# Keep the embedded install instructions in sync with the requested archive ID.
-sed -i "s/lepton-x86_64-steamdeck-v308.tar.gz/$(basename -- "$archive")/g" \
-    "$tmp/payload/STEAM-DECK-INSTALL.txt"
+Enable Steam Input Touchscreen Native Support in the shortcut controller layout.
+Never overwrite a running installation. Default cleanup remains unchanged for
+normal APK shortcuts; saved profiles explicitly enable persistence.
+''')
+PYBUNDLE
+install -m 644 "$repo/GAPPS.md" "$tmp/payload/GAPPS.md"
 
 [[ -f "$tmp/payload/compat_tool/images/rootfs/system/etc/init/hw/init.rc" ]]
 [[ -x "$tmp/payload/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure" ]]
 [[ -s "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]]
-for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
 python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$tmp/payload/compat_tool/tools/lepton-add-game"
@@ -259,6 +288,25 @@ grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/mounting.sh"
 for script in compat_tool/lepton compat_tool/tools/lepton-gamescope-bridge compat_tool/tools/lepton-controller-hotplug-experiment; do
     bash -n "$tmp/payload/$script"
 done
+
+# Record exactly which launcher checkout and framework were packaged. This does
+# not claim that the reused rootfs was freshly compiled from that checkout.
+{
+    printf 'Launcher source commit: %s\n' "$(git -C "$repo" rev-parse HEAD)"
+    if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then
+        printf 'Launcher working tree: dirty\n'
+    else
+        printf 'Launcher working tree: clean\n'
+    fi
+    printf 'Bundle ID: %s\nTool ID: %s\n' "$bundle_id" "$tool_id"
+    printf 'Android artifacts: staged rootfs (packaging does not rebuild Android)\n'
+    for path in system/build.prop system/framework/services.jar; do
+        if [[ -f "$tmp/payload/compat_tool/images/rootfs/$path" ]]; then
+            (cd "$tmp/payload/compat_tool/images/rootfs" && sha256sum "$path")
+        fi
+    done
+    printf 'Payload provenance: compat_tool/provenance and compat_tool/ndk-provenance when present\n'
+} > "$tmp/payload/tools/BUNDLE-PROVENANCE.txt"
 
 printf 'Creating compressed archive...\n'
 ( cd "$tmp/payload" && tar --warning=no-file-ignored -cf - . ) | gzip -1 > "$tmp/bundle.tar.gz"

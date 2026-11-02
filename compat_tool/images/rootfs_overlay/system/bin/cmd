@@ -14,6 +14,16 @@ package_install_dir()
     cmd_real package path "$1" | sed -n 's|^package:\(.*\)/base\.apk$|\1|p'
 }
 
+last_installed_package()
+{
+    # Keep one package per line. -U adds uid tokens, which are not package names.
+    cmd_real package list packages -3 | while IFS= read -r line; do
+        pkg="${line#package:}"
+        t=$(dumpsys package "$pkg" | grep firstInstallTime | cut -d= -f2 | head -n 1)
+        [[ -n "$t" ]] && echo "$t $pkg"
+    done | sort -r | head -n 1 | awk '{print $3}'
+}
+
 # These helper functions unmount all vulkan layers from an app's libdir, and mount them in again
 unmount_vulkan_layers()
 {
@@ -89,15 +99,8 @@ if [ "$?" = "0" ] && [ "$1" = "package" ] && { [ "$2" = "install" ] || [ "$2" = 
     # When installing via adb, the property might not have been set.
     if [[ -z "${APP_ID}" ]]; then
         # Find the last installed package (i.e. the one that was just installed)
-        APP_ID="$(\
-            for pkg in $(cmd_real package list packages -3 -U | sed 's/package://'); do
-                t=$(dumpsys package "$pkg" | grep firstInstallTime | cut -d= -f2)
-                echo "$t $pkg"
-            done | sort -r | \
-                head -n 1 | \
-                awk '{print $3}'
-        )"
-        setprop letpon.active_app_id "${APP_ID}"
+        APP_ID="$(last_installed_package)"
+        setprop lepton.active_app_id "${APP_ID}"
     fi
 
     if [[ -z "${APP_ID}" ]]; then

@@ -89,3 +89,13 @@ Runtime APK and JNI tests live under `tests/runtime/` at the repository root.
 Host-only workflow regression suite: `bash image-14/tests/run-workflow-tests.sh`.
 It builds tiny fixtures and tests archive creation/transfer dispatch without
 running Android, rebuilding images, or connecting to a Deck.
+
+## Optional GApps bundles
+
+The full wrapper and compatibility deployer now support `--with-gapps
+--google-images /path/to/google-play-api34/logical-partitions`. This is independent
+of `--with-ndk` and uses local files only. GApps includes the tested Store dependency
+and matching Chrome/Trichrome. `--tool-id` and `--tool-name` select a parallel Steam
+installation; GApps packaging defaults to a bundle-specific ID. See
+[GApps reproduction and fixes](../../GAPPS.md) for fresh builds, older-rootfs
+framework overrides, persistence, installation and validation limits.

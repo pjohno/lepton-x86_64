@@ -21,6 +21,8 @@ bash tests/runtime/run-apk.sh --stage-dir /path/to/stage \
 ```
 
 For a real game, add `--app --rendering amd --display desktop --seconds 90`.
+Use `--until-exit` in app mode to keep a session open until the app exits or the
+runner is stopped; this replaces the observation time limit.
 The runner forces and verifies the requested ABI for universal APKs. See
 [the Fedora guide](../../FEDORA-DEBUGGING.md) and `--help` for all options.
 
@@ -71,6 +73,10 @@ along the private pasta network path. Sysbake still has no network. The default
 runtime configuration is unchanged. This option produced an IPv4 address and a
 validated default network in the Fedora test. Do not infer Google certification
 or game compatibility from network validation.
+
+For the isolated Deck test, see [Steam Deck instructions](STEAM-DECK-GAPPS.md).
+The main deployment packager includes the runtime runner and its APKM/GSF helpers;
+no test profiles or game downloads are copied.
 
 ## Persistent setup, then install/play
 
@@ -123,3 +129,50 @@ For fast host-side regression tests without booting Android or using the network
 ```bash
 bash image-14/tests/run-workflow-tests.sh
 ```
+
+## Internal browser and app-link launches
+
+Lepton now leaves Android VIEW intents inside Android by default. The legacy
+Steam browser route requires `LEPTON_FORWARD_WEB_INTENTS=true`; even then, only
+untargeted HTTP/HTTPS intents are forwarded. Explicit activities, package-targeted
+intents, relative asset paths and callback/content schemes stay in Android.
+
+The framework experiment builder accepts `--fix-view-intents` alongside
+`--with-google-services`. It overlays both reviewed source files read-only,
+builds services.jar and restores the original build artifact. Android's ProtoLog
+tool deliberately chooses random generated class names, so regenerated baseline
+DEX can differ. The helper hash-checks original sources, rebuilds them, verifies
+the saved baseline JAR hash and reinstates that exact packaged artifact.
+Android source files remain untouched.
+
+Use `run-apk.sh --services-jar FILE` to test the compiled framework without
+changing the source stage. It requires a stage with stale services dexpreopt
+removed. The override hash is part of the persistent profile fingerprint;
+`--accept-runtime-update` deliberately retains its identity/account across the
+change. Repeat `--services-jar FILE` on subsequent launches. Omitting it rolls
+back to the stage framework and requires accepting that change as well.
+
+`stage-google-services.sh --with-browser` optionally includes matching Chrome
+and TrichromeLibrary from the downloaded Google image, with x86_64 native
+libraries. Browser support is separate from WebView. This is useful for external
+OAuth/Custom Tabs; Google binaries remain outside Git.
+
+## Offline media diagnostics
+
+```bash
+source .build-env
+bash tests/runtime/build-jni-smoke.sh --aosp "$LEPTON_OUTPUT_DIR" \
+  --abi x86_64 --media-smoke --output /tmp/lepton-media-smoke.apk
+bash tests/runtime/run-apk.sh --stage-dir "$stage" --runtime-dir compat_tool \
+  --apk /tmp/lepton-media-smoke.apk --expect-abi x86_64 \
+  --media-smoke --codec2 --rendering amd --display headless --seconds 35 --execute
+```
+
+The build additionally needs host ffmpeg (libx264/libvorbis). It generates original
+local test patterns and tones, with no downloads. The run requires actual AVC
+and Vorbis decoded output plus a video-surface rendering marker; process survival
+alone cannot pass. `--codec2` enables the experimental Codec2 list and BLOB plus
+BUFFERQUEUE allocation (`LEPTON_CODEC2=true`). Default codec behavior is retained
+until decode/rendering pass. The current AMD probe fails on an invalid YCbCr
+layout from gralloc, after fixing missing ION/system-heap input allocation. That
+remaining graphics-buffer problem is separate from VIEW-intent interception.

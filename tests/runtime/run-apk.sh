@@ -9,15 +9,19 @@ APK=''
 EXPECT_ABI=''
 TIMEOUT=180
 APP_MODE=false
+MEDIA_SMOKE=false
 RENDERING=software
 DISPLAY_MODE=headless
 OBSERVE_SECONDS=20
+UNTIL_EXIT=false
 NDK_AUXV_SHIM=''
 RUNTIME_SOURCE=''
+SERVICES_JAR=''
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 APK_PREFLIGHT_DIR=''
 APKM=false
 NETWORK_SYSCTLS=false
+CODEC2=false
 PROFILE=''
 SETUP_ONLY=false
 FRESH_PROFILE=true
@@ -32,8 +36,12 @@ For a regular game APK, add --app. Optional game/debug settings:
   --rendering software|amd    Android graphics driver (default software)
   --display headless|desktop  Headless Weston or current Wayland desktop
   --seconds N                Observe the game for N seconds (default 20)
+  --until-exit               Keep an app session open until it exits or is stopped
+  --media-smoke              Require offline audio/video decode and video rendering markers
   --ndk-auxv-shim FILE        Preload experimental guest auxv compatibility shim
+  --services-jar FILE        Overlay experimental services.jar without changing the stage
   --runtime-dir DIR          Test updated compat_tool scripts with stage images/sysbake
+  --codec2                  Enable experimental Codec2/gralloc media allocation
   --network-sysctls          Allow netd sysctl writes in the private network namespace
   --profile NAME             Reuse private Android data; install only changed APKs
   --setup-only               Boot a profile for registration/sign-in; no APK required
@@ -62,7 +70,10 @@ while (($#)); do
         --expect-abi) (($# >= 2)) || fail '--expect-abi requires name'; EXPECT_ABI="$2"; shift 2 ;;
         --timeout) (($# >= 2)) || fail '--timeout requires integer'; TIMEOUT="$2"; shift 2 ;;
         --app) APP_MODE=true; shift ;;
+        --until-exit) UNTIL_EXIT=true; shift ;;
+        --media-smoke) APP_MODE=true; MEDIA_SMOKE=true; shift ;;
         --network-sysctls) NETWORK_SYSCTLS=true; shift ;;
+        --codec2) CODEC2=true; shift ;;
         --profile) PROFILE="${2:?}"; shift 2 ;;
         --setup-only) SETUP_ONLY=true; shift ;;
         --accept-runtime-update) ACCEPT_RUNTIME_UPDATE=true; shift ;;
@@ -70,12 +81,14 @@ while (($#)); do
         --display) (($# >= 2)) || fail '--display requires mode'; DISPLAY_MODE="$2"; shift 2 ;;
         --seconds) (($# >= 2)) || fail '--seconds requires integer'; OBSERVE_SECONDS="$2"; shift 2 ;;
         --ndk-auxv-shim) (($# >= 2)) || fail '--ndk-auxv-shim requires file'; NDK_AUXV_SHIM="$2"; shift 2 ;;
+        --services-jar) SERVICES_JAR="${2:?}"; shift 2 ;;
         --runtime-dir) (($# >= 2)) || fail '--runtime-dir requires directory'; RUNTIME_SOURCE="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "Unknown argument: $1" ;;
     esac
 done
 [[ "$EXPECT_ABI" == x86_64 || "$EXPECT_ABI" == arm64-v8a ]] || fail 'Expected ABI must be x86_64 or arm64-v8a'
+[[ "$UNTIL_EXIT" == false || ( "$APP_MODE" == true && "$SETUP_ONLY" == false && "$MEDIA_SMOKE" == false ) ]] || fail '--until-exit requires a regular --app session'
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail 'Timeout must be a positive integer'
 [[ "$OBSERVE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail 'Seconds must be a positive integer'
 [[ "$RENDERING" == software || "$RENDERING" == amd ]] || fail 'Rendering must be software or amd'
@@ -87,7 +100,7 @@ if [[ -n "$PROFILE" ]]; then
 fi
 [[ "$SETUP_ONLY" == false || ( -n "$PROFILE" && -z "$APK" ) ]] || fail '--setup-only requires --profile and no APK'
 [[ "$ACCEPT_RUNTIME_UPDATE" == false || -n "$PROFILE" ]] || fail '--accept-runtime-update requires --profile'
-[[ $(id -u) != 0 ]] || fail 'Run as an ordinary Fedora user, without sudo'
+[[ $(id -u) != 0 ]] || fail 'Run as an ordinary user, without sudo'
 [[ $(uname -m) == x86_64 ]] || fail 'x86_64 host required'
 STAGE="$(realpath -e -- "$STAGE")" || fail 'Stage not found'
 if [[ "$SETUP_ONLY" == false ]]; then
@@ -100,6 +113,13 @@ TOOL="$STAGE/compat_tool"
 RUNTIME_SOURCE="$(realpath -e -- "${RUNTIME_SOURCE:-$TOOL}")"
 [[ -f "$RUNTIME_SOURCE/lepton" && -f "$RUNTIME_SOURCE/liblepton/mounting.sh" ]] || fail 'Runtime source must be a compat_tool directory'
 ROOTFS="$TOOL/images/rootfs"
+if [[ -n "$SERVICES_JAR" ]]; then
+    SERVICES_JAR="$(realpath -e -- "$SERVICES_JAR")"
+    [[ -f "$SERVICES_JAR" ]] || fail 'Services override must be a regular jar'
+    unzip -Z1 "$SERVICES_JAR" | grep -Fx 'classes.dex' >/dev/null || fail 'Services override has no DEX'
+    [[ ! -e "$ROOTFS/system/framework/oat/x86_64/services.odex" ]] ||
+        fail 'Services override requires a stage with stale services dexpreopt artifacts removed'
+fi
 if [[ -n "$NDK_AUXV_SHIM" ]]; then
     NDK_AUXV_SHIM="$(realpath -e -- "$NDK_AUXV_SHIM")"
     [[ -f "$NDK_AUXV_SHIM" && "$EXPECT_ABI" == arm64-v8a ]] || fail 'Shim requires a regular file and ARM64 guest'
@@ -119,9 +139,12 @@ else
 fi
 grep -qx 'ro.build.version.sdk=34' "$ROOTFS/system/build.prop" || fail 'Expected Android 14'
 [[ -x "$STAGE/tools/bin/inotifywait" ]] || fail 'Staged inotifywait missing'
-for tool in rsync podman weston python3 unzip grep flock realpath mktemp getfattr setfattr fuse-overlayfs systemctl timeout; do
+for tool in rsync podman python3 unzip grep flock realpath mktemp getfattr setfattr fuse-overlayfs systemctl timeout; do
     command -v "$tool" >/dev/null || fail "Missing host tool: $tool"
 done
+if [[ "$DISPLAY_MODE" == headless ]]; then
+    command -v weston >/dev/null || fail 'Missing headless compositor: weston'
+fi
 cleanup_apk_preflight() {
     if [[ -n "$APK_PREFLIGHT_DIR" ]]; then
         rm -rf -- "$APK_PREFLIGHT_DIR"
@@ -143,14 +166,14 @@ if [[ "${APK,,}" == *.apkm ]]; then
 fi
 unzip -Z1 "$METADATA_APK" | grep -Fx 'classes.dex' >/dev/null || fail 'Test APK missing classes.dex'
 if [[ "$APP_MODE" == true ]]; then
-    [[ -x "$TOOL/liblepton/apk_extractor/bin/apk-info-extractor" ]] || fail 'APK metadata extractor missing'
+    [[ -x "$RUNTIME_SOURCE/liblepton/apk_extractor/bin/apk-info-extractor" ]] || fail 'APK metadata extractor missing'
     native_found=false
     for native_apk in "${NATIVE_APKS[@]}"; do
         if unzip -Z1 "$native_apk" | grep -E "^lib/$EXPECT_ABI/[^/]+[.]so$" >/dev/null; then native_found=true; fi
     done
     [[ "$native_found" == true ]] || fail "APK set has no native libraries for $EXPECT_ABI (APKM preflight supports conventional split_config ABI names)"
-    PACKAGE="$("$TOOL/liblepton/apk_extractor/bin/apk-info-extractor" --print-app-id "$METADATA_APK")"
-    ACTIVITY="$("$TOOL/liblepton/apk_extractor/bin/apk-info-extractor" --print-activity-name "$METADATA_APK")"
+    PACKAGE="$("$RUNTIME_SOURCE/liblepton/apk_extractor/bin/apk-info-extractor" --print-app-id "$METADATA_APK")"
+    ACTIVITY="$("$RUNTIME_SOURCE/liblepton/apk_extractor/bin/apk-info-extractor" --print-activity-name "$METADATA_APK")"
     [[ "$PACKAGE" =~ ^[a-zA-Z0-9_.]+$ && "$ACTIVITY" =~ ^[a-zA-Z0-9_.$]+$ ]] || fail 'Invalid package or launch activity metadata'
 else
     unzip -Z1 "$APK" | grep -Fx "lib/$EXPECT_ABI/libleptonjni.so" >/dev/null || fail "APK missing lib/$EXPECT_ABI/libleptonjni.so"
@@ -177,6 +200,9 @@ if [[ -n "$PROFILE" ]]; then
     WORK="$STAGE/.runtime-profile.$PROFILE"
     PROFILE_FINGERPRINT="$(
         { printf '%s\n' "$STAGE"; sha256sum "$ROOTFS/system/build.prop" "$ROOTFS/system/framework/services.jar";
+          if [[ -n "$SERVICES_JAR" ]]; then
+              printf 'services-override %s\n' "$(sha256sum "$SERVICES_JAR" | cut -d' ' -f1)"
+          fi
           for marker in "$STAGE/google-services.sha256" "$STAGE/services-experiment.sha256"; do
               [[ ! -f "$marker" ]] || cat "$marker"
           done; } | sha256sum | cut -d' ' -f1
@@ -302,6 +328,13 @@ if [[ "$FRESH_PROFILE" == true ]]; then
     cp -a --no-preserve=ownership -- "$TOOL/sysbake" "$WORK/compat_tool/sysbake"
     cp -a -- "$TOOL/sysbake.xattrs" "$WORK/compat_tool/sysbake.xattrs"
 fi
+if [[ -n "$SERVICES_JAR" ]]; then
+    mkdir -p "$WORK/compat_tool/images/rootfs_overlay/system/framework"
+    cp -- "$SERVICES_JAR" "$WORK/compat_tool/images/rootfs_overlay/system/framework/services.jar"
+    sha256sum "$SERVICES_JAR" > "$WORK/services-override.sha256"
+elif [[ -f "$WORK/services-override.sha256" ]]; then
+    rm -f -- "$WORK/compat_tool/images/rootfs_overlay/system/framework/services.jar" "$WORK/services-override.sha256"
+fi
 if [[ -n "$NDK_AUXV_SHIM" ]]; then
     mkdir -p "$WORK/compat_tool/images/rootfs_overlay/system/lib64"
     cp -- "$NDK_AUXV_SHIM" "$WORK/compat_tool/images/rootfs_overlay/system/lib64/liblepton_ndk_auxv.so"
@@ -357,6 +390,7 @@ export LEPTON_ALLOW_KMSG=false LEPTON_GAMEPAD_PASSTHROUGH=false
 export LEPTON_NO_PORT_FORWARDING=true TERM=dumb TMPDIR="$WORK/tmp"
 export LEPTON_NO_DEBUG_PORTS=true
 export LEPTON_NETWORK_SYSCTLS="$NETWORK_SYSCTLS"
+export LEPTON_CODEC2="$CODEC2"
 if [[ -n "$PROFILE" ]]; then export LEPTON_NO_CLEANUP=true; fi
 unset SteamAppId STEAM_COMPAT_INSTALL_PATH STEAM_COMPAT_DATA_PATH
 if [[ -n "$PROFILE" ]]; then
@@ -477,6 +511,11 @@ if [[ "$SETUP_ONLY" == true ]]; then
     exit 0
 fi
 APK_SIGNATURE="$(sha256sum "$APK" | cut -d' ' -f1):$EXPECT_ABI"
+if [[ "$APP_MODE" == true ]]; then
+    # Match the normal installer: tell Lepton exactly which package its hook is
+    # handling instead of inferring it from install timestamps or UID listings.
+    podman exec "$container" /system/bin/setprop lepton.active_app_id "$PACKAGE"
+fi
 REUSE_INSTALL=false
 if [[ -n "$PROFILE" && -f "$WORK/installed-apk.signature" && "$(cat "$WORK/installed-apk.signature")" == "$APK_SIGNATURE" ]]; then
     if podman exec "$container" /system/bin/pm path "$PACKAGE" | grep '^package:' >/dev/null; then
@@ -516,7 +555,9 @@ if [[ "$APP_MODE" == true ]]; then
     if [[ -n "$PROFILE" ]]; then
         sed -n 's|^package:\(.*\)/base\.apk$|\1|p' "$WORK/apk-paths.txt" > "$WORK/profile-code-path"
     fi
-    info "Launching $PACKAGE/$ACTIVITY for ${OBSERVE_SECONDS}s"
+    duration="for ${OBSERVE_SECONDS}s"
+    [[ "$UNTIL_EXIT" == false ]] || duration='until exit or stop'
+    info "Launching $PACKAGE/$ACTIVITY $duration"
     podman exec "$container" /system/bin/logcat -c
     podman exec "$container" /system/bin/logcat -b all > "$WORK/app-logcat.log" 2>&1 &
     LOGCAT_PID=$!
@@ -524,13 +565,25 @@ if [[ "$APP_MODE" == true ]]; then
     timeout --foreground 30s podman exec "$container" /system/bin/am start -W \
         -a android.intent.action.MAIN -c android.intent.category.LAUNCHER \
         -n "$PACKAGE/$ACTIVITY" > "$WORK/activity.log" 2>&1 || launch_ok=false
+    # Keep mapped-library evidence alongside the requested/installed ABI.
+    # The bridge itself can be inherited from zygote even by native apps.
+    # shellcheck disable=SC2016
+    timeout --foreground 10s podman exec "$container" /system/bin/sh -c \
+        'for pid in $(pidof "$1"); do cat /proc/"$pid"/maps; done' sh "$PACKAGE" \
+        > "$WORK/app-maps.txt" 2> "$WORK/app-maps-error.log" || true
     app_alive=true
-    for ((i=0;i<OBSERVE_SECONDS;i++)); do
+    app_crashed=false
+    i=0
+    while [[ "$UNTIL_EXIT" == true ]] || ((i<OBSERVE_SECONDS)); do
         if ! timeout --foreground 10s podman exec "$container" /system/bin/pidof "$PACKAGE" > "$WORK/app-pid.txt" 2>/dev/null; then app_alive=false; break; fi
-        if grep -Fq ">>> $PACKAGE <<<" "$WORK/app-logcat.log"; then app_alive=false; break; fi
-        if grep -Fq "Process: $PACKAGE, PID:" "$WORK/app-logcat.log"; then app_alive=false; break; fi
+        if grep -Fq ">>> $PACKAGE <<<" "$WORK/app-logcat.log"; then app_alive=false; app_crashed=true; break; fi
+        if grep -Fq "Process: $PACKAGE, PID:" "$WORK/app-logcat.log"; then app_alive=false; app_crashed=true; break; fi
         sleep 1
+        i=$((i+1))
     done
+    if grep -Fq ">>> $PACKAGE <<<" "$WORK/app-logcat.log" || grep -Fq "Process: $PACKAGE, PID:" "$WORK/app-logcat.log"; then
+        app_crashed=true
+    fi
     timeout --foreground 10s podman exec "$container" /system/bin/dumpsys package "$PACKAGE" > "$WORK/package.txt" 2>&1 || true
     timeout --foreground 10s podman exec "$container" /system/bin/dumpsys activity activities > "$WORK/activities.txt" 2>&1 || true
     # Expansion is intentionally performed inside the Android shell.
@@ -541,10 +594,19 @@ if [[ "$APP_MODE" == true ]]; then
         podman cp "$container:/data/local/tmp/screen.png" "$WORK/screen.png" || true
     cat "$WORK/activity.log"
     [[ "$launch_ok" == true ]] || fail "Activity launch command timed out/failed; see $WORK/native-stacks.txt"
-    [[ "$app_alive" == true ]] || fail "App process exited; see $WORK/app-logcat.log"
+    [[ "$app_crashed" == false && ( "$app_alive" == true || "$UNTIL_EXIT" == true ) ]] || fail "App process exited; see $WORK/app-logcat.log"
     grep -Fq "primaryCpuAbi=$EXPECT_ABI" "$WORK/package.txt" || fail 'Installed package ABI differs from requested ABI; inspect package.txt'
     grep -q '^Status: ok' "$WORK/activity.log" || fail "Activity did not finish launching; see $WORK/activity.log and app-logcat.log"
-    pass "App process survived ${OBSERVE_SECONDS}s; inspect screen.png and app-logcat.log for rendering/gameplay"
+    if [[ "$MEDIA_SMOKE" == true ]]; then
+        grep -Fq 'LEPTON_MEDIA_SMOKE_PASS ' "$WORK/app-logcat.log" || fail 'Offline media decode failed; inspect app-logcat.log'
+        grep -Fq 'LEPTON_MEDIA_VIDEO_RENDERING_START' "$WORK/app-logcat.log" || fail 'Video surface did not start rendering'
+        pass 'Offline AVC/Vorbis decode and video surface rendering verified'
+    fi
+    if [[ "$UNTIL_EXIT" == true ]]; then
+        pass 'App session ended; logs retained for review'
+    else
+        pass "App process survived ${OBSERVE_SECONDS}s; inspect screen.png and app-logcat.log for rendering/gameplay"
+    fi
     exit 0
 fi
 info 'Launching JNI smoke activity'
