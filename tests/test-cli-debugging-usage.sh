@@ -122,7 +122,7 @@ wait_for_app test-apk.apk com.example.neon42
 
 sleep 10
 
-if [[ -z "$(pgrep gdbserver64)" ]]; then
+if [[ -z "$(pgrep gdbserver)" ]]; then
     test_log "lepton gdb_server failed!"
     test_failure
 fi
@@ -131,7 +131,7 @@ fi
 
 kill "${LOGCAT_PID}"
 
-if [[ "$(pgrep gdbserver64)" != "" ]]; then
+if [[ "$(pgrep gdbserver)" != "" ]]; then
     test_log "lepton gdb_server failed after stopping!"
     test_failure
 fi
@@ -151,14 +151,14 @@ wait_for_app test-apk.apk com.example.neon42
 
 sleep 10
 
-if [[ -z "$(pgrep gdbserver64)" ]]; then
+if [[ -z "$(pgrep gdbserver)" ]]; then
     test_log "lepton gdb_server failed (2)!"
     test_failure
 fi
 
 ./lepton kill_gdb_server test-apk.apk
 
-if [[ "$(pgrep gdbserver64)" != "" ]]; then
+if [[ "$(pgrep gdbserver)" != "" ]]; then
     test_log "lepton gdb_server failed after kill!"
     test_failure
 fi
@@ -182,7 +182,7 @@ unbuffer ./lepton gdb_attach test-apk.apk &
 
 sleep 10
 
-if [[ -z "$(pgrep gdbserver64)" ]]; then
+if [[ -z "$(pgrep gdbserver)" ]]; then
     test_log "lepton gdb_attach failed, no gdbserver!"
     test_failure
 fi
@@ -194,7 +194,7 @@ if [[ -z "$(pidof gdb)" ]]; then
     test_failure
 fi
 
-if ! check_debugger com.example.neon42 gdbserver64; then
+if ! check_debugger com.example.neon42 gdbserver; then
     test_log "lepton gdb_attach failed, not attached to right process!"
     test_failure
 fi
@@ -219,7 +219,7 @@ wait_for_app test-apk.apk com.example.neon42
 
 sleep 10
 
-if [[ -z "$(pgrep gdbserver64)" ]]; then
+if [[ -z "$(pgrep gdbserver)" ]]; then
     test_log "lepton gdb_attach after gdb_server test failed, no gdbserver!"
     test_failure
 fi
@@ -235,7 +235,7 @@ unbuffer ./lepton gdb_attach test-apk.apk &
 
 sleep 10
 
-if [[ -z "$(pgrep gdbserver64)" ]]; then
+if [[ -z "$(pgrep gdbserver)" ]]; then
     test_log "lepton gdb_attach after gdb_server failed, no gdbserver after attach!"
     test_failure
 fi
@@ -247,7 +247,7 @@ if [[ -z "$(pidof gdb)" ]]; then
     test_failure
 fi
 
-if ! check_debugger com.example.neon42 gdbserver64; then
+if ! check_debugger com.example.neon42 gdbserver; then
     test_log "lepton gdb_attach failed, not attached to right process (2)!"
     test_failure
 fi
