@@ -22,7 +22,7 @@ Known limitations:
 - USB mouse interaction is incomplete; connecting/disconnecting a mouse may affect application touch handling.
 - Multiple controllers connected at startup were verified on the Steam Deck; live hotplug remains experimental and must be explicitly enabled.
 - Steam shortcuts, input configuration, Binder support, host graphics, and Android application compatibility vary by system.
-- ARM-only Android native libraries are not supported without an additional translation solution; x86_64-native or pure-Java applications are the initial target.
+- ARM translation is experimental: an NDK-enabled test stage passed ARM64 JNI on Fedora. The [version-specific compatibility shim](compat_tool/liblepton/ndk_auxv/README.md) now enables automatically for its matching translator. AAAAXY ARM64 and SuperTuxKart 1.4 in both x86_64 and forced ARM64 modes launched, rendered and were played on Fedora. Broader ARM game compatibility and this fix on Deck remain unverified. See [local debugging findings](FEDORA-DEBUGGING.md).
 - Native Android depots, broad game compatibility, clean sysbake generation, and other GPUs/platforms remain unverified.
 
 ## Repository layout
@@ -80,9 +80,26 @@ The local deploy step copies the packaged rootfs into `compat_tool/images/rootfs
 
 The native controller range correction is held in `image-14/patches/0007-eventhub-preserve-evdev-axes.patch` and is applied during the source preparation workflow to the AOSP `frameworks/native` checkout. It preserves synthetic Wayland input ranges while restoring the evdev axis information of real controllers.
 
+ARM64 NDK translation is **opt-in**. To assemble a separate stage from a native
+rootfs and an already extracted local payload, use:
+
+```bash
+bash image-14/scripts/deploy-compat-x86_64.sh --check \
+  --stage-dir /path/to/new-ndk-stage --with-ndk --ndk-payload /path/to/payload
+# Replace --check with --execute after reviewing preflight output.
+```
+
+This builds the compatibility shim and injects the verified payload into a new
+rootfs copy. It does not download Google binaries. Provision utilities and create
+a fresh sysbake afterward. See [Fedora debugging and validation](FEDORA-DEBUGGING.md)
+for the complete workflow, local `apks/` directory, and test results.
+
 **Do not point packaging or deployment scripts at an existing Steam Deck runtime, and do not distribute generated Android binaries without a separate license and security review.**
 
 ## Runtime testing prerequisites
+
+For fast local APK installation, ARM64 JNI checks, and captured game crash logs
+on Fedora, see [Local Fedora APK debugging](FEDORA-DEBUGGING.md).
 
 When testing Lepton on Fedora, SteamOS, or a second x86_64 Linux computer:
 

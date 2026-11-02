@@ -122,6 +122,13 @@ fi
     exit 2
 }
 stage="$(realpath -e -- "$stage")"
+source "$repo/compat_tool/liblepton/ndk_auxv/runtime.sh"
+if ndk_compat_supported "$stage/compat_tool/images/rootfs"; then
+    [[ -f "$repo/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" ]] || {
+        echo 'ERROR: Build the standard NDK shim before packaging: bash compat_tool/liblepton/ndk_auxv/build.sh --aosp DIR' >&2
+        exit 1
+    }
+fi
 for program in rsync tar gzip sha256sum awk grep mktemp install; do
     command -v "$program" >/dev/null || { echo "ERROR: missing $program" >&2; exit 1; }
 done
@@ -214,6 +221,8 @@ rsync -a --no-owner --no-group -- "$stage/tools/" "$tmp/payload/tools/"
 # Earlier stages did not ship compat_tool/tools; create the destination before
 # overlaying the newer launch helpers.
 mkdir -p -- "$tmp/payload/compat_tool/liblepton" "$tmp/payload/compat_tool/tools"
+rsync -a --no-owner --no-group -- "$repo/compat_tool/liblepton/ndk_auxv/" \
+    "$tmp/payload/compat_tool/liblepton/ndk_auxv/"
 for script in liblepton.sh app_metadata.sh mounting.sh baking.sh; do
     install -m 755 "$repo/compat_tool/liblepton/$script" \
         "$tmp/payload/compat_tool/liblepton/$script"

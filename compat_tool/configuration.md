@@ -1,5 +1,7 @@
 # Environment variables
 
+* `LEPTON_NDK_COMPAT=auto` (default) automatically enables the CPU/timer shim for the reviewed Google API 34 r14 NDK bridge. Other rootfs versions are left unchanged. Use `false` for comparisons; `true` requires a supported bridge. New NDK deployments and bundles include the compiled shim. See [NDK compatibility](liblepton/ndk_auxv/README.md).
+
 * ```LEPTON_KEEP_CONTEXT=true``` to keep a context after the container has exited, debug option.
 * ```LEPTON_STRACE=true``` to strace the application launched by the container.
 * ```LEPTON_DEBUG_LAUNCH=true``` to wait e.g. for gdb before continuing execution after forking, but before launching the app.

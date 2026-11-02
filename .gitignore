@@ -21,3 +21,6 @@ compat_tool.tar.zst
 
 # Local build environment (machine-specific)
 /.build-env
+
+# Local Android application test files (never distribute APKs in this repository).
+/apks/

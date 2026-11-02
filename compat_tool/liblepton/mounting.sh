@@ -1,6 +1,7 @@
 #!/bin/bash
 
 LEPTON_IMAGE_DIR=$(realpath "${LEPTON_DIR}/../images")
+source "${LEPTON_DIR}/ndk_auxv/runtime.sh"
 
 PODMAN_CMDLINE=()
 function podman_cmdline()
@@ -383,6 +384,8 @@ function generate_zygote_launch_rc()
             println "    setenv ${VARNAME} ${!VAR}" >> "${ZYGOTE_LAUNCH_RC}"
         fi
     done
+
+    configure_ndk_compat "${ZYGOTE_LAUNCH_RC}"
 
     # provide a vr config file
     println "    setenv VR_PATHREG_OVERRIDE /vendor/etc/openvrpaths.vrpath" >> "${ZYGOTE_LAUNCH_RC}"

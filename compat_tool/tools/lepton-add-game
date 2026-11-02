@@ -155,6 +155,7 @@ def atomic_replace(path, payload):
 
 
 def main():
+    global TOOL, INSTALL
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("apk", type=Path, help="APK file to add")
     parser.add_argument("--name", help="Name displayed in Steam (default: APK stem)")
@@ -164,7 +165,26 @@ def main():
                         help="Validate shortcut and compatibility mapping without modifying Steam files")
     parser.add_argument("--userdata", type=Path,
                         help="Steam userdata/<id> directory (required if multiple users)")
+    parser.add_argument("--tool-id", default=TOOL,
+                        help="Steam compatibility-tool ID (default: lepton_x86_64_dev)")
+    parser.add_argument("--install-dir", type=Path,
+                        help="Root of the selected tool installation; required for alternate tool IDs")
     args = parser.parse_args()
+
+    if not re.fullmatch(r"[A-Za-z0-9_]+", args.tool_id):
+        fail("Invalid compatibility-tool ID")
+    if args.tool_id != TOOL and args.install_dir is None:
+        fail("--install-dir is required when selecting another --tool-id")
+    TOOL = args.tool_id
+    if args.install_dir is not None:
+        INSTALL = args.install_dir.expanduser().resolve(strict=True)
+    registration = STEAM / "compatibilitytools.d" / (TOOL + ".vdf")
+    if args.install_dir is not None and registration.is_file():
+        # An alternate tool must point at the same install path as its VDF.
+        vdf = registration.read_text(encoding="utf-8")
+        expected = str(INSTALL / "compat_tool")
+        if not re.search(r'"install_path"\s*"' + re.escape(expected) + r'"', vdf):
+            fail("Tool registration install_path does not match --install-dir")
 
     apk = args.apk.expanduser().resolve(strict=True)
     if not apk.is_file() or apk.suffix.lower() != ".apk":
