@@ -1,9 +1,13 @@
 # Android 14 Google services investigation
 
-Status: research only. GApps installation, account sign-in, Play Store downloads,
-and games installed through Play Store have **not** been validated in Lepton.
+Status: research only. GApps installation, account sign-in, and Google services
+used by sideloaded games have **not** been validated in Lepton.
 The `feature/android14-gapps` branch starts from the NDK work merged into
 `feature/ubuntu26-build-pipeline` at `08dd1d7`.
+
+The requested scope is **optional Google services for sideloaded games**, without
+installing or using Play Store. Games continue to be installed from local APKs
+through Lepton. A Store download/installation workflow is outside this experiment.
 
 ## Existing local image
 
@@ -48,11 +52,33 @@ debugfs -R 'ls -p /priv-app' "$google_parts/system_ext.img"
 These commands do not mount or write to the images. Do not pass `-w` to debugfs.
 
 Android distinguishes [Google APIs images from images containing Play Store](https://developer.android.com/studio/run/managing-avds).
-A matching Android 14 x86_64 Google Play emulator image is the preferred next
-candidate for a complete payload; an Android 14 x86_64 GApps distribution is an
-alternative. Compatibility with Lepton must be established in either case.
-The existing Google APIs image can support initial services experiments, but
-cannot alone provide the requested Store installation workflow.
+The existing Android 14 x86_64 Google APIs image is the first candidate for the
+services-only experiment. No additional Google Play image is required to start.
+Whether its packages satisfy a particular game's dependencies must be tested.
+
+## Services availability versus validation
+
+[Google Play services APIs](https://developers.google.com/android/guides/overview)
+communicate with the Google Play services application at runtime. Supplying that
+application and its dependencies may resolve missing-service failures in some
+sideloaded games. It does not establish that the device is Google-certified or
+that the user has a game license.
+
+Some games require more than those background services:
+
+- [Google Play Licensing](https://developer.android.com/google/play/licensing/overview)
+  requires the Google Play client, which handles license-check requests.
+- [Play Integrity](https://developer.android.com/google/play/integrity/error-codes)
+  can fail with `PLAY_STORE_NOT_FOUND` when the official Store package is absent.
+- [Integrity licensing verdicts](https://developer.android.com/google/play/integrity/verdicts)
+  can report sideloaded apps as `UNLICENSED`. Device and application integrity
+  checks are additional, separate requirements.
+
+Consequently services-only support is a compatibility experiment, not a promise
+that all Play-distributed games will run. Capture the exact game's logcat to
+distinguish missing services from Store dependencies, licensing/integrity
+rejection, missing split APKs/assets, and native-library failures. Even games
+that do not use licensing may have SDK-specific Store-package dependencies.
 
 ## What Waydroid does
 
@@ -77,9 +103,10 @@ Waydroid; running it directly is not a Lepton installer.
 ## Lepton requirements to resolve
 
 - `android_device_valve_lepton/remove_packages/Android.mk` explicitly removes
-  `DownloadProvider` and `DownloadProviderUi`. Restore the matching AOSP packages
-  for the optional GApps variant and test DownloadManager before Store downloads.
-  Other removed providers and disabled framework services need a dependency audit.
+  `DownloadProvider` and `DownloadProviderUi`. Determine whether the services or
+  test game actually need DownloadManager, and restore matching AOSP packages
+  if needed. Store downloads are outside scope. Other removed providers and
+  disabled framework services need a dependency audit.
 - Preserve Lepton's framework, Binder, UID, graphics, and container changes.
   Copying complete Google system/vendor partitions would replace those changes.
 - Preserve Google APK signatures and supply matching permission configuration
@@ -89,29 +116,31 @@ Waydroid; running it directly is not a Lepton installer.
   services startup. Their compatibility is not established by a successful game
   launch using NDK translation.
 - Lepton selects persistent data by runtime context and Steam compatibility data
-  path (`compat_tool/liblepton/liblepton.sh`, `mounting.sh`). A game installed in
-  the Store's context will not automatically appear in another game's context.
-  First test Store and games in one persistent development context; then design
-  Steam launch integration, including split APKs, asset downloads, and licensing.
+  path (`compat_tool/liblepton/liblepton.sh`, `mounting.sh`). Test Google-services
+  state and any necessary account sign-in in the game's persistent context.
+  Do not assume a separate services-test context shares account state with games.
 - Waydroid documents [registering an uncertified installation's Android ID](https://docs.waydro.id/faq/google-play-certification).
   Whether Lepton can sign in must be tested. Successful sign-in would not by
   itself establish compatibility with every game's integrity or DRM requirements.
 
 ## Proposed experiment
 
-1. Inventory a complete Android 14 x86_64 Google payload, record source and hashes,
-   and check package signatures, ABI, libraries, and permission dependencies.
+1. Inventory the existing Android 14 x86_64 Google APIs payload, record source and
+   hashes, and check package signatures, ABI, libraries, and permission dependencies.
+   Exclude Play Store from the payload.
 2. Add an opt-in extraction/injection workflow to the existing main scripts,
    following the NDK payload approach. Keep proprietary payloads outside Git.
    No `--with-gapps` option is implemented yet.
-3. Build a disposable GApps stage with the required AOSP providers restored and
+3. Build a disposable GApps stage with required AOSP dependencies restored and
    fresh sysbake. Use a separate persistent runtime context on Fedora.
-4. Test boot, package registration, service stability, DownloadManager, Store
-   launch, and persistence before interactive account sign-in.
-5. With manual sign-in, download a free game, verify installation and assets,
-   launch it, restart the context, and test its Google-services interactions.
-6. Integrate launching Store-installed packages through Steam, then package the
-   tested variant with the existing deploy script and validate on Steam Deck.
+4. Test boot, package registration, service stability, and persistence. Confirm
+   that no Play Store package is installed. Test account sign-in only if required.
+5. Install the same local game APK set in native and services-enabled stages;
+   compare launch results and logcat. Supply required splits/assets. Restart the
+   context and test its Google-services interactions and state persistence.
+6. Classify remaining failures by dependency, licensing, integrity, or runtime
+   behavior. Package the tested variant with the existing deploy script and
+   validate on Steam Deck.
 
 GApps should remain opt-in while these checks are unresolved. NDK translation
 is independent: native x86_64 Google components do not eliminate the need for
