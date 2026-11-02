@@ -103,6 +103,45 @@ Results include continuous `app-logcat.log`, boot logs, install/activity output,
 package/activity details, native stacks, and `screen.png` when capture succeeds.
 A surviving process alone does not prove gameplay, controls or sound work.
 
+### APKMirror split bundles
+
+App mode accepts `.apkm` as well as a single `.apk`. For example:
+
+```bash
+source .build-env
+bash tests/runtime/run-apk.sh \
+  --stage-dir "$LEPTON_OUTPUT_DIR/native-bridge-research/lepton-ndk-test-v2" \
+  --runtime-dir compat_tool --apk "$PWD/apks/Kingdom.apkm" \
+  --expect-abi arm64-v8a --app --rendering amd --display desktop \
+  --seconds 180 --execute
+```
+
+The runner extracts the base APK, selected ABI split and feature/asset splits,
+then installs them together in an Android package-manager session. Files remain
+under the private workspace's `apks/`. Additional evidence includes
+`install-session.log`, `apk-paths.txt`, `installed-packages-before.txt` and
+`properties.txt`. Preflight temporarily extracts only base and ABI metadata.
+
+Kingdom 7.10.002 (version code 218152), tested without GApps on 2 November 2026:
+
+- Installed base, `split_config.arm64_v8a.apk` and `split_UnityDataAssetPack.apk`;
+  package manager confirmed `primaryCpuAbi=arm64-v8a`.
+- Initial testing exposed multiline `pm path` handling in Lepton's install hook
+  and OBB helper. Both now select the base APK's directory explicitly.
+- After that fix, startup still aborted with
+  `JNI DETECTED ERROR IN APPLICATION: java_object == null`, in `GetObjectClass`.
+  The log immediately preceding it reports `No service published for: locale`.
+  Lepton's framework patch disables `LocaleManagerService`; causation remains
+  unproven. Google-services and missing-Play-Store warnings occur as well and
+  do not alone establish the fatal dependency.
+- No gameplay or successful login was observed. The runtime package inventory
+  confirmed GMS, GSF and Play Store were absent. Restoring the locale service is
+  a candidate follow-up before treating this as solely a GApps problem.
+
+APKM SHA-256: `8bb748a916db6988c209780524f60aa214001c5068e1f2486285133f9f1da0cd`.
+Evidence after the split-path fix: `.jni-smoke-work.U9nAuY0K` beneath the NDK v2
+stage. APK files remain local and ignored by Git.
+
 Omit `--app` for the purpose-built JNI smoke APK, which must return
 `LEPTON_JNI_SMOKE_PASS value=42`. `tests/runtime/build-jni-smoke.sh --help` describes
 building either ABI from an existing Android 14 checkout without an image rebuild.

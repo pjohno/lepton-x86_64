@@ -24,6 +24,13 @@ For a real game, add `--app --rendering amd --display desktop --seconds 90`.
 The runner forces and verifies the requested ABI for universal APKs. See
 [the Fedora guide](../../FEDORA-DEBUGGING.md) and `--help` for all options.
 
+`--apk` also accepts APKMirror `.apkm` bundles in app mode. It installs the base,
+selected conventional ABI split, and feature/asset splits in one package-manager
+session. Preflight temporarily extracts only base and ABI metadata; execution
+retains the full selected APK set beneath the test workspace. APKs must be at
+the archive root with safe, unique filenames. `.xapk` and `.apks` formats are not
+supported by this path.
+
 For fast host-side regression tests without booting Android or using the network:
 
 ```bash

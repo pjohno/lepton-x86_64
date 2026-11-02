@@ -2,7 +2,8 @@
 
 APP_ID=$1
 
-APP_PATH="$(pm path ${APP_ID} | sed "s/^package://g" | sed "s/\/base.apk$//g")";
+APP_PATH="$(pm path "$APP_ID" | sed -n 's|^package:\(.*\)/base\.apk$|\1|p')"
+[[ -n "$APP_PATH" ]] || exit 1
 
 local OBB_INNER_PATH="${APP_PATH}"
 
@@ -15,4 +16,4 @@ fi
 rm -f /data/media/0/Android/obb/${APP_ID} || true
 rmdir /data/media/0/Android/obb/${APP_ID} || true
 
-ln -sv ${OBB_INNER_PATH} /data/media/0/Android/obb/${APP_ID};
+ln -sv "${OBB_INNER_PATH}" "/data/media/0/Android/obb/${APP_ID}"

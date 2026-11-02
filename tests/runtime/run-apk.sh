@@ -14,12 +14,16 @@ DISPLAY_MODE=headless
 OBSERVE_SECONDS=20
 NDK_AUXV_SHIM=''
 RUNTIME_SOURCE=''
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+APK_PREFLIGHT_DIR=''
+APKM=false
 
 usage() {
     cat <<'HELP'
 Usage: bash tests/runtime/run-apk.sh --stage-dir DIR --apk FILE --expect-abi x86_64|arm64-v8a [--check|--execute] [--timeout SECONDS]
 
 For a regular game APK, add --app. Optional game/debug settings:
+  --apk FILE                 Single APK or APKMirror .apkm bundle (app mode)
   --rendering software|amd    Android graphics driver (default software)
   --display headless|desktop  Headless Weston or current Wayland desktop
   --seconds N                Observe the game for N seconds (default 20)
@@ -97,12 +101,34 @@ grep -qx 'ro.build.version.sdk=34' "$ROOTFS/system/build.prop" || fail 'Expected
 for tool in rsync podman weston python3 unzip grep flock realpath mktemp getfattr setfattr fuse-overlayfs systemctl timeout; do
     command -v "$tool" >/dev/null || fail "Missing host tool: $tool"
 done
-unzip -Z1 "$APK" | grep -Fx 'classes.dex' >/dev/null || fail 'Test APK missing classes.dex'
+cleanup_apk_preflight() {
+    if [[ -n "$APK_PREFLIGHT_DIR" ]]; then
+        rm -rf -- "$APK_PREFLIGHT_DIR"
+        APK_PREFLIGHT_DIR=''
+    fi
+}
+trap cleanup_apk_preflight EXIT
+METADATA_APK="$APK"
+NATIVE_APKS=("$APK")
+if [[ "${APK,,}" == *.apkm ]]; then
+    [[ "$APP_MODE" == true ]] || fail 'APKM bundles require --app'
+    APKM=true
+    APK_PREFLIGHT_DIR="$(mktemp -d /tmp/lepton-apkm-preflight.XXXXXXXX)"
+    python3 "$SCRIPT_DIR/unpack-apkm.py" "$APK" --abi "$EXPECT_ABI" \
+        --output "$APK_PREFLIGHT_DIR/apks" --metadata-only
+    METADATA_APK="$APK_PREFLIGHT_DIR/apks/base.apk"
+    NATIVE_APKS=("$APK_PREFLIGHT_DIR/apks/"*.apk)
+fi
+unzip -Z1 "$METADATA_APK" | grep -Fx 'classes.dex' >/dev/null || fail 'Test APK missing classes.dex'
 if [[ "$APP_MODE" == true ]]; then
     [[ -x "$TOOL/liblepton/apk_extractor/bin/apk-info-extractor" ]] || fail 'APK metadata extractor missing'
-    unzip -Z1 "$APK" | grep -E "^lib/$EXPECT_ABI/[^/]+[.]so$" >/dev/null || fail "APK has no native libraries for $EXPECT_ABI"
-    PACKAGE="$("$TOOL/liblepton/apk_extractor/bin/apk-info-extractor" --print-app-id "$APK")"
-    ACTIVITY="$("$TOOL/liblepton/apk_extractor/bin/apk-info-extractor" --print-activity-name "$APK")"
+    native_found=false
+    for native_apk in "${NATIVE_APKS[@]}"; do
+        if unzip -Z1 "$native_apk" | grep -E "^lib/$EXPECT_ABI/[^/]+[.]so$" >/dev/null; then native_found=true; fi
+    done
+    [[ "$native_found" == true ]] || fail "APK set has no native libraries for $EXPECT_ABI (APKM preflight supports conventional split_config ABI names)"
+    PACKAGE="$("$TOOL/liblepton/apk_extractor/bin/apk-info-extractor" --print-app-id "$METADATA_APK")"
+    ACTIVITY="$("$TOOL/liblepton/apk_extractor/bin/apk-info-extractor" --print-activity-name "$METADATA_APK")"
     [[ "$PACKAGE" =~ ^[a-zA-Z0-9_.]+$ && "$ACTIVITY" =~ ^[a-zA-Z0-9_.$]+$ ]] || fail 'Invalid package or launch activity metadata'
 else
     unzip -Z1 "$APK" | grep -Fx "lib/$EXPECT_ABI/libleptonjni.so" >/dev/null || fail "APK missing lib/$EXPECT_ABI/libleptonjni.so"
@@ -145,6 +171,7 @@ cleanup() {
     rc=$?
     trap - EXIT INT TERM
     set +e
+    cleanup_apk_preflight
     if [[ -n "$LOGCAT_PID" ]]; then
         kill "$LOGCAT_PID" 2>/dev/null
         wait "$LOGCAT_PID" 2>/dev/null
@@ -181,6 +208,12 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+if [[ "$APKM" == true ]]; then
+    info 'Extracting base, selected ABI and feature/asset APK splits'
+    python3 "$SCRIPT_DIR/unpack-apkm.py" "$APK" --abi "$EXPECT_ABI" --output "$WORK/apks"
+fi
+cleanup_apk_preflight
 
 mkdir -p "$WORK/bin" "$WORK/tmp" "$WORK/home/.steam" \
          "$WORK/home/.config" "$WORK/home/.local/share/Steam/steamapps" \
@@ -317,12 +350,29 @@ while ((SECONDS < deadline)); do
 done
 ((SECONDS < deadline)) || fail 'Android package manager not ready'
 
+podman exec "$container" /system/bin/pm list packages > "$WORK/installed-packages-before.txt"
+podman exec "$container" /system/bin/getprop > "$WORK/properties.txt"
 podman exec "$container" /system/bin/mkdir -p /data/local/tmp
-podman cp "$APK" "$container:/data/local/tmp/lepton-smoke.apk"
 info 'Installing APK'
-timeout --foreground "${TIMEOUT}s" podman exec "$container" /system/bin/pm install -r --abi "$EXPECT_ABI" /data/local/tmp/lepton-smoke.apk | tee "$WORK/install.log"
+if [[ "$APKM" == true ]]; then
+    podman cp "$WORK/apks" "$container:/data/local/tmp/lepton-apks"
+    timeout --foreground "${TIMEOUT}s" podman exec "$container" /system/bin/pm install-create -r --abi "$EXPECT_ABI" > "$WORK/install-session.log"
+    session_result="$(cat "$WORK/install-session.log")"
+    [[ "$session_result" =~ \[([0-9]+)\] ]] || fail "Cannot create install session: $session_result"
+    session_id="${BASH_REMATCH[1]}"
+    for split_apk in "$WORK/apks/"*.apk; do
+        split_name="${split_apk##*/}"
+        timeout --foreground "${TIMEOUT}s" podman exec "$container" /system/bin/pm install-write \
+            "$session_id" "$split_name" "/data/local/tmp/lepton-apks/$split_name" >> "$WORK/install-session.log"
+    done
+    timeout --foreground "${TIMEOUT}s" podman exec "$container" /system/bin/pm install-commit "$session_id" | tee "$WORK/install.log"
+else
+    podman cp "$APK" "$container:/data/local/tmp/lepton-smoke.apk"
+    timeout --foreground "${TIMEOUT}s" podman exec "$container" /system/bin/pm install -r --abi "$EXPECT_ABI" /data/local/tmp/lepton-smoke.apk | tee "$WORK/install.log"
+fi
 grep -qx 'Success' "$WORK/install.log" || fail 'Android package installation failed'
 if [[ "$APP_MODE" == true ]]; then
+    podman exec "$container" /system/bin/pm path "$PACKAGE" > "$WORK/apk-paths.txt"
     info "Launching $PACKAGE/$ACTIVITY for ${OBSERVE_SECONDS}s"
     podman exec "$container" /system/bin/logcat -c
     podman exec "$container" /system/bin/logcat -b all > "$WORK/app-logcat.log" 2>&1 &

@@ -8,15 +8,19 @@ function android_sdk_version()
     cat /system/build.prop |grep ro.build.version.sdk= | sed "s/.*=//g"
 }
 
+package_install_dir()
+{
+    # Split packages return multiple lines. Only base.apk identifies the directory.
+    cmd_real package path "$1" | sed -n 's|^package:\(.*\)/base\.apk$|\1|p'
+}
+
 # These helper functions unmount all vulkan layers from an app's libdir, and mount them in again
 unmount_vulkan_layers()
 {
     cmd_real package list packages -3 -U | while IFS= read -r package_line; do
         package=$(echo "$package_line" | cut -d' ' -f1 | cut -d: -f2)
         for vulkan_layer in /vendor/enabled_vulkan_layers/*.so; do
-            APP_PATH=$(pm path "$package")
-            APP_PATH="${APP_PATH#package:}"
-            APP_PATH="${APP_PATH%/base.apk}"
+            APP_PATH="$(package_install_dir "$package")"
 
             if [[ -n "${APP_PATH}" ]]; then
                 local APP_LIB_DIR="${APP_PATH}/lib/arm64"
@@ -33,9 +37,8 @@ mount_vulkan_layers()
     cmd_real package list packages -3 -U | while IFS= read -r package_line; do
         package=$(echo "$package_line" | cut -d' ' -f1 | cut -d: -f2)
         for vulkan_layer in /vendor/enabled_vulkan_layers/*.so; do
-            APP_PATH=$(pm path "$package")
-            APP_PATH="${APP_PATH#package:}"
-            APP_PATH="${APP_PATH%/base.apk}"
+            APP_PATH="$(package_install_dir "$package")"
+            [[ -n "$APP_PATH" ]] || continue
 
             # Mount enabled vulkan layers
             local LEPTON_LIB_DIR="/vendor/enabled_vulkan_layers"
@@ -132,9 +135,7 @@ if [ "$?" = "0" ] && [ "$1" = "package" ] && { [ "$2" = "install" ] || [ "$2" = 
     rm -rf /data/media/0/Android/obb/${APP_ID};
     mkdir -p /data/media/0/Android/obb
 
-    APP_PATH="$(cmd_real package path ${APP_ID})"
-    APP_PATH="${APP_PATH#package:}"
-    APP_PATH="${APP_PATH%/base.apk}"
+    APP_PATH="$(package_install_dir "$APP_ID")"
 
     if [[ -z "${APP_PATH}" ]]; then
         >&2 echo "Lepton post installation failed due to APP_PATH being unset."
@@ -165,7 +166,7 @@ if [ "$?" = "0" ] && [ "$1" = "package" ] && { [ "$2" = "install" ] || [ "$2" = 
         PARENT_UID=0 PARENT_GID=0 /system/bin/mount -o rbind,rw "/data/steam_app/obb" "${APP_PATH}/obb"
     fi
 
-    ln -s ${OBB_INNER_PATH} /data/media/0/Android/obb/${APP_ID}
+    ln -s "${OBB_INNER_PATH}" "/data/media/0/Android/obb/${APP_ID}"
 
     # Grep the runtime permissions path for a particular permission
     function all_permissions_granted()
