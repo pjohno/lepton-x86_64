@@ -43,6 +43,13 @@ while (($#)); do
     esac
 done
 
+# Double-clicked in a file manager: reopen in a terminal so progress is visible.
+if [[ ! -t 0 && ! -t 1 && -z "${LEPTON_INSTALL_IN_TERMINAL:-}" &&
+      ( -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ) ]] && command -v konsole >/dev/null 2>&1; then
+    export LEPTON_INSTALL_IN_TERMINAL=1
+    exec konsole --hold -e bash "$(realpath -e -- "${BASH_SOURCE[0]}")" "$@"
+fi
+
 [[ $(id -u) -ne 0 ]] || fail 'Run as your normal user (deck), without sudo'
 [[ $(uname -m) == x86_64 ]] || fail 'This bundle requires an x86_64 host'
 for program in tar gzip sha256sum python3 realpath mktemp; do
@@ -171,17 +178,54 @@ bin_dir="$HOME/.local/bin"
 mkdir -p -- "$bin_dir"
 ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game" "$bin_dir/lepton-add-game"
 ln -sfn -- "$DEST/tests/runtime/run-apk.sh" "$bin_dir/lepton-run-apk"
-pass "Commands: $bin_dir/lepton-add-game, $bin_dir/lepton-run-apk"
+ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game-gui" "$bin_dir/lepton-add-game-gui"
+pass "Commands: $bin_dir/lepton-add-game, $bin_dir/lepton-add-game-gui, $bin_dir/lepton-run-apk"
+
+# Menu (and desktop) entries: usable without a keyboard. They use the
+# ~/.local/bin links, so they always follow the default (latest) install.
+apps="$DATA_HOME/applications"
+mkdir -p -- "$apps"
+if command -v konsole >/dev/null 2>&1; then
+    check_exec="konsole --hold -e \"$bin_dir/lepton-run-apk\" --gpu-check --execute"; check_terminal=false
+else
+    check_exec="\"$bin_dir/lepton-run-apk\" --gpu-check --execute"; check_terminal=true
+fi
+cat > "$apps/lepton-x86_64-add-game.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Lepton: Add Android game
+Comment=Add an APK to Steam with the Lepton x86_64 compatibility tool
+Exec="$bin_dir/lepton-add-game-gui"
+Icon=applications-games
+Terminal=false
+Categories=Game;
+DESKTOP
+cat > "$apps/lepton-x86_64-gpu-check.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Lepton: Check graphics
+Comment=Boot Android once and confirm AMD hardware acceleration
+Exec=$check_exec
+Icon=video-display
+Terminal=$check_terminal
+Categories=Game;
+DESKTOP
+desktop_dir="$HOME/Desktop"
+if [[ -d "$desktop_dir" ]]; then
+    for entry in lepton-x86_64-add-game.desktop lepton-x86_64-gpu-check.desktop; do
+        install -m 755 "$apps/$entry" "$desktop_dir/$entry"
+    done
+fi
+pass "Menu entries: Lepton: Add Android game, Lepton: Check graphics"
 
 cat <<EOF
 
-Next steps
-  1. Check graphics (Desktop Mode, ~1 minute):
-       ~/.local/bin/lepton-run-apk --gpu-check --execute
-  2. Fully exit Steam, then add a game:
-       ~/.local/bin/lepton-add-game ~/path/to/game.apk
-  3. Start Steam. In the game's controller layout enable
-     Touchscreen Native Support (see the install guide).
+Next steps (desktop icons or application menu > Games; no typing needed)
+  1. "Lepton: Check graphics" (about a minute; should report RADV)
+  2. "Lepton: Add Android game": pick an APK; Steam restarts by itself
+  3. In the game's controller layout enable Touchscreen Native Support
+Terminal equivalents: lepton-run-apk --gpu-check --execute,
+                      lepton-add-game --restart-steam GAME.apk (in ~/.local/bin)
 EOF
 if [[ -n "$BACKUP" ]]; then
     printf '\nPrevious install kept at %s (delete it once the new one works).\n' "$BACKUP"

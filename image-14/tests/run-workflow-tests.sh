@@ -9,6 +9,7 @@ done
 bash "$repo/compat_tool/liblepton/ndk_auxv/test.sh"
 python3 -B "$repo/tests/test-build-integration.py"
 python3 -B "$repo/tests/test-add-game-tool-selection.py"
+bash "$repo/tests/test-add-game-gui.sh"
 python3 -B "$repo/tests/test-register-tool.py"
 python3 -B "$repo/tests/runtime/test-apkm.py"
 python3 -B "$repo/tests/runtime/test-locale-build.py"

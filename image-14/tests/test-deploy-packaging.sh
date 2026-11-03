@@ -38,7 +38,8 @@ for command in ssh rsync; do
         real_rsync="$(command -v rsync)"
         printf '#!/bin/bash\nfor arg in "$@"; do if [[ "$arg" == deck@* ]]; then echo rsync >> "$TRACE"; exit 0; fi; done\nexec %q "$@"\n' "$real_rsync" > "$work/bin/rsync"
     else
-        printf '#!/bin/sh\necho ssh >> "$TRACE"\n' > "$work/bin/ssh"
+        # Keep the desktop entry the transfer writes on the Deck for validation.
+        printf '#!/bin/sh\necho ssh >> "$TRACE"\ncase "$*" in *Desktop*) cat > "$TRACE.desktop";; esac\n' > "$work/bin/ssh"
     fi
     chmod +x "$work/bin/$command"
 done
@@ -79,7 +80,9 @@ installer="$out/lepton-x86_64-steamdeck-fixture.install.sh"
 grep -Fq ' lepton-x86_64-steamdeck-fixture.install.sh' "$archive.sha256"
 deck_home="$work/deck-home"
 mkdir -p "$deck_home"
-deck() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$deck_home" bash "$installer" --allow-non-amd "$@"; }
+# LEPTON_INSTALL_IN_TERMINAL stops the installer reopening itself in Konsole.
+deck() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 HOME="$deck_home" bash "$installer" --allow-non-amd "$@"; }
+mkdir -p "$deck_home/Desktop"
 deck --check > "$work/install-check.log"
 dest="$deck_home/.local/share/lepton_x86_64_fixture"
 [[ ! -e "$dest" && ! -e "$deck_home/.config" ]]
@@ -92,6 +95,13 @@ grep -Fq '"Lepton x86_64 (community) - fixture"' "$vdf"
 ( source "$deck_home/.config/lepton-x86_64/lepton_x86_64_fixture.env"; [[ "$LEPTON_X86_INSTALL_DIR" == "$dest" ]] )
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$dest/compat_tool/tools/lepton-add-game" ]]
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-run-apk")" == "$dest/tests/runtime/run-apk.sh" ]]
+[[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game-gui")" == "$dest/compat_tool/tools/lepton-add-game-gui" ]]
+grep -Fqx "Exec=\"$deck_home/.local/bin/lepton-add-game-gui\"" "$deck_home/.local/share/applications/lepton-x86_64-add-game.desktop"
+grep -Fq -- '--gpu-check --execute' "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
+[[ -x "$deck_home/Desktop/lepton-x86_64-add-game.desktop" && -x "$deck_home/Desktop/lepton-x86_64-gpu-check.desktop" ]]
+if command -v desktop-file-validate >/dev/null; then
+    desktop-file-validate "$deck_home/.local/share/applications/"lepton-x86_64-*.desktop
+fi
 # The linked helper resolves its own install without flags.
 HOME="$deck_home" python3 - "$deck_home/.local/bin/lepton-add-game" "$dest" <<'PYADD'
 import importlib.machinery, importlib.util, sys
@@ -128,7 +138,10 @@ reject --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundl
 run --transfer-only --check --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1 > "$work/transfer-check.log"
 [[ ! -e "$TRACE" ]]
 run --transfer-only --execute --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1 > "$work/transfer.log"
-[[ $(wc -l < "$TRACE") == 3 ]]
+[[ $(wc -l < "$TRACE") == 4 ]]  # ssh mkdir, rsync, ssh verify, ssh desktop icon
+sed "s|@HOME@|/home/deck|g" "$TRACE.desktop" > "$work/lepton-install-fixture.desktop"
+grep -Fqx 'Exec=konsole --hold -e bash "/home/deck/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-fixture.install.sh"' "$work/lepton-install-fixture.desktop"
+if command -v desktop-file-validate >/dev/null; then desktop-file-validate "$work/lepton-install-fixture.desktop"; fi
 printf 'broken' >> "$archive"
 reject --transfer-only --check --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1
 echo 'PASS: read-only packaging/transfer checks, real archive, xattr preservation, overwrite guards and mocked transfer'

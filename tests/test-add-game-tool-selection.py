@@ -112,6 +112,45 @@ class ToolSelectionTests(unittest.TestCase):
             self.run_main('--install-dir', str(self.alt), '--runtime-profile', 'playgames-native')
         self.assertFalse((self.user / 'shortcuts.vdf').exists())
 
+    def run_with_steam(self, running, *args):
+        """Run with a mocked Steam process that exits after `steam -shutdown`."""
+        state = {'running': running, 'commands': []}
+        def fake_run(command, **kwargs):
+            state['commands'].append(command)
+            if command == ['steam', '-shutdown']:
+                state['running'] = False
+        with patch.object(sys, 'argv', [str(SCRIPT), str(self.apk), *args]), \
+             patch.object(self.module, 'steam_running', side_effect=lambda: state['running']), \
+             patch.object(self.module.subprocess, 'run', side_effect=fake_run), \
+             patch.object(self.module.time, 'sleep'), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.module.main()
+        return state
+
+    def test_running_steam_requires_restart_flag(self):
+        with self.assertRaisesRegex(ValueError, '--restart-steam'):
+            self.run_with_steam(True)
+        self.assertFalse((self.user / 'shortcuts.vdf').exists())
+        self.assertFalse(self.module.STEAM_STOPPED)
+
+    def test_restart_steam_closes_steam_then_writes(self):
+        state = self.run_with_steam(True, '--restart-steam')
+        self.assertEqual(state['commands'], [['steam', '-shutdown']])
+        self.assertTrue(self.module.STEAM_STOPPED)
+        self.assertTrue((self.user / 'shortcuts.vdf').exists())
+        self.assertIn('"name"\t\t"lepton_x86_64_dev"', self.config.read_text())
+
+    def test_restart_steam_leaves_stopped_steam_alone(self):
+        state = self.run_with_steam(False, '--restart-steam')
+        self.assertEqual(state['commands'], [])
+        self.assertFalse(self.module.STEAM_STOPPED)
+        self.assertTrue((self.user / 'shortcuts.vdf').exists())
+
+    def test_dry_run_allowed_while_steam_runs(self):
+        state = self.run_with_steam(True, '--dry-run')
+        self.assertEqual(state['commands'], [])
+        self.assertFalse((self.user / 'shortcuts.vdf').exists())
+
     def test_invalid_tool_id_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Invalid compatibility-tool ID'):
             self.run_main('--tool-id', '../wrong')

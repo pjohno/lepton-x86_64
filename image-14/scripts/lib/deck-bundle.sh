@@ -62,13 +62,31 @@ transfer_bundle() {
     remote="deck@$deck_ip"
     printf 'Transferring archive and checksum to %s:~/Downloads/lepton-deck-bundles/ ...\n' "$remote"
     ssh "$remote" 'mkdir -p "$HOME/Downloads/lepton-deck-bundles"'
-    rsync -rtv --partial --progress -- "${files[@]}" \
+    # -p keeps the installer executable so it can be double-clicked.
+    rsync -rtpv --partial --progress -- "${files[@]}" \
         "$remote:Downloads/lepton-deck-bundles/"
     printf 'Verifying checksum on Steam Deck...\n'
     ssh "$remote" "cd \"\$HOME/Downloads/lepton-deck-bundles\" && sha256sum --check '$(basename -- "$checksum")'"
+    # Tap-to-install icon on the Deck's desktop (the on-screen keyboard is
+    # Steam's, so avoid requiring any typing in Desktop Mode).
+    local installer_name entry_name
+    installer_name="$(basename -- "$installer")"
+    entry_name="lepton-install-${bundle_id}.desktop"
+    # @HOME@ is replaced on the Deck with its real home directory.
+    # shellcheck disable=SC2087  # local expansion of the bundle names is intended
+    ssh "$remote" "mkdir -p \"\$HOME/Desktop\" && sed \"s|@HOME@|\$HOME|g\" > \"\$HOME/Desktop/$entry_name\" && chmod 755 \"\$HOME/Desktop/$entry_name\"" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Install Lepton $bundle_id
+Comment=Install this Lepton x86_64 bundle and register it with Steam
+Exec=konsole --hold -e bash "@HOME@/Downloads/lepton-deck-bundles/$installer_name"
+Icon=system-software-install
+Terminal=false
+DESKTOP
     printf 'PASS: transferred and verified on Steam Deck at %s\n' "$remote"
+    printf 'Desktop icon added on the Deck: Install Lepton %s\n' "$bundle_id"
     printf 'NOTE: existing Steam Deck Lepton installation was not changed.\n'
-    printf 'To install, run on the Deck (Desktop Mode, Konsole):\n'
+    printf 'To install: double-tap "Install Lepton %s" on the Deck desktop, or run\n' "$bundle_id"
     printf '  bash ~/Downloads/lepton-deck-bundles/%s\n' "$(basename -- "$installer")"
 }
 
@@ -258,6 +276,8 @@ install -m 755 "$repo/compat_tool/tools/lepton-register-tool" \
     "$tmp/payload/compat_tool/tools/lepton-register-tool"
 install -m 755 "$repo/compat_tool/tools/lepton-install-bundle" \
     "$tmp/payload/compat_tool/tools/lepton-install-bundle"
+install -m 755 "$repo/compat_tool/tools/lepton-add-game-gui" \
+    "$tmp/payload/compat_tool/tools/lepton-add-game-gui"
 install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
     "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
 
@@ -294,7 +314,8 @@ bundle, tool, name, directory, archive, installer, gapps, ndk = sys.argv[2:]
     install_directory=directory, gapps=gapps == 'true', ndk=ndk == 'true'), indent=2) + '\n')
 (root / 'STEAM-DECK-INSTALL.txt').write_text(f'''Lepton Steam Deck bundle: {name}
 
-Install (Desktop Mode, Konsole), with the archive, .sha256 and installer together:
+Install (Desktop Mode): double-tap the "Install Lepton {bundle}" desktop icon
+(or the .install.sh file in Dolphin), or in Konsole:
   bash ~/Downloads/lepton-deck-bundles/{installer}
 
 The installer verifies the checksum, extracts to ~/.local/share/{directory},
@@ -302,11 +323,14 @@ registers the Steam compatibility tool "{name}", and writes
 ~/.config/lepton-x86_64/{tool}.env. It never overwrites an existing install;
 use --replace to update this same tool (the old copy is kept).
 
-Then:
-  ~/.local/bin/lepton-run-apk --gpu-check --execute     # confirm AMD RADV graphics
-  ~/.local/bin/lepton-add-game ~/path/to/game.apk        # with Steam fully exited
+Then use the new desktop/menu entries (no typing needed):
+  "Lepton: Check graphics"      confirms AMD RADV graphics
+  "Lepton: Add Android game"    picks an APK; Steam restarts by itself
+Terminal equivalents:
+  ~/.local/bin/lepton-run-apk --gpu-check --execute
+  ~/.local/bin/lepton-add-game --restart-steam ~/path/to/game.apk
 
-Restart Steam, and enable Touchscreen Native Support in the game's controller
+Enable Touchscreen Native Support in the game's controller
 layout (Controller Settings > Edit Layout > Default Action Set >
 Always-On Command > System > Touchscreen Native Support).
 

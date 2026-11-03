@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Touch-friendly "add Android game to Steam" for Steam Deck Desktop Mode.
+# Uses zenity (or kdialog) so nothing has to be typed: the Steam on-screen
+# keyboard disappears once Steam exits, so lepton-add-game --restart-steam
+# closes Steam, adds the shortcut and starts Steam again by itself.
+set -Euo pipefail
+
+TOOLS="$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")"
+ADD_GAME="$TOOLS/lepton-add-game"
+TITLE='Lepton: Add Android game'
+
+# LEPTON_DIALOG=zenity|kdialog selects the dialog tool explicitly.
+if [[ -n "${LEPTON_DIALOG:-}" ]]; then
+    [[ "$LEPTON_DIALOG" == zenity || "$LEPTON_DIALOG" == kdialog ]] || { printf 'LEPTON_DIALOG must be zenity or kdialog\n' >&2; exit 1; }
+    UI="$LEPTON_DIALOG"
+elif command -v zenity >/dev/null 2>&1; then
+    UI=zenity
+elif command -v kdialog >/dev/null 2>&1; then
+    UI=kdialog
+else
+    printf 'Neither zenity nor kdialog is available; use lepton-add-game in a terminal.\n' >&2
+    exit 1
+fi
+
+pick_apk() {
+    if [[ "$UI" == zenity ]]; then
+        zenity --file-selection --title="$TITLE: choose an APK" --filename="$HOME/Downloads/" \
+            --file-filter='Android apps (*.apk) | *.apk *.APK' 2>/dev/null
+    else
+        kdialog --title "$TITLE" --getopenfilename "$HOME/Downloads" '*.apk *.APK|Android apps (*.apk)'
+    fi
+}
+ask_name() {
+    if [[ "$UI" == zenity ]]; then
+        zenity --entry --title="$TITLE" --text='Name shown in Steam:' --entry-text="$1" 2>/dev/null
+    else
+        kdialog --title "$TITLE" --inputbox 'Name shown in Steam:' "$1"
+    fi
+}
+confirm() {
+    if [[ "$UI" == zenity ]]; then
+        zenity --question --title="$TITLE" --no-markup --width=420 --text="$1" 2>/dev/null
+    else
+        kdialog --title "$TITLE" --yesno "$1"
+    fi
+}
+show() {  # show info|error TEXT
+    if [[ "$UI" == zenity ]]; then
+        zenity "--$1" --title="$TITLE" --no-markup --width=480 --text="$2" 2>/dev/null
+    elif [[ "$1" == error ]]; then
+        kdialog --title "$TITLE" --error "$2"
+    else
+        kdialog --title "$TITLE" --msgbox "$2"
+    fi
+}
+
+[[ -f "$ADD_GAME" ]] || { show error "lepton-add-game not found next to this launcher ($TOOLS)."; exit 1; }
+
+apk="$(pick_apk)" || exit 0
+[[ -n "$apk" ]] || exit 0
+default_name="$(basename -- "$apk")"
+default_name="${default_name%.*}"
+name="$(ask_name "$default_name")" || exit 0
+[[ -n "$name" ]] || name="$default_name"
+
+# Validate before touching Steam (a dry run works while Steam is running).
+if ! check="$(python3 "$ADD_GAME" "$apk" --name "$name" --dry-run 2>&1)"; then
+    show error "Cannot add this game:
+
+$check"
+    exit 1
+fi
+confirm "Add \"$name\" to Steam?
+
+Steam will close, the shortcut will be added, and Steam will start again.
+This can take up to a minute." || exit 0
+
+log="$(mktemp)"
+trap 'rm -f -- "$log"' EXIT
+run_add() { python3 "$ADD_GAME" "$apk" --name "$name" --restart-steam > "$log" 2>&1; }
+if [[ "$UI" == zenity ]]; then
+    rc_file="$(mktemp)"
+    { run_add; echo $? > "$rc_file"; echo 100; } |
+        zenity --progress --pulsate --auto-close --no-cancel --title="$TITLE" \
+            --text="Adding \"$name\" (Steam will restart)..." 2>/dev/null || true
+    rc="$(cat "$rc_file")"
+    rm -f -- "$rc_file"
+else
+    rc=0
+    run_add || rc=$?
+fi
+
+if [[ "$rc" == 0 ]]; then
+    show info "\"$name\" was added to Steam (Non-Steam games).
+
+For touch input, open the game's controller layout and enable:
+Edit Layout > Default Action Set > Always-On Command > System >
+Touchscreen Native Support
+
+$(cat "$log")"
+else
+    show error "Adding the game failed:
+
+$(cat "$log")"
+    exit 1
+fi

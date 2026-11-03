@@ -54,12 +54,17 @@ bash image-14/scripts/deploy-compat-x86_64.sh --transfer-only --execute \
     --bundle-id my-deck-01 --deck-ip 192.168.1.50
 ```
 
-This copies all three files to `~/Downloads/lepton-deck-bundles/` on the Deck and
-verifies the checksum there. You can also add `--deck-ip` to step 1.
+This copies all three files to `~/Downloads/lepton-deck-bundles/` on the Deck,
+verifies the checksum there, and puts an **Install Lepton my-deck-01** icon on the
+Deck's desktop. You can also add `--deck-ip` to step 1.
 
 **By USB drive.** Copy the three files into one folder on the Deck.
 
-## 3. Install (Steam Deck, Desktop Mode, Konsole)
+## 3. Install (Steam Deck, Desktop Mode)
+
+Double-tap **Install Lepton my-deck-01** on the desktop. (After a USB copy,
+double-tap the `.install.sh` file in Dolphin instead.) A Konsole window shows
+progress. From a terminal, the same is:
 
 ```bash
 bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-my-deck-01.install.sh
@@ -71,7 +76,9 @@ The installer:
 2. extracts to `~/.local/share/<install directory>` (it refuses to overwrite);
 3. registers the Steam compatibility tool **Lepton x86_64 (community) - my-deck-01**;
 4. writes `~/.config/lepton-x86_64/<tool id>.env` and makes it the default;
-5. links `lepton-add-game` and `lepton-run-apk` into `~/.local/bin`.
+5. links `lepton-add-game`, `lepton-add-game-gui` and `lepton-run-apk` into `~/.local/bin`;
+6. adds **Lepton: Add Android game** and **Lepton: Check graphics** to the desktop
+   and to the application menu (Games).
 
 Use `--check` to verify without installing. To update the same tool later, run
 the new bundle's installer with `--replace`; the old copy is kept as
@@ -79,24 +86,21 @@ the new bundle's installer with `--replace`; the old copy is kept as
 
 ## 4. Check graphics
 
-```bash
-~/.local/bin/lepton-run-apk --gpu-check --execute
-```
-
-This boots Android once without any app (about a minute) and must end with
+Double-tap **Lepton: Check graphics**, or run
+`~/.local/bin/lepton-run-apk --gpu-check --execute`. This boots Android once
+without any app (about a minute) and must end with
 `[PASS] Hardware acceleration: ANGLE on Vulkan/RADV`. On a Steam Deck the
 graphics line names `RADV VANGOGH`.
 
 ## 5. Add a game
 
-Fully exit Steam (Steam menu > Exit, including from Gaming Mode), then:
+Double-tap **Lepton: Add Android game**, pick the APK, confirm the name. Steam
+closes, the shortcut is added, and Steam starts again by itself, so no typing is
+needed after Steam exits (the on-screen keyboard is part of Steam). The game
+appears under Non-Steam games with the Lepton tool selected.
 
-```bash
-~/.local/bin/lepton-add-game ~/Downloads/my-game.apk
-```
-
-Add `--dry-run` to check first, `--name "Title"` to change the Steam name. Restart
-Steam; the game appears under Non-Steam games with the Lepton tool selected.
+From a terminal: `~/.local/bin/lepton-add-game --restart-steam ~/Downloads/my-game.apk`
+(add `--dry-run` to check first, `--name "Title"` to change the Steam name).
 
 **Touch input**: in the game's controller layout enable
 Controller Settings > Edit Layout > Default Action Set > Always-On Command >
