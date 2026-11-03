@@ -2,6 +2,11 @@
 
 **Status:** experimental. This covers fresh Android rootfs staging, isolated system-data baking, local packaging and optional transfer, rather than Steam registration or installation. The existing Steam Deck Lepton installation remains the known-good reference until a complete new build has passed runtime tests.
 
+**Single command:** `image-14/scripts/make-deck-bundle-x86_64.sh` runs every step
+below (stage, tools, sysbake, package, optional transfer) and also writes the
+Deck installer. See [INSTALL-STEAM-DECK.md](../../INSTALL-STEAM-DECK.md). The
+individual steps remain available for debugging.
+
 The x86_64-only build container definitions live in `image-14/.buildscripts_x86_64/`.
 Valve-derived `.buildscripts/` machinery remains in its original location.
 

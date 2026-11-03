@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Complete fresh Android 14 x86_64 -> Steam Deck bundle workflow.
 # Never uses Valve's destructive CI sysbake helpers or deploys to Steam.
 set -Eeuo pipefail

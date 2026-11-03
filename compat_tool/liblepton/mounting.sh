@@ -442,6 +442,22 @@ function disable_qti_display()
     podman_mount_entry "$(prefix)/qti-display.rc" "/vendor/etc/init/vendor.qti.hardware.display.allocator-service.rc" rw,U
 }
 
+# x86_64 port: the Android image ships only AMD (RADV/radeonsi) GPU drivers.
+# Stop early with a clear message instead of an opaque Android graphics failure.
+function check_host_gpu()
+{
+    [[ "$(uname -m)" == "x86_64" ]] || return 0
+    [[ "${LEPTON_FORCE_SOFTWARE:-}" != "true" && "${LEPTON_SKIP_GPU_CHECK:-false}" != "true" ]] || return 0
+    local vendor_file
+    for vendor_file in /sys/class/drm/renderD*/device/vendor; do
+        [[ -r "${vendor_file}" ]] || continue
+        [[ "$(<"${vendor_file}")" == "0x1002" ]] && return 0
+    done
+    die "Lepton x86_64: no AMD GPU render node (/dev/dri/renderD*, vendor 0x1002) found." \
+        "This build only includes AMD RADV/radeonsi drivers (Steam Deck and AMD Radeon GPUs)." \
+        "Set LEPTON_FORCE_SOFTWARE=true to try slow software rendering instead."
+}
+
 function setup_podman_mounts()
 {
     local PREFIX="$(prefix)"

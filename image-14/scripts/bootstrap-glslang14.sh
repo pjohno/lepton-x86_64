@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Bootstrap glslang 14 inside the isolated Lepton Android 14 checkout.
 set -Eeuo pipefail
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Unpack root-level APKMirror APK sets for isolated runtime tests."""
 import argparse
 from pathlib import Path

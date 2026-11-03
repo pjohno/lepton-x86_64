@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Build a minimal JNI smoke-test APK using an existing Android 14 AOSP checkout.
 # No AOSP rebuild; no rootfs or Lepton stage modifications.
 set -Eeuo pipefail

@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Install a Lepton x86_64 Steam Deck bundle for the current user.
+#
+#   bash lepton-x86_64-steamdeck-ID.install.sh            # install
+#   bash lepton-x86_64-steamdeck-ID.install.sh --check    # verify only
+#   bash lepton-x86_64-steamdeck-ID.install.sh --replace  # update same tool ID
+#
+# Steps: verify checksum, extract to ~/.local/share/<install_directory>,
+# register the Steam compatibility tool, and write
+# ~/.config/lepton-x86_64/<tool_id>.env (+ default.env) for the helper tools.
+set -Eeuo pipefail
+
+# Packaging substitutes the archive name; an explicit ARCHIVE argument wins.
+DEFAULT_ARCHIVE=''
+MODE=execute
+REPLACE=false
+ALLOW_NON_AMD=false
+ARCHIVE=''
+
+fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
+info() { printf '[INFO] %s\n' "$*"; }
+pass() { printf '[PASS] %s\n' "$*"; }
+usage() {
+    sed -n '3,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    cat <<'HELP'
+Options:
+  --check          Verify the archive and destination; change nothing
+  --replace        Replace an existing install of the SAME tool ID; the old
+                   directory is kept as <dir>.previous-<timestamp>
+  --allow-non-amd  Install on a host without an AMD GPU (software rendering only)
+  ARCHIVE          Bundle .tar.gz (default: the archive next to this script)
+HELP
+}
+while (($#)); do
+    case "$1" in
+        --check) MODE=check; shift ;;
+        --replace) REPLACE=true; shift ;;
+        --allow-non-amd) ALLOW_NON_AMD=true; shift ;;
+        -h|--help) usage; exit 0 ;;
+        -*) fail "Unknown option: $1" ;;
+        *) [[ -z "$ARCHIVE" ]] || fail 'Only one archive may be given'; ARCHIVE="$1"; shift ;;
+    esac
+done
+
+[[ $(id -u) -ne 0 ]] || fail 'Run as your normal user (deck), without sudo'
+[[ $(uname -m) == x86_64 ]] || fail 'This bundle requires an x86_64 host'
+for program in tar gzip sha256sum python3 realpath mktemp; do
+    command -v "$program" >/dev/null || fail "Missing required program: $program"
+done
+
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ -z "$ARCHIVE" ]]; then
+    [[ -n "$DEFAULT_ARCHIVE" ]] || fail 'Give the bundle .tar.gz path as an argument'
+    ARCHIVE="$here/$DEFAULT_ARCHIVE"
+fi
+ARCHIVE="$(realpath -e -- "$ARCHIVE")" || fail "Archive not found: $ARCHIVE"
+[[ "$ARCHIVE" == *.tar.gz && -f "$ARCHIVE" ]] || fail 'Expected a .tar.gz bundle'
+CHECKSUM="$ARCHIVE.sha256"
+[[ -f "$CHECKSUM" ]] || fail "Checksum file missing: $CHECKSUM (copy it next to the archive)"
+
+info "Verifying $(basename -- "$ARCHIVE") (this reads the whole archive)"
+( cd "$(dirname -- "$ARCHIVE")" && sha256sum --check --ignore-missing --quiet "$(basename -- "$CHECKSUM")" ) ||
+    fail 'Checksum verification failed; re-transfer the bundle'
+grep -Fq " $(basename -- "$ARCHIVE")" "$CHECKSUM" || grep -Fq "*$(basename -- "$ARCHIVE")" "$CHECKSUM" ||
+    fail 'Checksum file does not list this archive'
+pass 'Archive checksum verified'
+
+amd=false
+for vendor_file in /sys/class/drm/renderD*/device/vendor; do
+    [[ -r "$vendor_file" && "$(<"$vendor_file")" == 0x1002 ]] && amd=true
+done
+if [[ "$amd" == true ]]; then
+    pass 'AMD GPU render node found (hardware acceleration available)'
+elif [[ "$ALLOW_NON_AMD" == true ]]; then
+    info 'WARNING: no AMD GPU found; launch games with LEPTON_FORCE_SOFTWARE=true'
+else
+    fail 'No AMD GPU found. This build only ships AMD drivers; use --allow-non-amd to install anyway'
+fi
+
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/lepton-x86_64"
+STEAM_TOOLS="$HOME/.local/share/Steam/compatibilitytools.d"
+mkdir -p -- "$DATA_HOME"
+DATA_HOME="$(realpath -e -- "$DATA_HOME")"
+TEMP="$(mktemp -d "$DATA_HOME/.lepton-install.XXXXXXXX")"
+cleanup() {
+    [[ -n "${TEMP:-}" ]] && rm -f -- "$TEMP.meta"
+    [[ -z "${TEMP:-}" || ! -d "$TEMP" ]] && return
+    chmod -R u+rwX -- "$TEMP" 2>/dev/null || true
+    rm -rf -- "$TEMP"
+}
+trap cleanup EXIT
+
+info 'Extracting bundle'
+tar -xzf "$ARCHIVE" -C "$TEMP" --no-same-owner
+[[ -f "$TEMP/BUNDLE.json" && -x "$TEMP/compat_tool/lepton" ]] || fail 'Archive is not a Lepton x86_64 bundle'
+
+# Read and validate bundle metadata (tool ID, display name, directory).
+python3 - "$TEMP/BUNDLE.json" > "$TEMP.meta" <<'PY' || fail 'Invalid BUNDLE.json'
+import json, re, sys
+m = json.load(open(sys.argv[1], encoding='utf-8'))
+tool, name, directory = m['tool_id'], m['display_name'], m['install_directory']
+bundle = m.get('bundle_id', '')
+if not re.fullmatch(r'[A-Za-z0-9_]{1,96}', tool): raise SystemExit('invalid tool_id')
+if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,95}', directory): raise SystemExit('invalid install_directory')
+if not name or any(c in name for c in '\x00\r\n'): raise SystemExit('invalid display_name')
+print(tool); print(name); print(directory); print(bundle)
+print(str(m.get('gapps', False)).lower()); print(str(m.get('ndk', False)).lower())
+PY
+mapfile -t meta < "$TEMP.meta"
+rm -f -- "$TEMP.meta"
+(( ${#meta[@]} == 6 )) || fail 'Invalid BUNDLE.json'
+TOOL_ID="${meta[0]}"; TOOL_NAME="${meta[1]}"; INSTALL_NAME="${meta[2]}"
+BUNDLE_ID="${meta[3]}"; HAS_GAPPS="${meta[4]}"; HAS_NDK="${meta[5]}"
+DEST="$DATA_HOME/$INSTALL_NAME"
+info "Tool: $TOOL_NAME ($TOOL_ID)"
+info "Install directory: $DEST"
+
+BACKUP=''
+if [[ -e "$DEST" || -L "$DEST" ]]; then
+    [[ -d "$DEST" && ! -L "$DEST" ]] || fail "Destination is not a normal directory: $DEST"
+    [[ "$REPLACE" == true ]] || fail "Already installed at $DEST. Re-run with --replace to update it (the old copy is kept)."
+    old_tool="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tool_id"])' "$DEST/BUNDLE.json" 2>/dev/null || true)"
+    [[ "$old_tool" == "$TOOL_ID" ]] || fail "Existing directory belongs to another tool ID ('$old_tool'); refusing to replace"
+    BACKUP="$DEST.previous-$(date +%Y%m%d-%H%M%S)"
+    info "Existing install will be moved to $BACKUP"
+fi
+registration="$STEAM_TOOLS/$TOOL_ID.vdf"
+if [[ -f "$registration" ]] && ! grep -Fq "\"$DEST/compat_tool\"" "$registration"; then
+    fail "Steam tool ID $TOOL_ID is already registered for another directory: $registration"
+fi
+
+if [[ "$MODE" == check ]]; then
+    pass 'Install preflight passed; nothing was changed'
+    exit 0
+fi
+
+if pgrep -x steam >/dev/null 2>&1; then
+    info 'Steam is running: it will only see the new tool after a restart'
+fi
+if [[ -n "$BACKUP" ]]; then
+    mv -T -- "$DEST" "$BACKUP"
+fi
+mv -T -- "$TEMP" "$DEST"
+TEMP=''
+pass "Installed to $DEST"
+
+register_args=(--execute)
+[[ "$REPLACE" == false ]] || register_args+=(--replace)
+python3 "$DEST/compat_tool/tools/lepton-register-tool" "${register_args[@]}"
+
+mkdir -p -- "$CONFIG_DIR"
+env_file="$CONFIG_DIR/$TOOL_ID.env"
+{
+    printf '# Written by lepton-install-bundle; read by lepton-add-game and run-apk.sh.\n'
+    printf 'LEPTON_X86_TOOL_ID=%q\n' "$TOOL_ID"
+    printf 'LEPTON_X86_TOOL_NAME=%q\n' "$TOOL_NAME"
+    printf 'LEPTON_X86_BUNDLE_ID=%q\n' "$BUNDLE_ID"
+    printf 'LEPTON_X86_INSTALL_DIR=%q\n' "$DEST"
+    printf 'LEPTON_X86_GAPPS=%q\n' "$HAS_GAPPS"
+    printf 'LEPTON_X86_NDK=%q\n' "$HAS_NDK"
+    if [[ "$amd" == true ]]; then printf 'LEPTON_X86_RENDERING=amd\n'; else printf 'LEPTON_X86_RENDERING=software\n'; fi
+    printf 'LEPTON_X86_DISPLAY=desktop\n'
+} > "$env_file.tmp"
+mv -f -- "$env_file.tmp" "$env_file"
+ln -sfn -- "$TOOL_ID.env" "$CONFIG_DIR/default.env"
+pass "Settings: $env_file (now the default install)"
+
+bin_dir="$HOME/.local/bin"
+mkdir -p -- "$bin_dir"
+ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game" "$bin_dir/lepton-add-game"
+ln -sfn -- "$DEST/tests/runtime/run-apk.sh" "$bin_dir/lepton-run-apk"
+pass "Commands: $bin_dir/lepton-add-game, $bin_dir/lepton-run-apk"
+
+cat <<EOF
+
+Next steps
+  1. Check graphics (Desktop Mode, ~1 minute):
+       ~/.local/bin/lepton-run-apk --gpu-check --execute
+  2. Fully exit Steam, then add a game:
+       ~/.local/bin/lepton-add-game ~/path/to/game.apk
+  3. Start Steam. In the game's controller layout enable
+     Touchscreen Native Support (see the install guide).
+EOF
+if [[ -n "$BACKUP" ]]; then
+    printf '\nPrevious install kept at %s (delete it once the new one works).\n' "$BACKUP"
+fi

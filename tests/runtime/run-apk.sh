@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Run the same JNI smoke APK against either a known-good x86_64 Lepton stage
 # or an experimental NDK-enabled stage without using the host Podman store.
 set -Eeuo pipefail
@@ -17,7 +18,10 @@ UNTIL_EXIT=false
 NDK_AUXV_SHIM=''
 RUNTIME_SOURCE=''
 SERVICES_JAR=''
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_DIR="$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")"
+RENDERING_SET=false
+DISPLAY_SET=false
+GPU_CHECK=false
 APK_PREFLIGHT_DIR=''
 APKM=false
 NETWORK_SYSCTLS=false
@@ -29,7 +33,15 @@ ACCEPT_RUNTIME_UPDATE=false
 
 usage() {
     cat <<'HELP'
-Usage: bash tests/runtime/run-apk.sh --stage-dir DIR --apk FILE --expect-abi x86_64|arm64-v8a [--check|--execute] [--timeout SECONDS]
+Usage: bash tests/runtime/run-apk.sh [--stage-dir DIR] --apk FILE --expect-abi x86_64|arm64-v8a [--check|--execute] [--timeout SECONDS]
+       bash tests/runtime/run-apk.sh [--stage-dir DIR] --gpu-check [--check|--execute]
+
+Without --stage-dir, an installed bundle is used: the one containing this
+script, else ~/.config/lepton-x86_64/default.env. Installed bundles default to
+--rendering amd --display desktop (from the env file) and --expect-abi x86_64.
+
+--gpu-check boots Android without an APK and verifies that ANGLE is running on
+the expected driver (RADV for --rendering amd, SwiftShader for software).
 
 For a regular game APK, add --app. Optional game/debug settings:
   --apk FILE                 Single APK or APKMirror .apkm bundle (app mode)
@@ -76,9 +88,10 @@ while (($#)); do
         --codec2) CODEC2=true; shift ;;
         --profile) PROFILE="${2:?}"; shift 2 ;;
         --setup-only) SETUP_ONLY=true; shift ;;
+        --gpu-check) GPU_CHECK=true; shift ;;
         --accept-runtime-update) ACCEPT_RUNTIME_UPDATE=true; shift ;;
-        --rendering) (($# >= 2)) || fail '--rendering requires mode'; RENDERING="$2"; shift 2 ;;
-        --display) (($# >= 2)) || fail '--display requires mode'; DISPLAY_MODE="$2"; shift 2 ;;
+        --rendering) (($# >= 2)) || fail '--rendering requires mode'; RENDERING="$2"; RENDERING_SET=true; shift 2 ;;
+        --display) (($# >= 2)) || fail '--display requires mode'; DISPLAY_MODE="$2"; DISPLAY_SET=true; shift 2 ;;
         --seconds) (($# >= 2)) || fail '--seconds requires integer'; OBSERVE_SECONDS="$2"; shift 2 ;;
         --ndk-auxv-shim) (($# >= 2)) || fail '--ndk-auxv-shim requires file'; NDK_AUXV_SHIM="$2"; shift 2 ;;
         --services-jar) SERVICES_JAR="${2:?}"; shift 2 ;;
@@ -87,13 +100,41 @@ while (($#)); do
         *) usage >&2; fail "Unknown argument: $1" ;;
     esac
 done
+if [[ -z "$STAGE" ]]; then
+    # Installed bundle: this script lives in <install>/tests/runtime.
+    env_file="${XDG_CONFIG_HOME:-$HOME/.config}/lepton-x86_64/default.env"
+    if [[ -f "$SCRIPT_DIR/../../BUNDLE.json" ]]; then
+        STAGE="$(realpath -e -- "$SCRIPT_DIR/../..")"
+        tool_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tool_id"])' "$STAGE/BUNDLE.json")"
+        env_file="${XDG_CONFIG_HOME:-$HOME/.config}/lepton-x86_64/$tool_id.env"
+    fi
+    if [[ -f "$env_file" ]]; then
+        # Written by lepton-install-bundle (printf %q values).
+        # shellcheck source=/dev/null
+        source "$env_file"
+        STAGE="${STAGE:-${LEPTON_X86_INSTALL_DIR:-}}"
+        [[ "$RENDERING_SET" == true ]] || RENDERING="${LEPTON_X86_RENDERING:-amd}"
+        [[ "$DISPLAY_SET" == true ]] || DISPLAY_MODE="${LEPTON_X86_DISPLAY:-desktop}"
+    elif [[ -n "$STAGE" ]]; then
+        [[ "$RENDERING_SET" == true ]] || RENDERING=amd
+        [[ "$DISPLAY_SET" == true ]] || DISPLAY_MODE=desktop
+    fi
+    [[ -n "$STAGE" ]] || fail 'No --stage-dir given and no installed bundle found (run the bundle installer first)'
+    [[ -n "$EXPECT_ABI" ]] || EXPECT_ABI=x86_64
+    info "Using installed bundle: $STAGE (rendering $RENDERING, display $DISPLAY_MODE)"
+fi
+if [[ "$GPU_CHECK" == true ]]; then
+    [[ -z "$APK" && "$SETUP_ONLY" == false && "$APP_MODE" == false && -z "$PROFILE" ]] ||
+        fail '--gpu-check cannot be combined with an APK, --app, --setup-only or --profile'
+    EXPECT_ABI="${EXPECT_ABI:-x86_64}"
+fi
 [[ "$EXPECT_ABI" == x86_64 || "$EXPECT_ABI" == arm64-v8a ]] || fail 'Expected ABI must be x86_64 or arm64-v8a'
 [[ "$UNTIL_EXIT" == false || ( "$APP_MODE" == true && "$SETUP_ONLY" == false && "$MEDIA_SMOKE" == false ) ]] || fail '--until-exit requires a regular --app session'
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail 'Timeout must be a positive integer'
 [[ "$OBSERVE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail 'Seconds must be a positive integer'
 [[ "$RENDERING" == software || "$RENDERING" == amd ]] || fail 'Rendering must be software or amd'
 [[ "$DISPLAY_MODE" == headless || "$DISPLAY_MODE" == desktop ]] || fail 'Display must be headless or desktop'
-[[ -n "$STAGE" && ( -n "$APK" || "$SETUP_ONLY" == true ) ]] || { usage >&2; fail 'Supply stage and APK, or --setup-only'; }
+[[ -n "$STAGE" && ( -n "$APK" || "$SETUP_ONLY" == true || "$GPU_CHECK" == true ) ]] || { usage >&2; fail 'Supply stage and APK, --setup-only or --gpu-check'; }
 if [[ -n "$PROFILE" ]]; then
     [[ "$PROFILE" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$ ]] || fail 'Invalid profile name'
     [[ "$APP_MODE" == true || "$SETUP_ONLY" == true ]] || fail 'Profiles require --app or --setup-only'
@@ -103,7 +144,7 @@ fi
 [[ $(id -u) != 0 ]] || fail 'Run as an ordinary user, without sudo'
 [[ $(uname -m) == x86_64 ]] || fail 'x86_64 host required'
 STAGE="$(realpath -e -- "$STAGE")" || fail 'Stage not found'
-if [[ "$SETUP_ONLY" == false ]]; then
+if [[ -n "$APK" ]]; then
     APK="$(realpath -e -- "$APK")" || fail 'APK not found'
     [[ -f "$APK" && ! -L "$APK" ]] || fail 'APK must be a regular file'
     [[ "$APK" != "$STAGE/"* ]] || fail 'Put test APK outside the source stage'
@@ -154,7 +195,7 @@ cleanup_apk_preflight() {
 trap cleanup_apk_preflight EXIT
 METADATA_APK="$APK"
 NATIVE_APKS=("$APK")
-if [[ "$SETUP_ONLY" == false ]]; then
+if [[ -n "$APK" ]]; then
 if [[ "${APK,,}" == *.apkm ]]; then
     [[ "$APP_MODE" == true ]] || fail 'APKM bundles require --app'
     APKM=true
@@ -179,7 +220,7 @@ else
     unzip -Z1 "$APK" | grep -Fx "lib/$EXPECT_ABI/libleptonjni.so" >/dev/null || fail "APK missing lib/$EXPECT_ABI/libleptonjni.so"
 fi
 fi
-if [[ "$EXPECT_ABI" == x86_64 && "$APP_MODE" == false && "$SETUP_ONLY" == false ]]; then
+if [[ "$EXPECT_ABI" == x86_64 && "$APP_MODE" == false && "$SETUP_ONLY" == false && "$GPU_CHECK" == false ]]; then
     [[ ! -e "$ROOTFS/system/lib64/libndk_translation.so" ]] || fail 'Baseline stage unexpectedly contains NDK translator'
 elif [[ "$EXPECT_ABI" == arm64-v8a ]]; then
     [[ -f "$ROOTFS/system/lib64/libndk_translation.so" ]] || fail 'NDK stage missing translator'
@@ -484,6 +525,23 @@ podman exec "$container" /system/bin/getprop > "$WORK/properties.txt"
 podman exec "$container" /system/bin/service list > "$WORK/services.txt"
 podman exec "$container" /system/bin/dumpsys connectivity > "$WORK/connectivity.txt"
 podman exec "$container" /system/bin/ip address > "$WORK/ip-address.txt"
+# Record which graphics stack Android actually selected.
+podman exec "$container" /system/bin/dumpsys SurfaceFlinger > "$WORK/surfaceflinger.txt" 2>&1 || true
+gles_line="$(grep -m1 '^GLES:' "$WORK/surfaceflinger.txt" || true)"
+info "Graphics: ${gles_line:-<no GLES line in dumpsys SurfaceFlinger>}"
+for name in ro.hardware.egl ro.hardware.vulkan ro.hardware.gralloc; do
+    info "$name=$(grep -F "[$name]" "$WORK/properties.txt" | sed 's/.*: \[\(.*\)\]/\1/')"
+done
+if [[ "$GPU_CHECK" == true ]]; then
+    if [[ "$RENDERING" == amd ]]; then
+        [[ "$gles_line" == *RADV* ]] || fail "ANGLE is not running on AMD RADV; see $WORK/surfaceflinger.txt"
+        pass 'Hardware acceleration: ANGLE on Vulkan/RADV'
+    else
+        [[ "$gles_line" == *SwiftShader* ]] || fail "Expected SwiftShader software rendering; see $WORK/surfaceflinger.txt"
+        pass 'Software rendering: ANGLE on SwiftShader'
+    fi
+    exit 0
+fi
 if [[ "$SETUP_ONLY" == true ]]; then
     info "Setup profile ready for ${OBSERVE_SECONDS}s; no game installed"
     podman exec "$container" /system/bin/logcat -b all > "$WORK/setup-logcat.log" 2>&1 &

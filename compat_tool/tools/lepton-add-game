@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Add an Android APK or saved runtime profile as a Steam non-Steam shortcut.
 
 Run with Steam fully exited. Uses Python's standard library only.
 Refuses unknown VDF formats rather than overwriting Steam configuration.
 """
 import argparse
+import json
 import os
 from pathlib import Path
 import re
@@ -14,9 +16,50 @@ import sys
 import tempfile
 import zlib
 
-TOOL = "lepton_x86_64_dev"
-INSTALL = Path.home() / ".local/share/lepton-x86_64-dev"
+LEGACY_TOOL = "lepton_x86_64_dev"
+LEGACY_INSTALL = Path.home() / ".local/share/lepton-x86_64-dev"
 STEAM = Path.home() / ".local/share/Steam"
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "lepton-x86_64"
+
+
+def read_env(path):
+    """Parse a KEY=VALUE env file written by lepton-install-bundle."""
+    values = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        parsed = shlex.split(value)
+        values[key] = parsed[0] if parsed else ""
+    return values
+
+
+def installed_tool(tool_id):
+    """Return (tool, install) for an installed tool ID, or None."""
+    env = CONFIG_DIR / (tool_id + ".env")
+    if not env.is_file():
+        return None
+    values = read_env(env)
+    return values.get("LEPTON_X86_TOOL_ID", tool_id), Path(values["LEPTON_X86_INSTALL_DIR"])
+
+
+def default_tool():
+    """Pick the install this script belongs to, then the default install, then legacy."""
+    try:
+        own = Path(__file__).resolve().parents[2]
+        metadata = json.loads((own / "BUNDLE.json").read_text(encoding="utf-8"))
+        return metadata["tool_id"], own
+    except (OSError, ValueError, KeyError, IndexError, NameError):
+        pass
+    try:
+        values = read_env(CONFIG_DIR / "default.env")
+        return values["LEPTON_X86_TOOL_ID"], Path(values["LEPTON_X86_INSTALL_DIR"])
+    except (OSError, ValueError, KeyError):
+        return LEGACY_TOOL, LEGACY_INSTALL
+
+
+TOOL, INSTALL = default_tool()
 
 
 def fail(message):
@@ -167,9 +210,9 @@ def main():
     parser.add_argument("--userdata", type=Path,
                         help="Steam userdata/<id> directory (required if multiple users)")
     parser.add_argument("--tool-id", default=TOOL,
-                        help="Steam compatibility-tool ID (default: lepton_x86_64_dev)")
+                        help="Steam compatibility-tool ID (default: this install, currently %s)" % TOOL)
     parser.add_argument("--install-dir", type=Path,
-                        help="Root of the selected tool installation; required for alternate tool IDs")
+                        help="Root of the selected tool installation; found automatically for installed tool IDs")
     parser.add_argument("--runtime-profile", help="Launch an existing persistent test profile (APK or APKM), without a compatibility-tool mapping")
     parser.add_argument("--expect-abi", choices=("x86_64", "arm64-v8a"), default="x86_64",
                         help="ABI for --runtime-profile (default: x86_64)")
@@ -178,14 +221,18 @@ def main():
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", args.runtime_profile):
             fail("Invalid runtime profile name")
         if args.install_dir is None:
-            fail("--runtime-profile requires --install-dir")
+            args.install_dir = INSTALL
         if args.hotplug:
             fail("Runtime profile shortcuts do not support --hotplug")
 
     if not re.fullmatch(r"[A-Za-z0-9_]+", args.tool_id):
         fail("Invalid compatibility-tool ID")
     if args.tool_id != TOOL and args.install_dir is None:
-        fail("--install-dir is required when selecting another --tool-id")
+        found = installed_tool(args.tool_id)
+        if found is None:
+            fail("--install-dir is required when selecting another --tool-id "
+                 "(no %s found)" % (CONFIG_DIR / (args.tool_id + ".env")))
+        args.install_dir = found[1]
     TOOL = args.tool_id
     if args.install_dir is not None:
         INSTALL = args.install_dir.expanduser().resolve(strict=True)

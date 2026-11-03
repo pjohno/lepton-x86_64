@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Exercise alternate Steam tool registration using only temporary fixtures."""
 import contextlib
 import importlib.machinery

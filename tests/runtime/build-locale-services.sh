@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Incrementally build services.jar with LocaleManagerService restored.
 # Source is overlaid read-only in the builder; existing Android build outputs
 # are updated, but source files, packaged images and runtime stages are untouched.

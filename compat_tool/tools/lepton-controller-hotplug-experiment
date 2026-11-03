@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Lepton experimental Steam Input hotplug bridge.
 # Default is read-only; --apply is required to alter Android symlinks.
 # Use only with the opt-in LEPTON_GAMEPAD_HOTPLUG=true source mount.

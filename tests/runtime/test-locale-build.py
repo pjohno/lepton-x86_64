@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Test experiment source isolation and build-cache restoration with a fake builder."""
 import os
 from pathlib import Path

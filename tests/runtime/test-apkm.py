@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Synthetic APKM selection and extraction regression tests."""
 import importlib.util
 import os

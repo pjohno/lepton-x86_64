@@ -1,5 +1,8 @@
 # Steam Deck Google-services test
 
+> **Historical test record (2 November 2026).** Bundles now ship with a one-command
+> installer; see [INSTALL-STEAM-DECK.md](../../INSTALL-STEAM-DECK.md) and [GAPPS.md](../../GAPPS.md).
+
 Start in Desktop Mode on a Wayland session, as user `deck`. This test uses a
 separate installation directory and private Podman store; it does not register
 or replace the existing Steam compatibility tool. Keep NDK installed: selecting

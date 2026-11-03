@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Exercise services staging against synthetic ext4 images, without Android boot."""
 import io
 import gzip

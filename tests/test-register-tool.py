@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Validate isolated registration and refusal to overwrite another tool."""
 import contextlib
 import importlib.machinery

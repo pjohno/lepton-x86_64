@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Internal deploy-compat-x86_64.sh packaging/transfer implementation.
 # Runs in a subshell so temporary-workspace traps cannot affect the caller.
 package_deck_bundle() (
@@ -25,6 +26,18 @@ outdir="$(realpath -m -- "$outdir")"
 [[ "$outdir" != / && "$outdir" != "$repo" ]] || { echo "ERROR: unsafe bundle output directory" >&2; exit 1; }
 archive="$outdir/lepton-x86_64-steamdeck-${bundle_id}.tar.gz"
 checksum="$archive.sha256"
+installer="$outdir/lepton-x86_64-steamdeck-${bundle_id}.install.sh"
+
+# Write the per-bundle Deck installer: the generic installer with this archive
+# name as its default, so the Deck user runs a single command.
+write_installer() {
+    local destination="$1" source="$repo/compat_tool/tools/lepton-install-bundle"
+    [[ -f "$source" ]] || { echo "ERROR: missing $source" >&2; exit 1; }
+    grep -qx "DEFAULT_ARCHIVE=''" "$source" || { echo 'ERROR: installer template marker missing' >&2; exit 1; }
+    sed "s|^DEFAULT_ARCHIVE=''\$|DEFAULT_ARCHIVE='$(basename -- "$archive")'|" "$source" > "$destination"
+    chmod 755 "$destination"
+    bash -n "$destination"
+}
 
 transfer_bundle() {
     [[ -n "$deck_ip" ]] || { echo 'ERROR: specify --deck-ip for transfer' >&2; exit 2; }
@@ -37,15 +50,26 @@ transfer_bundle() {
     }
     printf 'Verifying local archive checksum...\n'
     ( cd "$outdir" && sha256sum --check "$(basename -- "$checksum")" )
+    local files=("$archive" "$checksum")
+    if [[ -f "$installer" ]]; then
+        files+=("$installer")
+    else
+        # Bundles packaged before the installer existed: add one from this checkout.
+        printf 'Creating installer for older bundle: %s\n' "$installer"
+        write_installer "$installer"
+        files+=("$installer")
+    fi
     remote="deck@$deck_ip"
     printf 'Transferring archive and checksum to %s:~/Downloads/lepton-deck-bundles/ ...\n' "$remote"
     ssh "$remote" 'mkdir -p "$HOME/Downloads/lepton-deck-bundles"'
-    rsync -rtv --partial --progress -- "$archive" "$checksum" \
+    rsync -rtv --partial --progress -- "${files[@]}" \
         "$remote:Downloads/lepton-deck-bundles/"
     printf 'Verifying checksum on Steam Deck...\n'
     ssh "$remote" "cd \"\$HOME/Downloads/lepton-deck-bundles\" && sha256sum --check '$(basename -- "$checksum")'"
     printf 'PASS: transferred and verified on Steam Deck at %s\n' "$remote"
     printf 'NOTE: existing Steam Deck Lepton installation was not changed.\n'
+    printf 'To install, run on the Deck (Desktop Mode, Konsole):\n'
+    printf '  bash ~/Downloads/lepton-deck-bundles/%s\n' "$(basename -- "$installer")"
 }
 
 if [[ "$transfer_only" == true ]]; then
@@ -73,7 +97,7 @@ if [[ -z "$tool_id" ]]; then
     fi
 fi
 [[ "$tool_id" =~ ^[A-Za-z0-9_]{1,96}$ ]] || { echo 'ERROR: invalid tool ID' >&2; exit 2; }
-[[ -n "$tool_name" ]] || tool_name="Lepton x86_64 ($bundle_id)"
+[[ -n "$tool_name" ]] || tool_name="Lepton x86_64 (community) - $bundle_id"
 [[ "$tool_name" != *$'\n'* && "$tool_name" != *$'\r'* ]] || { echo 'ERROR: invalid tool name' >&2; exit 2; }
 install_name="$tool_id"
 [[ "$tool_id" != lepton_x86_64_dev ]] || install_name=lepton-x86_64-dev
@@ -157,7 +181,7 @@ grep -Fq 'no-force-stop' "$repo/compat_tool/liblepton/mounting.sh" || {
     echo 'ERROR: Fedora source missing tested automatic launch call' >&2; exit 1;
 }
 
-[[ ! -e "$archive" && ! -L "$archive" && ! -e "$checksum" && ! -L "$checksum" ]] || {
+[[ ! -e "$archive" && ! -L "$archive" && ! -e "$checksum" && ! -L "$checksum" && ! -e "$installer" && ! -L "$installer" ]] || {
     echo "ERROR: output already exists; refusing overwrite: $archive" >&2
     exit 1
 }
@@ -230,6 +254,8 @@ install -m 755 "$repo/compat_tool/tools/lepton-add-game" \
     "$tmp/payload/compat_tool/tools/lepton-add-game"
 install -m 755 "$repo/compat_tool/tools/lepton-register-tool" \
     "$tmp/payload/compat_tool/tools/lepton-register-tool"
+install -m 755 "$repo/compat_tool/tools/lepton-install-bundle" \
+    "$tmp/payload/compat_tool/tools/lepton-install-bundle"
 install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
     "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
 
@@ -250,39 +276,40 @@ fi
 
 # Metadata and registration use a distinct ID/directory for optional GApps.
 # The helper resolves the actual extracted path instead of assuming /home/deck.
-python3 - "$tmp/payload" "$bundle_id" "$tool_id" "$tool_name" "$install_name" "$(basename -- "$archive")" <<'PYBUNDLE'
+has_gapps=false
+[[ ! -f "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk" ]] || has_gapps=true
+has_ndk=false
+[[ ! -f "$stage/compat_tool/images/rootfs/system/lib64/libndk_translation.so" ]] || has_ndk=true
+python3 - "$tmp/payload" "$bundle_id" "$tool_id" "$tool_name" "$install_name" \
+    "$(basename -- "$archive")" "$(basename -- "$installer")" "$has_gapps" "$has_ndk" <<'PYBUNDLE'
 import json
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
-bundle, tool, name, directory, archive = sys.argv[2:]
+bundle, tool, name, directory, archive, installer, gapps, ndk = sys.argv[2:]
 (root / 'BUNDLE.json').write_text(json.dumps(dict(
-    format_version=1, bundle_id=bundle, tool_id=tool, display_name=name,
-    install_directory=directory), indent=2) + '\n')
+    format_version=2, bundle_id=bundle, tool_id=tool, display_name=name,
+    install_directory=directory, gapps=gapps == 'true', ndk=ndk == 'true'), indent=2) + '\n')
 (root / 'STEAM-DECK-INSTALL.txt').write_text(f'''Lepton Steam Deck bundle: {name}
 
-In Desktop Mode, extract into a NEW directory (existing installs are retained):
-  cd "$HOME/Downloads"
-  sha256sum -c {archive}.sha256 &&
-  mkdir "$HOME/.local/share/{directory}" &&
-  tar -xzf {archive} -C "$HOME/.local/share/{directory}" --no-same-owner
+Install (Desktop Mode, Konsole), with the archive, .sha256 and installer together:
+  bash ~/Downloads/lepton-deck-bundles/{installer}
 
-Register this compatibility tool, then restart Steam:
-  python3 "$HOME/.local/share/{directory}/compat_tool/tools/lepton-register-tool" --execute
-The registration refuses conflicting tool IDs. Existing registrations are kept.
+The installer verifies the checksum, extracts to ~/.local/share/{directory},
+registers the Steam compatibility tool "{name}", and writes
+~/.config/lepton-x86_64/{tool}.env. It never overwrites an existing install;
+use --replace to update this same tool (the old copy is kept).
 
-For a normal APK, fully exit Steam before adding its shortcut:
-  python3 "$HOME/.local/share/{directory}/compat_tool/tools/lepton-add-game" /path/to/game.apk --tool-id {tool} --install-dir "$HOME/.local/share/{directory}"
+Then:
+  ~/.local/bin/lepton-run-apk --gpu-check --execute     # confirm AMD RADV graphics
+  ~/.local/bin/lepton-add-game ~/path/to/game.apk        # with Steam fully exited
 
-For Google registration/sign-in, then APK/APKM install/play in a persistent
-profile, follow GAPPS.md. Saved profiles and credentials are never bundled.
-For a saved profile shortcut, use lepton-add-game --runtime-profile NAME
---install-dir "$HOME/.local/share/{directory}"; Steam compatibility forcing
-must remain unchecked for that native launcher shortcut.
+Restart Steam, and enable Touchscreen Native Support in the game's controller
+layout (Controller Settings > Edit Layout > Default Action Set >
+Always-On Command > System > Touchscreen Native Support).
 
-Enable Steam Input Touchscreen Native Support in the shortcut controller layout.
-Never overwrite a running installation. Default cleanup remains unchanged for
-normal APK shortcuts; saved profiles explicitly enable persistence.
+For Google sign-in and APKM games in a persistent profile, see GAPPS.md.
+Saved profiles and credentials are never bundled.
 ''')
 PYBUNDLE
 install -m 644 "$repo/GAPPS.md" "$tmp/payload/GAPPS.md"
@@ -323,12 +350,14 @@ printf 'Creating compressed archive...\n'
 gzip -t "$tmp/bundle.tar.gz"
 tar -tzf "$tmp/bundle.tar.gz" | grep -Fx './compat_tool/images/rootfs/system/etc/init/hw/init.rc' >/dev/null
 mv -- "$tmp/bundle.tar.gz" "$archive"
-( cd "$outdir" && sha256sum "$(basename -- "$archive")" ) > "$checksum"
+write_installer "$installer"
+( cd "$outdir" && sha256sum "$(basename -- "$archive")" "$(basename -- "$installer")" ) > "$checksum"
 printf 'PASS: filtered %s security.selinux entries; preserved %s user.* entries\n' \
     "$original_selinux_count" "$filtered_user_count"
 printf 'PASS: %s\n' "$archive"
 printf 'PASS: %s\n' "$checksum"
-ls -lh "$archive" "$checksum"
+printf 'PASS: %s\n' "$installer"
+ls -lh "$archive" "$checksum" "$installer"
 if [[ -n "$deck_ip" ]]; then transfer_bundle; fi
 
 )

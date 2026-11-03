@@ -141,6 +141,7 @@ function app_datadir()
 
 function setup_container()
 {
+    check_host_gpu
     cleanup_container
 
     # Mount in vulkan layers, if requested by certain environment variables

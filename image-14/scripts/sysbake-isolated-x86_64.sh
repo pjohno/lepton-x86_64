@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Create Android 14 sysbake with private Podman storage and a headless compositor.
 # This script never invokes the destructive upstream CI sysbake wrapper.
 set -Eeuo pipefail

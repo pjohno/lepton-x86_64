@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Extract only Android 14 x86_64 -> ARM64 native-bridge support files
 # from an already-unpacked Google APIs emulator logical system.img.
 # This script NEVER modifies the source image or any Lepton rootfs.

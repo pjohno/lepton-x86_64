@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Capture current Lepton x86_64 source changes without staging/committing to the real index.
 # Install under image-14/scripts/ and run: bash scripts/snapshot-worktree-patches.sh
 set -Eeuo pipefail

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Exercise CI packaging and wrapper/child integration without building Android."""
 import os
 from pathlib import Path

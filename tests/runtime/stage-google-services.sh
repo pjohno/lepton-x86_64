@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Local, opt-in Google-services experiment. Play Store requires an explicit flag.
 # Source stages are unchanged; Google binaries remain in external build output.
 set -Eeuo pipefail

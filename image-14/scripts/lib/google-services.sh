@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Shared offline extraction for the production deployer and experimental tests.
 google_services_check() (
     set -Eeuo pipefail

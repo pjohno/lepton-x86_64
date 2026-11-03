@@ -78,35 +78,33 @@ bash image-14/scripts/deploy-compat-x86_64.sh --package-only --execute \
 
 ## Install alongside another Deck bundle
 
-Transfer the archive and `.sha256` companion to the Deck's Downloads directory.
-In Desktop Mode, extract into a new directory and register its actual path:
+Transfer the archive, `.sha256` and `.install.sh` files together (for example
+with `deploy-compat-x86_64.sh --transfer-only`), then in Desktop Mode:
 
 ```bash
-cd "$HOME/Downloads"
-sha256sum -c lepton-x86_64-steamdeck-gapps-v1.tar.gz.sha256 &&
-  mkdir "$HOME/.local/share/lepton_gapps_v1" &&
-  tar -xzf lepton-x86_64-steamdeck-gapps-v1.tar.gz \
-    -C "$HOME/.local/share/lepton_gapps_v1" --no-same-owner
-python3 "$HOME/.local/share/lepton_gapps_v1/compat_tool/tools/lepton-register-tool" --execute
+bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-gapps-v1.install.sh
 ```
 
-Restart Steam after registration. Each bundle contains `BUNDLE.json` and exact
-install instructions. Use a different `--tool-id` for each parallel installation;
-conflicting registrations and existing destination directories are refused.
-GApps packaging automatically defaults to `lepton_gapps_<bundle-id>` (dots and
-hyphens become underscores), so it does not reuse `lepton_x86_64_dev`. A normal
-non-GApps package retains the legacy ID unless overridden.
+The installer verifies the checksum, extracts to a new directory named after the
+tool ID, registers the tool and makes it the default for `~/.local/bin/lepton-*`.
+Restart Steam afterwards. Each bundle needs its own `--tool-id`; conflicting
+registrations and existing destination directories are refused (use `--replace`
+to update the same tool). GApps packaging defaults to `lepton_gapps_<bundle-id>`
+(dots and hyphens become underscores), so it does not reuse `lepton_x86_64_dev`.
+A normal non-GApps package retains the legacy ID unless overridden. See
+[INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md) for the full flow.
 
 ## Registration, install/play, then Gaming Mode
 
 Start from the Deck's Wayland Desktop Mode, without sudo. Place the game/APKM
 outside the installation directory. For the tested native Play Games APKM:
 
+The runner uses the default (most recently installed) bundle, with AMD rendering
+on the desktop; pass `--stage-dir DIR` to select another installation.
+
 ```bash
-stage="$HOME/.local/share/lepton_gapps_v1"
-bash "$stage/tests/runtime/run-apk.sh" --stage-dir "$stage" \
-  --profile playgames-native --setup-only --expect-abi x86_64 \
-  --rendering amd --display desktop --network-sysctls --seconds 1800 --execute
+~/.local/bin/lepton-run-apk --profile playgames-native --setup-only \
+  --network-sysctls --seconds 1800 --execute
 ```
 
 Sign in within Android. Only if Google requests uncertified-device registration,
@@ -121,18 +119,16 @@ pkill -INT -f '[/]tests/runtime/run-apk.sh.*--profile playgames-native'
 Install/play with the same profile; subsequent runs reuse unchanged packages:
 
 ```bash
-bash "$stage/tests/runtime/run-apk.sh" --stage-dir "$stage" \
-  --profile playgames-native --app --expect-abi x86_64 \
+~/.local/bin/lepton-run-apk --profile playgames-native --app --expect-abi x86_64 \
   --apk "$HOME/Downloads/com.google.android.play.games.apkm" \
-  --rendering amd --display desktop --network-sysctls --until-exit --execute
+  --network-sysctls --until-exit --execute
 ```
 
 Stop the running session, fully exit Steam, and add the saved-profile shortcut:
 
 ```bash
-python3 "$stage/compat_tool/tools/lepton-add-game" \
-  "$HOME/Downloads/com.google.android.play.games.apkm" \
-  --install-dir "$stage" --runtime-profile playgames-native --expect-abi x86_64 \
+~/.local/bin/lepton-add-game "$HOME/Downloads/com.google.android.play.games.apkm" \
+  --runtime-profile playgames-native --expect-abi x86_64 \
   --name "Google Play Games (Lepton GApps)"
 ```
 

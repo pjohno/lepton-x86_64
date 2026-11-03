@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Reproducible Android 14 x86_64 system/vendor image build.
 set -Eeuo pipefail
 

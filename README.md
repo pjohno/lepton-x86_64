@@ -38,6 +38,8 @@ Known limitations:
 | `image-14/scripts/build-images-x86_64.sh` | Builds Android system/vendor images with the configured builder |
 | `image-14/scripts/package-repro-rootfs.sh` | Packages a separate test rootfs from locally built images |
 | `image-14/scripts/deploy-compat-x86_64.sh` | Stages a runtime; packages or transfers complete stages with `--package-only` / `--transfer-only` |
+| `image-14/scripts/make-deck-bundle-x86_64.sh` | One command from built images to an installable Steam Deck bundle |
+| `compat_tool/tools/lepton-install-bundle` | Deck-side installer, shipped next to each bundle |
 | `tests/runtime/` | Isolated local APK tests and JNI fixture builder |
 
 Some build components are Git submodules. Confirm that the URLs in `.gitmodules` are publicly accessible before attempting a fresh clone or reporting a reproducible clean build.
@@ -95,6 +97,20 @@ rootfs copy. It does not download Google binaries. Provision utilities and creat
 a fresh sysbake afterward. See [Fedora debugging and validation](FEDORA-DEBUGGING.md)
 for the complete workflow, local `apks/` directory, and test results.
 
+### Making a Steam Deck bundle and installing it
+
+Once the images are built, one command creates an installable bundle and a
+one-command installer for the Deck:
+
+```bash
+bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id my-deck-01
+```
+
+Follow **[INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md)** for transfer, installation,
+the graphics check, and adding games to Steam. Only AMD GPUs are supported: the
+image contains AMD RADV/radeonsi drivers, and Lepton stops with an explicit message
+on other hosts unless `LEPTON_FORCE_SOFTWARE=true` (slow software rendering) is set.
+
 **Do not point packaging or deployment scripts at an existing Steam Deck runtime, and do not distribute generated Android binaries without a separate license and security review.**
 
 ## Runtime testing prerequisites
@@ -130,12 +146,12 @@ side-by-side Deck bundles, persistent sign-in and APKM Gaming Mode shortcuts.
 
 The Deck bundle includes `compat_tool/tools/lepton-add-game`, a standard-library
 Python script to register a non-Steam APK shortcut, its Lepton compatibility
-tool mapping, and its Gamescope launch options. For example, after **fully
-exiting Steam** from Desktop Mode:
+tool mapping, and its Gamescope launch options. The installer links it into
+`~/.local/bin`, and it finds its own installation. After **fully exiting Steam**
+from Desktop Mode:
 
 ```bash
-python3 "$HOME/.local/share/lepton-x86_64-dev/compat_tool/tools/lepton-add-game" \
-    "$HOME/Android_Games/RetroArch.apk"
+~/.local/bin/lepton-add-game "$HOME/Android_Games/RetroArch.apk"
 ```
 
 Restart Steam to see the new shortcut. Add `--hotplug` to opt in to the

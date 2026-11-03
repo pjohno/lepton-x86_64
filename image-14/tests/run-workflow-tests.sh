@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Local regression suite: synthetic stages, no Android build/boot or network.
 set -Eeuo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Exercise the real deployment packaging entrypoint with a tiny synthetic stage.
 set -Eeuo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -70,6 +71,38 @@ python3 - "$work/BUNDLE.json" <<'PYMETA'
 import json, sys
 assert json.load(open(sys.argv[1]))['tool_id'] == 'lepton_x86_64_dev'
 PYMETA
+# Deck installer, run against a throwaway home (no real Steam/user files).
+installer="$out/lepton-x86_64-steamdeck-fixture.install.sh"
+[[ -x "$installer" ]]
+grep -Fq ' lepton-x86_64-steamdeck-fixture.install.sh' "$archive.sha256"
+deck_home="$work/deck-home"
+mkdir -p "$deck_home"
+deck() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$deck_home" bash "$installer" --allow-non-amd "$@"; }
+deck --check > "$work/install-check.log"
+dest="$deck_home/.local/share/lepton-x86_64-dev"
+[[ ! -e "$dest" && ! -e "$deck_home/.config" ]]
+deck > "$work/install.log"
+[[ -x "$dest/compat_tool/lepton" && -f "$dest/BUNDLE.json" ]]
+vdf="$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf"
+grep -Fq "\"$dest/compat_tool\"" "$vdf"
+grep -Fq '"Lepton x86_64 (community) - fixture"' "$vdf"
+[[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_dev.env ]]
+( source "$deck_home/.config/lepton-x86_64/lepton_x86_64_dev.env"; [[ "$LEPTON_X86_INSTALL_DIR" == "$dest" ]] )
+[[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$dest/compat_tool/tools/lepton-add-game" ]]
+[[ "$(readlink -f "$deck_home/.local/bin/lepton-run-apk")" == "$dest/tests/runtime/run-apk.sh" ]]
+# The linked helper resolves its own install without flags.
+HOME="$deck_home" python3 - "$deck_home/.local/bin/lepton-add-game" "$dest" <<'PYADD'
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader('add_game', sys.argv[1])
+module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(module)
+assert (module.TOOL, str(module.INSTALL)) == ('lepton_x86_64_dev', sys.argv[2]), (module.TOOL, module.INSTALL)
+PYADD
+if deck > "$work/reinstall.log" 2>&1; then echo 'FAIL: installer overwrote an existing install'; exit 1; fi
+grep -q -- '--replace' "$work/reinstall.log"
+deck --replace > "$work/replace.log"
+compgen -G "$dest.previous-*" > /dev/null
+[[ -x "$dest/compat_tool/lepton" ]]
 mkdir -p "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore"
 printf 'synthetic' > "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk"
 mkdir -p "$stage/compat_tool/images/rootfs/system/framework"
@@ -85,6 +118,7 @@ import json, sys
 metadata = json.load(open(sys.argv[1]))
 assert metadata['tool_id'] == 'lepton_gapps_gapps_fixture'
 assert metadata['install_directory'] == metadata['tool_id']
+assert metadata['gapps'] is True and metadata['ndk'] is False
 PYMETA
 reject --package-only --check --stage-dir "$stage" --bundle-dir "$out" --bundle-id invalid-tool --tool-id ../bad
 [[ ! -e "$TRACE" ]]

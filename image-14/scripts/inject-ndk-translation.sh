@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Experimental Android 14 x86_64 -> ARM64 bridge injection into a NEW rootfs copy.
 # Never edits the source Lepton rootfs, translator payload, compiled images or sysbake.
 set -Eeuo pipefail

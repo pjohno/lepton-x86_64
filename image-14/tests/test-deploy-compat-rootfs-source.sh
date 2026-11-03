@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Regression tests for default and alternate rootfs staging.
 # Uses a disposable synthetic checkout; never touches an actual Lepton build.
 set -Eeuo pipefail

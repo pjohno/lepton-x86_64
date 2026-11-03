@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Review the exact source rewrite and production patch agreement."""
 import importlib.util
 from pathlib import Path

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Replace only the reviewed, overly broad Valve VIEW interceptor in a copy."""
 from pathlib import Path
 import sys

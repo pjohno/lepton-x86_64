@@ -81,6 +81,8 @@ Android output tree. Its hashes are checked before the build starts. The stage
 receives a separate NDK-enabled rootfs and fresh sysbake; the compiled system and
 vendor images remain native x86_64. Without these flags the native path is unchanged.
 
+To build a new bundle from already compiled images (no AOSP rebuild), use
+`image-14/scripts/make-deck-bundle-x86_64.sh`; see [INSTALL-STEAM-DECK.md](../../INSTALL-STEAM-DECK.md).
 Packaging uses `image-14/scripts/deploy-compat-x86_64.sh --package-only --execute`.
 For existing stages, run that entrypoint directly; no full Android rebuild is
 required. See [Deck staging](DECK-STAGING.md) for check and transfer commands.

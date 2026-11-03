@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Produce tested Steam Deck host tools without committing third-party binaries.
 # Run only after constructing a fresh, isolated stage. No Steam installation is changed.
 set -Eeuo pipefail

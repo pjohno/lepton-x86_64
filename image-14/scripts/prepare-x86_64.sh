@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Lepton Android 14 x86_64 -- isolated, logged source preparation.
 set -Eeuo pipefail
 

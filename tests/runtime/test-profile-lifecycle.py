@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check explicit persistence keeps Android data while default cleanup is unchanged."""
 import os
 from pathlib import Path

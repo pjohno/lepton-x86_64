@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 set -Eeuo pipefail
 export LD_PRELOAD=
 

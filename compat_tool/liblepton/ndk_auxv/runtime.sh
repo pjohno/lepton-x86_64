@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Host-side automatic setup; sourcing this file does not change runtime state.
 function ndk_compat_supported()
 {
