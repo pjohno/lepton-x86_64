@@ -431,7 +431,8 @@ export LEPTON_ALLOW_KMSG=false LEPTON_GAMEPAD_PASSTHROUGH=false
 export LEPTON_NO_PORT_FORWARDING=true TERM=dumb TMPDIR="$WORK/tmp"
 export LEPTON_NO_DEBUG_PORTS=true
 export LEPTON_NETWORK_SYSCTLS="$NETWORK_SYSCTLS"
-export LEPTON_CODEC2="$CODEC2"
+# Default: Lepton decides (Codec2 for audio when the DMA heap is usable).
+if [[ "$CODEC2" == true ]]; then export LEPTON_CODEC2=true; else unset LEPTON_CODEC2; fi
 if [[ -n "$PROFILE" ]]; then export LEPTON_NO_CLEANUP=true; fi
 unset SteamAppId STEAM_COMPAT_INSTALL_PATH STEAM_COMPAT_DATA_PATH
 if [[ -n "$PROFILE" ]]; then

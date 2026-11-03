@@ -5,6 +5,15 @@ function props_file()
     print "$(prefix)/lepton.prop"
 }
 
+# x86_64 port: host DMA-BUF system heap for Codec2 buffers (world-accessible on
+# SteamOS; the "video" group on e.g. Fedora). Overridable for tests.
+function lepton_dma_heap_device() { print "${LEPTON_DMA_HEAP_DEVICE:-/dev/dma_heap/system}"; }
+function lepton_dma_heap_usable()
+{
+    local DEVICE="$(lepton_dma_heap_device)"
+    [[ "$(uname -m)" == "x86_64" && -c "${DEVICE}" && -r "${DEVICE}" && -w "${DEVICE}" ]]
+}
+
 function setup_props()
 {
     local CONTEXT="${1:-${LEPTON_CONTEXT}}"
@@ -57,12 +66,18 @@ function setup_props()
 
     # Video/Rendering props
     # Android 14 x86_64 exposes the Codec2 software store without an OMX HAL.
-    # Disabling Codec2 there leaves MediaCodecList empty (including audio).
-    if [[ "${LEPTON_CODEC2:-false}" == true && "$(uname -m)" == "x86_64" && "$(android_sdk_version)" -ge 34 ]]; then
+    # Disabling Codec2 there leaves MediaCodecList empty (including audio), so
+    # games using SoundPool/MediaPlayer/WebView audio are silent.
+    if [[ "$(uname -m)" == "x86_64" && "$(android_sdk_version)" -ge 34 && "${LEPTON_CODEC2:-auto}" == true ]]; then
+        # Experimental (video): linear buffers via gralloc BLOB + BUFFERQUEUE.
+        # Known to stop Android booting on current builds.
         props_echo "debug.stagefright.ccodec=4"
-        # Linear buffers via gralloc BLOB + surface BUFFERQUEUE. Desktop Linux
-        # has no Android ION/system DMA heap; minigbm already provides gralloc.
         props_echo "debug.stagefright.c2-poolmask=786432"
+    elif [[ "$(uname -m)" == "x86_64" && "$(android_sdk_version)" -ge 34 && "${LEPTON_CODEC2:-auto}" != false ]] &&
+         lepton_dma_heap_usable; then
+        # Codec2 allocates linear (audio) buffers from the DMA-BUF system heap,
+        # which setup_podman_mounts passes through when the user can open it.
+        props_echo "debug.stagefright.ccodec=4"
     else
         props_echo "debug.stagefright.ccodec=0"
     fi

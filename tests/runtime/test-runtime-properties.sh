@@ -19,6 +19,7 @@ export LEPTON_CONTEXT='test'
 export LEPTON_FORCE_SOFTWARE=false
 probe_sdk=34
 unset LEPTON_CODEC2 LEPTON_FORWARD_WEB_INTENTS
+export LEPTON_DMA_HEAP_DEVICE="$work/no-dma-heap"   # host without a usable DMA heap
 setup_props
 grep -qx 'persist.lepton.forward_web_intents=false' "$work/lepton.prop"
 grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
@@ -32,4 +33,17 @@ grep -qx 'debug.stagefright.c2-poolmask=786432' "$work/lepton.prop"
 probe_sdk=30
 LEPTON_CODEC2=true setup_props
 grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
-printf 'PASS: Android URL routing default, explicit Steam opt-in, codec opt-in and legacy SDK properties, so replacements\n'
+# A usable DMA heap (a read/write character device) enables Codec2 for audio,
+# without the boot-breaking BLOB pool mask; LEPTON_CODEC2=false opts out.
+probe_sdk=34
+LEPTON_DMA_HEAP_DEVICE=/dev/null setup_props
+grep -qx 'debug.stagefright.ccodec=4' "$work/lepton.prop"
+! grep -q 'c2-poolmask' "$work/lepton.prop"
+LEPTON_DMA_HEAP_DEVICE=/dev/null LEPTON_CODEC2=false setup_props
+grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
+LEPTON_DMA_HEAP_DEVICE=/dev/null probe_sdk=30 setup_props
+grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
+# The heap is passed into the container under the same conditions.
+grep -q 'if lepton_dma_heap_usable && \[\[ "${LEPTON_CODEC2:-auto}" != false \]\]; then' "$ROOT/compat_tool/liblepton/mounting.sh"
+grep -q 'podman_mount_entry "$(lepton_dma_heap_device)" "/dev/dma_heap/system" rw' "$ROOT/compat_tool/liblepton/mounting.sh"
+printf 'PASS: Android URL routing default, explicit Steam opt-in, codec opt-in, DMA-heap Codec2 audio and legacy SDK properties, so replacements\n'

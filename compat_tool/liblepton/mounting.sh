@@ -531,6 +531,10 @@ function setup_podman_mounts()
             podman_mount_entry "/dev/${dev}" "/dev/${dev}" rw
         fi
     done
+    # x86_64 port: media decoders (Codec2) allocate from the DMA-BUF system heap.
+    if lepton_dma_heap_usable && [[ "${LEPTON_CODEC2:-auto}" != false ]]; then
+        podman_mount_entry "$(lepton_dma_heap_device)" "/dev/dma_heap/system" rw
+    fi
 
     # Bind each Steam Input virtual controller present at container startup.
     # Podman's --device nodes are hidden by Android's /dev tmpfs, so explicit
