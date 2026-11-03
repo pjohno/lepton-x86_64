@@ -23,6 +23,7 @@ source "${LEPTON_DIR}/utils.sh"
 source "${LEPTON_DIR}/networking.sh"
 source "${LEPTON_DIR}/mounting.sh"
 source "${LEPTON_DIR}/app_metadata.sh"
+source "${LEPTON_DIR}/google_games.sh"
 source "${LEPTON_DIR}/properties.sh"
 source "${LEPTON_DIR}/baking.sh"
 source "${LEPTON_DIR}/vulkan_layers.sh"
@@ -198,6 +199,9 @@ function app_datadir()
 function setup_container()
 {
     check_host_gpu
+    if google_signin_mode && ! rootfs_has_google_services; then
+        die "Google sign-in needs a Lepton tool with Google services (a GApps bundle)."
+    fi
     check_kept_app_data
     cleanup_container
 
@@ -592,7 +596,8 @@ function install_app()
 
     # Standalone development installation: use Podman directly instead of
     # relying on the host-to-container ADB connection.
-    if [[ "${LEPTON_CONTEXT}" == "dev" || "${LEPTON_CONTEXT}" == *.apk || "${LEPTON_CONTEXT}" == "steamlaunch-0" ]]; then
+    # x86_64 port: split bundles always use the adb route below.
+    if [[ -z "${LEPTON_APKM_DIR:-}" ]] && [[ "${LEPTON_CONTEXT}" == "dev" || "${LEPTON_CONTEXT}" == *.apk || "${LEPTON_CONTEXT}" == "steamlaunch-0" ]]; then
         local CONTAINER_APK="/data/local/tmp/$(basename "${APK_PATH}")"
         # Android's early boot marker can precede package-manager readiness.
         # Do not wait for sys.boot_completed: Lepton releases startup after installation.
@@ -650,7 +655,13 @@ function install_app()
         # x86_64 port: the shortcut only works when the APK lies in a folder
         # mounted into the container (Steam client or library paths). Non-Steam
         # shortcuts usually point at ~/Downloads etc., so stream those via adb.
-        if is_steamlaunch && apk_path_in_container "${APK_PATH}"; then
+        local SPLITS=()
+        mapfile -t SPLITS < <(apkm_split_paths)
+        if ((${#SPLITS[@]})); then
+            # x86_64 port: split-APK bundle (.apkm): install base and splits
+            # together; the post-install hook keeps every installed file.
+            timeout "${INSTALL_TIMEOUT}" "$ADB" -P "${TEMP_PORT}" -s localhost:"${ADB_PORT}" install-multiple -g "${APK_PATH}" "${SPLITS[@]}" || INSTALL_RET=$?
+        elif is_steamlaunch && apk_path_in_container "${APK_PATH}"; then
             # If it's a steamlaunch we can use a shortcut:
             # Since we mount the apk folder into the container,
             # there is no streaming via adb needed.

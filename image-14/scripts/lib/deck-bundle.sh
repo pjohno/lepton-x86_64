@@ -148,7 +148,7 @@ done
 
 # Refresh every runtime script together: they share variables (e.g. utils.sh
 # defines STEAM_LOG_PATH for mounting.sh), so mixing old and new copies breaks.
-runtime_scripts=(app_metadata.sh baking.sh completions.sh debug.sh gdb.sh liblepton.sh mounting.sh
+runtime_scripts=(app_metadata.sh baking.sh completions.sh debug.sh gdb.sh google_games.sh liblepton.sh mounting.sh
     networking.sh perfetto.sh performance_debugging.sh properties.sh strace.sh utils.sh vulkan_layers.sh)
 [[ -f "$repo/compat_tool/liblepton/soreplacements.txt" ]] || {
     echo "ERROR: missing Fedora source compat_tool/liblepton/soreplacements.txt" >&2
@@ -204,7 +204,8 @@ done
 grep -Fq 'no-force-stop' "$repo/compat_tool/liblepton/app_metadata.sh" || {
     echo 'ERROR: Fedora source missing tested no-force-stop option' >&2; exit 1;
 }
-grep -Fq 'no-force-stop' "$repo/compat_tool/liblepton/mounting.sh" || {
+grep -Fq 'no-force-stop' "$repo/compat_tool/liblepton/google_games.sh" &&
+    grep -Fq 'lepton_launch_commands' "$repo/compat_tool/liblepton/mounting.sh" || {
     echo 'ERROR: Fedora source missing tested automatic launch call' >&2; exit 1;
 }
 
@@ -374,7 +375,7 @@ for script in "${runtime_scripts[@]}"; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
 python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$tmp/payload/compat_tool/tools/lepton-add-game"
-grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/mounting.sh"
+grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/google_games.sh"
 for script in compat_tool/lepton compat_tool/tools/lepton-gamescope-bridge compat_tool/tools/lepton-controller-hotplug-experiment; do
     bash -n "$tmp/payload/$script"
 done

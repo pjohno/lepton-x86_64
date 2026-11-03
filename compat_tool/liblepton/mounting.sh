@@ -49,7 +49,9 @@ function setup_mounts()
     if is_app; then
         BASE_APK=base.apk
         APP_APK_DIR="$(dirname "$(get_apk_path)")"
-        if [[ -n "${APP_APK_DIR}" ]]; then
+        # x86_64 port: an unpacked .apkm already has base.apk; its splits share
+        # the package ID, so the rename-to-base.apk search must not run.
+        if [[ -n "${APP_APK_DIR}" && -z "${LEPTON_APKM_DIR:-}" ]]; then
             # Annoyingly, we need to rename our `.apk` to `base.apk`, since Appdome expects that.
             # Android always does this, but Android is also totally okay with loading a random
             # `.apk` name.
@@ -317,7 +319,7 @@ function generate_app_launch_rc()
         fi
 
         # Run the actual app
-        println "    exec -- /system/bin/sh -c \"$(run_app_commands "$(get_app_id)" "$(get_app_activity)" no-force-stop)\"" >>"${APP_LAUNCH_RC}"
+        println "    exec -- /system/bin/sh -c \"$(lepton_launch_commands)\"" >>"${APP_LAUNCH_RC}"
 
         if debugger_wait_enabled || strace_enabled; then
             if strace_enabled; then

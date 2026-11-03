@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# Tap-only setup of games that need Google sign-in (GApps installs), using a
-# saved profile per game (Google identity + game data; one game per profile):
+# Tap-only setup of games that need Google sign-in (GApps installs), on the
+# normal Steam launch path: the game's Android data, including the Google
+# sign-in, lives in Steam's compatdata for its shortcut, so it follows the game
+# when its compatibility tool is changed to another GApps install.
 #
-#   lepton-google-game-gui            pick game -> sign in -> install/check -> Steam shortcut
-#   lepton-google-game-gui --sign-in  sign in again for an existing profile
+#   lepton-google-game-gui            pick game -> sign in -> check -> Steam shortcut
+#   lepton-google-game-gui --sign-in  sign in again for a Google game
 #
-# Android runs in a desktop window via this install's run-apk.sh; "Done"
-# buttons stop it cleanly. This tool NEVER closes or starts Steam: it asks
-# the user to exit Steam before adding the shortcut.
+# Android opens in a desktop window; "Done" stops it cleanly. This tool NEVER
+# closes or starts Steam: it asks the user to exit Steam for the shortcut step.
 set -Euo pipefail
 
 TOOLS="$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")"
 ROOT="$(dirname -- "$(dirname -- "$TOOLS")")"
-RUNNER="$ROOT/tests/runtime/run-apk.sh"
+ENTRY="$ROOT/compat_tool/lepton-x86_64-entry"
 ADD_GAME="$TOOLS/lepton-add-game"
+GSF_READER="$ROOT/tests/runtime/read-gsf-id.py"
+STEAM_DIR="${LEPTON_STEAM_DIR:-$HOME/.local/share/Steam}"
+COMPAT="$STEAM_DIR/steamapps/compatdata"
+MARKER=lepton-google-game
 TITLE='Lepton: Google game'
 MODE=add
 [[ "${1:-}" != --sign-in ]] || MODE=sign-in
@@ -50,97 +55,123 @@ ask() {  # ask TEXT OK_LABEL CANCEL_LABEL
 }
 fail_box() { show error "$1"; exit 1; }
 
-[[ -f "$ROOT/BUNDLE.json" && -f "$RUNNER" && -f "$ADD_GAME" ]] ||
-    { show error "This Lepton install is incomplete ($ROOT)."; exit 1; }
+[[ -x "$ENTRY" && -f "$ADD_GAME" ]] || fail_box "This Lepton install is incomplete ($ROOT)."
 [[ -f "$ROOT/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk" ]] ||
     fail_box 'This Lepton install has no Google services. Install a GApps bundle first.'
 
 LOG_DIR="$(mktemp -d)"
-trap 'rm -rf -- "$LOG_DIR"' EXIT
+MAIN_PID=$$
+# Only the main process cleans up: bash also runs EXIT traps in subshells
+# such as $(...), which would delete the log while Android still writes it.
+trap '[[ "$BASHPID" == "$MAIN_PID" ]] && rm -rf -- "$LOG_DIR"' EXIT
 
-# run_android TEXT_WAITING READY_PATTERN TEXT_READY -- RUNNER ARGS...
-# Runs Android in the background with a live dialog whose button ("Done")
-# stops it. Returns 0 if the user tapped Done, 1 if Android ended by itself.
-run_android() {
-    local waiting="$1" ready="$2" ready_text="$3"
-    shift 4
-    local log="$LOG_DIR/run.log"
+# True while PID runs. A finished but not yet collected child is a zombie
+# ("Z"), for which kill -0 would still succeed.
+alive() {
+    local stat
+    stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+    stat="${stat##*) }"
+    [[ "${stat:0:1}" != Z ]]
+}
+
+# Google's device ID for "uncertified device" registration, once Android has it.
+gsf_id() {  # gsf_id APPID
+    local db="$COMPAT/$1/baked/data_overlay/data/com.google.android.gsf/databases/gservices.db" id
+    [[ -f "$GSF_READER" ]] || return 0
+    id="$(podman unshare python3 "$GSF_READER" "$db" 2>/dev/null || true)"
+    [[ "$id" =~ ^[1-9][0-9]+$ ]] && printf '%s\n' "$id"
+    return 0
+}
+
+# launch APPID GAME SIGNIN(true|false) WAITING READY
+# Starts the game exactly like a Steam launch of its shortcut (same compatdata),
+# shows a live dialog, and stops Android when the user taps Done.
+# Returns 0 if the user tapped Done, 1 if Android ended by itself.
+launch() {
+    local appid="$1" game="$2" signin="$3" waiting="$4" ready="$5"
+    local log="$LOG_DIR/launch.log"
     : > "$log"
-    "$@" > "$log" 2>&1 &
-    local pid=$!
-    local user_done=1
+    mkdir -p -- "$COMPAT/$appid"
+    # (SteamGameId is only read by the Gamescope bridge, which is not used here;
+    # its 64-bit value would also overflow shell arithmetic.)
+    local install_path
+    install_path="$(dirname -- "$game")"
+    env SteamAppId="$appid" \
+        STEAM_COMPAT_DATA_PATH="$COMPAT/$appid" STEAM_COMPAT_INSTALL_PATH="$install_path" \
+        STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_DIR" STEAM_COMPAT_LIBRARY_PATHS="$STEAM_DIR/steamapps" \
+        LEPTON_GOOGLE_SIGNIN="$signin" LEPTON_NO_BRIDGE=true \
+        GAMESCOPE_WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" TERM=dumb \
+        "$ENTRY" waitforexitandrun -- "$game" > "$log" 2>&1 &
+    local pid=$! user_done=1 rc=0
     if [[ "$UI" == zenity ]]; then
-        local rc=0
-        # Process substitution: wait only for the dialog; the feeder ends once
-        # Android has been stopped (a pipeline would wait for it).
         zenity --progress --pulsate --auto-close --title="$TITLE" --width=560 \
             --text="$waiting" --cancel-label=Done 2>/dev/null < <(
             printf '# %s\n' "$waiting"
-            local said='' gsf=''
-            while kill -0 "$pid" 2>/dev/null; do
-                if [[ -z "$said" ]] && grep -q -- "$ready" "$log"; then
-                    printf '# %s\n' "$ready_text"; said=1
+            said='' gsf='' tick=0
+            while alive "$pid"; do
+                if [[ -z "$said" ]] && grep -q 'Waiting for app' "$log"; then
+                    printf '# %s\n' "$ready"; said=1
                 fi
-                if [[ -z "$gsf" ]] && gsf="$(sed -n 's/.*GSF Android ID: \([0-9]\{1,\}\).*/\1/p' "$log" | head -n 1)" && [[ -n "$gsf" ]]; then
-                    printf '# %s  If Google says this device is not certified, register ID %s at google.com/android/uncertified\n' \
-                        "$ready_text" "$gsf"
+                # Only once Android is up (its data then holds the real ID).
+                if [[ "$signin" == true && -n "$said" && -z "$gsf" && $((tick % 5)) == 0 ]]; then
+                    gsf="$(gsf_id "$appid")"
+                    [[ -z "$gsf" ]] || printf '# %s  If Google says this device is not certified, register ID %s at google.com/android/uncertified\n' "$ready" "$gsf"
                 fi
+                tick=$((tick + 1))
                 sleep 1
             done
             echo 100
         ) || rc=$?
         [[ "$rc" == 0 ]] || user_done=0
     else
-        kdialog --title "$TITLE" --msgbox "$ready_text"$'\n\nPress OK when finished.'
+        kdialog --title "$TITLE" --msgbox "$ready"$'\n\nPress OK when finished.'
         user_done=0
-        if gsf="$(sed -n 's/.*GSF Android ID: \([0-9]\{1,\}\).*/\1/p' "$log" | head -n 1)" && [[ -n "$gsf" ]]; then
-            show info "Google device registration ID: $gsf (google.com/android/uncertified)"
-        fi
     fi
-    if kill -0 "$pid" 2>/dev/null; then
-        kill -TERM "$pid" 2>/dev/null || true   # run-apk cleans up on TERM
+    if alive "$pid"; then
+        kill -TERM "$pid" 2>/dev/null || true   # Lepton tears down cleanly on TERM
         local i
-        for ((i = 0; i < 120; i++)); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+        for ((i = 0; i < 120; i++)); do alive "$pid" || break; sleep 1; done
     fi
     wait "$pid" 2>/dev/null || true
+    pkill -f "^avahi-publish-service lepton-steamlaunch-$appid " 2>/dev/null || true
     return "$user_done"
 }
 
-profile_dirs() { compgen -G "$ROOT/.runtime-profile.*" || true; }
-
-sign_in() {  # sign_in PROFILE
-    if run_android 'Starting Android for Google sign-in...' 'Setup profile ready' \
-        'Sign in to Google in the Android window (Play Store), then tap Done.' -- \
-        "$RUNNER" --profile "$1" --setup-only --network-sysctls --seconds 3600 --execute; then
+sign_in() {  # sign_in APPID GAME NAME
+    if launch "$1" "$2" true "Starting Android for \"$3\" (first time: installing the game)..." \
+        'Sign in to Google in the Android window (Play Store), then tap Done.'; then
         return 0
     fi
-    fail_box "Android stopped unexpectedly during sign-in:
+    fail_box "Android stopped before sign-in finished:
 
-$(tail -n 15 "$LOG_DIR/run.log")"
+$(tail -n 15 "$LOG_DIR/launch.log")"
 }
 
 if [[ "$MODE" == sign-in ]]; then
-    mapfile -t dirs < <(profile_dirs)
-    ((${#dirs[@]})) || fail_box 'No Google game profiles yet. Use "Lepton: Add Google game" first.'
-    rows=()
-    for dir in "${dirs[@]}"; do
-        name="${dir##*/.runtime-profile.}"
-        game="$(cat "$dir/profile-package" 2>/dev/null || echo 'no game installed yet')"
-        rows+=("$name" "$game")
+    ids=() rows=()
+    for marker in "$COMPAT"/*/"$MARKER"; do
+        [[ -f "$marker" ]] || continue
+        appid="$(basename -- "$(dirname -- "$marker")")"
+        mapfile -t info < "$marker"
+        [[ ${#info[@]} -ge 2 && -f "${info[0]}" ]] || continue
+        ids+=("$appid"); rows+=("$appid" "${info[1]}")
     done
+    ((${#ids[@]})) || fail_box 'No Google games yet. Use "Lepton: Add Google game" first.'
     if [[ "$UI" == zenity ]]; then
         args=()
         for ((i = 0; i < ${#rows[@]}; i += 2)); do args+=(FALSE "${rows[i]}" "${rows[i+1]}"); done
-        profile="$(zenity --list --radiolist --title="$TITLE" --text='Sign in again for which game profile?' \
-            --column= --column=Profile --column=Game --width=560 --height=360 "${args[@]}" 2>/dev/null)" || exit 0
+        appid="$(zenity --list --radiolist --title="$TITLE" --text='Sign in again for which game?' \
+            --column= --column=ID --column=Game --hide-column=2 --print-column=2 \
+            --width=520 --height=360 "${args[@]}" 2>/dev/null)" || exit 0
     else
         args=()
-        for ((i = 0; i < ${#rows[@]}; i += 2)); do args+=("${rows[i]}" "${rows[i]} (${rows[i+1]})" off); done
-        profile="$(kdialog --title "$TITLE" --radiolist 'Sign in again for which game profile?' "${args[@]}")" || exit 0
+        for ((i = 0; i < ${#rows[@]}; i += 2)); do args+=("${rows[i]}" "${rows[i+1]}" off); done
+        appid="$(kdialog --title "$TITLE" --radiolist 'Sign in again for which game?' "${args[@]}")" || exit 0
     fi
-    [[ -n "$profile" ]] || exit 0
-    sign_in "$profile"
-    show info 'Sign-in finished. The profile keeps your Google account.'
+    [[ -n "$appid" && -f "$COMPAT/$appid/$MARKER" ]] || exit 0
+    mapfile -t info < "$COMPAT/$appid/$MARKER"
+    sign_in "$appid" "${info[0]}" "${info[1]}"
+    show info "Sign-in finished for \"${info[1]}\". The game keeps your Google account."
     exit 0
 fi
 
@@ -152,6 +183,7 @@ else
     game="$(kdialog --title "$TITLE" --getopenfilename "$HOME/Downloads" '*.apk *.APK *.apkm *.APKM|Android apps')" || exit 0
 fi
 [[ -n "$game" && -f "$game" ]] || exit 0
+game="$(realpath -e -- "$game")"
 default_name="$(basename -- "$game")"
 default_name="${default_name%.*}"
 if [[ "$UI" == zenity ]]; then
@@ -161,50 +193,40 @@ else
 fi
 [[ -n "$name" ]] || name="$default_name"
 
-# One profile per game, named after it.
-profile="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-48)"
-[[ -n "$profile" ]] || profile=game
-# Prefer native x86_64 libraries; ARM64-only games need an NDK install.
-abi="$(python3 - "$game" <<'PY'
-import sys, zipfile
-names = zipfile.ZipFile(sys.argv[1]).namelist()
-joined = "\n".join(names)
-if "lib/x86_64/" in joined or "x86_64" in joined:
-    print("x86_64")
-elif "lib/arm64-v8a/" in joined or "arm64_v8a" in joined:
-    print("arm64-v8a")
-else:
-    print("x86_64")
-PY
-)" || fail_box 'This file is not a readable APK or APKM.'
+# The shortcut's Steam AppID decides its compatdata, where sign-in and game
+# data live; prepare it before the shortcut exists.
+appid="$(python3 "$ADD_GAME" "$game" --name "$name" --print-appid 2>&1)" && [[ "$appid" =~ ^[0-9]+$ ]] ||
+    fail_box "Cannot use this game:
 
-if [[ -d "$ROOT/.runtime-profile.$profile" ]]; then
-    if ask "A profile named \"$profile\" already exists.
+$appid"
+mkdir -p -- "$COMPAT/$appid"
+printf '%s\n' "$game" "$name" > "$COMPAT/$appid/$MARKER"
 
-Sign in to Google again, or skip straight to installing the game?" 'Sign in again' 'Skip sign-in'; then
-        sign_in "$profile"
+if [[ -d "$COMPAT/$appid/baked/data_overlay" ]]; then
+    if ask "\"$name\" already has saved Android data (and possibly a Google sign-in).
+
+Sign in to Google again, or skip straight to checking the game?" 'Sign in again' 'Skip sign-in'; then
+        sign_in "$appid" "$game" "$name"
     fi
 else
     ask "Step 1 of 3: Google sign-in for \"$name\".
 
-Android opens in a window with the Play Store. Sign in to Google there, then tap Done in the Lepton dialog.
-This profile keeps the sign-in and the game's data." 'Start' 'Cancel' || exit 0
-    sign_in "$profile"
+Android opens in a window and installs the game, then shows the Play Store. Sign in to Google there, then tap Done in the Lepton dialog.
+The sign-in is kept with this game's data." 'Start' 'Cancel' || exit 0
+    sign_in "$appid" "$game" "$name"
 fi
 
-ask "Step 2 of 3: install and check \"$name\".
+ask "Step 2 of 3: check \"$name\".
 
-The game is installed into its profile and opens. Check that it works, then tap Done." 'Start' 'Cancel' || exit 0
-run_android "Installing $name..." 'Launching ' "$name is open. Check it works, then tap Done." -- \
-    "$RUNNER" --profile "$profile" --app --expect-abi "$abi" --apk "$game" \
-    --network-sysctls --until-exit --execute || true
-grep -Eq '^\[INFO\] Launching |Reusing installed APK set' "$LOG_DIR/run.log" ||
-    fail_box "The game could not be installed or started:
+The game opens. Check that it works, then tap Done." 'Start' 'Cancel' || exit 0
+launch "$appid" "$game" false "Starting $name..." "$name is open. Check it works, then tap Done." || true
+grep -q 'Waiting for app' "$LOG_DIR/launch.log" ||
+    fail_box "The game could not be started:
 
-$(tail -n 15 "$LOG_DIR/run.log")"
+$(tail -n 15 "$LOG_DIR/launch.log")"
 
 # Validate before asking the user to close Steam (a dry run reads only).
-check="$(python3 "$ADD_GAME" "$game" --runtime-profile "$profile" --expect-abi "$abi" --name "$name" --dry-run 2>&1)" ||
+check="$(python3 "$ADD_GAME" "$game" --name "$name" --dry-run 2>&1)" ||
     fail_box "Cannot add this game to Steam:
 
 $check"
@@ -215,10 +237,10 @@ Now exit Steam yourself:
   - taskbar: right-click the Steam icon > Exit.
 Wait until the Steam window and its taskbar icon have gone, then tap \"Steam is closed\".
 This tool never closes or starts Steam." 'Steam is closed' 'Cancel' || exit 0
-if out="$(python3 "$ADD_GAME" "$game" --runtime-profile "$profile" --expect-abi "$abi" --name "$name" 2>&1)"; then
+if out="$(python3 "$ADD_GAME" "$game" --name "$name" 2>&1)"; then
     show info "\"$name\" was added to Steam (Non-Steam games). It is now safe to start Steam again.
 
-In the shortcut's Properties, leave \"Force the use of a specific Steam Play compatibility tool\" unchecked, and enable Touchscreen Native Support in its controller layout.
+It keeps its Google sign-in and data when you pick another Lepton GApps tool in its Properties > Compatibility. Enable Touchscreen Native Support in its controller layout.
 
 $out"
 else

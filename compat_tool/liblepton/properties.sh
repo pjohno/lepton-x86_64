@@ -196,7 +196,8 @@ function setup_props()
     # We have a system service that watches for a process exit matching
     # this package name, and then shuts down the container.
     if is_app; then
-        props_echo "lepton.app_id=$(get_app_id)"
+        # x86_64 port: in Google sign-in mode the session follows the Play Store.
+        props_echo "lepton.app_id=$(lepton_observed_app_id)"
 
         # This one isn't watched by the process observer, but it is
         # used by other tools like the perfetto and renderdoc integrations

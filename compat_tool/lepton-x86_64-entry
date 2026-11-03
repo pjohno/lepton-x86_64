@@ -39,6 +39,19 @@ inside_bridge() {
     return 1
 }
 
+# Games added with "Add Google game" need Google services: refuse a tool
+# without them before Android starts, with a message the player can see.
+if [[ "${1:-}" == waitforexitandrun && -f "${STEAM_COMPAT_DATA_PATH:-/nonexistent}/lepton-google-game" &&
+      ! -f "$TOOL/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk" ]]; then
+    message="This game needs Google services, but this Lepton tool has none.
+Select a Lepton GApps tool in the game's Properties > Compatibility."
+    printf 'ERROR: %s\n' "$message" >&2
+    if command -v zenity >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+        timeout 120 zenity --error --title='Lepton' --no-markup --width=480 --text="$message" 2>/dev/null || true
+    fi
+    exit 1
+fi
+
 if [[ "${1:-}" == waitforexitandrun && "${LEPTON_NO_BRIDGE:-false}" != true ]] && ! inside_bridge; then
     exec "$TOOL/tools/lepton-gamescope-bridge" "$TOOL/lepton" "$@"
 fi

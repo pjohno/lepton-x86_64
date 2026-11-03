@@ -131,6 +131,11 @@ case "${COMMAND}" in
             export APP_PATH="$(realpath "${3:-}")"
             println "Setting APP_PATH to ${APP_PATH}"
         fi
+        # x86_64 port: split-APK bundles (.apkm) are unpacked into compatdata.
+        if [[ -z "${APP_PATH}" ]] && is_apkm_path "${3:-}"; then
+            prepare_apkm "$(realpath "${3:-}")"
+            println "Setting APP_PATH to ${APP_PATH} (from $(basename "${3:-}"))"
+        fi
         # Make sure to set APP_PACKAGE_ID globally here, otherwise we end up calling
         # extract_app_id multiple times later.
         export APP_PACKAGE_ID="$(get_app_id)"

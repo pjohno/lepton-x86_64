@@ -215,6 +215,8 @@ def main():
     parser.add_argument("--name", help="Name displayed in Steam (default: APK stem)")
     parser.add_argument("--hotplug", action="store_true",
                         help="Enable experimental /dev/input mount and live gamepad hotplug")
+    parser.add_argument("--print-appid", action="store_true",
+                        help="Print the Steam AppID this shortcut would get, then exit")
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate shortcut and compatibility mapping without modifying Steam files")
     parser.add_argument("--userdata", type=Path,
@@ -255,9 +257,15 @@ def main():
             fail("Tool registration install_path does not match --install-dir")
 
     apk = args.apk.expanduser().resolve(strict=True)
-    extensions = {".apk", ".apkm"} if args.runtime_profile else {".apk"}
-    if not apk.is_file() or apk.suffix.lower() not in extensions:
-        fail("Expected an existing " + (".apk or .apkm file" if args.runtime_profile else ".apk file"))
+    # Lepton installs split-APK bundles (.apkm) on the normal launch path too.
+    if not apk.is_file() or apk.suffix.lower() not in {".apk", ".apkm"}:
+        fail("Expected an existing .apk or .apkm file")
+    if args.print_appid:
+        # The Steam AppID (and so compatdata/<appid>) this shortcut will get;
+        # used to prepare a game's data before its shortcut exists.
+        name = args.name or apk.stem
+        print(zlib.crc32(('"' + str(apk) + '"' + name).encode("utf-8")) | 0x80000000)
+        return
     if args.runtime_profile:
         runner = INSTALL / "tests/runtime/run-apk.sh"
         profile = INSTALL / (".runtime-profile." + args.runtime_profile)

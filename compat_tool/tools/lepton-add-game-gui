@@ -84,7 +84,9 @@ Then tap \"Steam is closed\". The touchscreen keeps working without Steam.
 This tool never closes or starts Steam." "Steam is closed" || exit 0
 
 log="$(mktemp)"
-trap 'rm -f -- "$log"' EXIT
+MAIN_PID=$$
+# Only the main process cleans up (bash also runs EXIT traps in $(...) subshells).
+trap '[[ "$BASHPID" == "$MAIN_PID" ]] && rm -f -- "$log"' EXIT
 rc=0
 python3 "$ADD_GAME" "$apk" --name "$name" > "$log" 2>&1 || rc=$?
 

@@ -66,6 +66,19 @@ ln -s "$entry" "$work/entry-link"
 run "$work/entry-link" waitforexitandrun -- a.apk
 grep -qx "ADB=$root/tools/platform-tools/adb" "$work/log"
 
+# A game marked as needing Google services refuses a tool without them, before
+# anything starts; with Google services it launches normally.
+mkdir -p "$work/compat/1"; touch "$work/compat/1/lepton-google-game"
+if run env STEAM_COMPAT_DATA_PATH="$work/compat/1" LEPTON_NO_BRIDGE=true "$entry" waitforexitandrun -- a.apk 2> "$work/google.err"; then
+    echo 'FAIL: Google game started without Google services'; exit 1
+fi
+grep -q 'needs Google services' "$work/google.err"
+[[ ! -e "$work/log" ]]
+gms="$root/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore"
+mkdir -p "$gms" && touch "$gms/PrebuiltGmsCore.apk"
+run env STEAM_COMPAT_DATA_PATH="$work/compat/1" LEPTON_NO_BRIDGE=true "$entry" waitforexitandrun -- a.apk
+grep -qx 'lepton waitforexitandrun -- a.apk' "$work/log"
+
 # The real bridge marks its children.
 grep -qx 'export LEPTON_BRIDGE_ACTIVE=1' "$repo/compat_tool/tools/lepton-gamescope-bridge"
 echo 'PASS: tool entry: built-in ADB/PATH/flatscreen, bridge only for game launches, never nested'
