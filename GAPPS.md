@@ -90,8 +90,8 @@ tool ID, registers the tool and makes it the default for `~/.local/bin/lepton-*`
 Restart Steam afterwards. Each bundle needs its own `--tool-id`; conflicting
 registrations and existing destination directories are refused (use `--replace`
 to update the same tool). GApps packaging defaults to `lepton_gapps_<bundle-id>`
-(dots and hyphens become underscores), so it does not reuse `lepton_x86_64_dev`.
-A normal non-GApps package retains the legacy ID unless overridden. See
+(dots and hyphens become underscores) and a normal package to
+`lepton_x86_64_<bundle-id>`, so neither reuses the legacy `lepton_x86_64_dev`. See
 [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md) for the full flow.
 
 ## Registration, install/play, then Gaming Mode

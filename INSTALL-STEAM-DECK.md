@@ -108,7 +108,9 @@ experimental (`--hotplug`) and exposes all host input devices to the container.
 
 ## Several installs side by side
 
-Each bundle ID installs as its own Steam tool. `lepton-add-game` uses the most
+Each bundle ID installs as its own Steam tool (`lepton_x86_64_<bundle-id>`, or
+`lepton_gapps_<bundle-id>` with Google apps), so an older install such as
+`~/.local/share/lepton-x86_64-dev` is left alone. `lepton-add-game` uses the most
 recently installed one; pick another with `--tool-id <tool id>` (tool IDs are
 listed in `~/.config/lepton-x86_64/`).
 

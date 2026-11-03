@@ -93,7 +93,9 @@ if [[ -z "$tool_id" ]]; then
     if [[ -f "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk" ]]; then
         tool_id="lepton_gapps_${bundle_id//[.-]/_}"
     else
-        tool_id=lepton_x86_64_dev
+        # Bundle-specific by default so a new install never collides with an
+        # existing one (e.g. the legacy lepton_x86_64_dev install on a Deck).
+        tool_id="lepton_x86_64_${bundle_id//[.-]/_}"
     fi
 fi
 [[ "$tool_id" =~ ^[A-Za-z0-9_]{1,96}$ ]] || { echo 'ERROR: invalid tool ID' >&2; exit 2; }
