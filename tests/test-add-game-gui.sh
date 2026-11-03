@@ -75,4 +75,11 @@ chmod +x "$work/bin/kdialog"
 reset; gui LEPTON_DIALOG=kdialog PICK="$apk" NAME_ANSWER='KDE Name'
 grep -Fqx "['$apk', '--name', 'KDE Name', '--restart-steam']" "$work/add.log"
 grep -q 'kdialog --title .* --msgbox' "$work/ui.log"
-echo 'PASS: add-game GUI success, cancel, validation/add errors, default name and kdialog fallback'
+# lepton-in-terminal: keeps the command's status and always ends with the prompt.
+wrap="$repo/compat_tool/tools/lepton-in-terminal"
+bash "$wrap" true < /dev/null > "$work/wrap-ok.log"
+grep -q 'closes by itself in 60 seconds' "$work/wrap-ok.log"
+if bash "$wrap" sh -c 'exit 3' < /dev/null > "$work/wrap-fail.log"; then echo 'FAIL: status lost'; exit 1; fi
+grep -q 'exit status 3' "$work/wrap-fail.log"
+grep -q 'closes by itself in 600 seconds' "$work/wrap-fail.log"
+echo 'PASS: add-game GUI success, cancel, validation/add errors, default name and kdialog fallback; terminal close prompt'

@@ -13,7 +13,9 @@ set -Eeuo pipefail
 
 # Packaging substitutes the archive name; an explicit ARCHIVE argument wins.
 DEFAULT_ARCHIVE=''
+ORIG_ARGS=("$@")
 MODE=execute
+PAUSE=false
 REPLACE=false
 ALLOW_NON_AMD=false
 ARCHIVE=''
@@ -29,14 +31,47 @@ Options:
   --replace        Replace an existing install of the SAME tool ID; the old
                    directory is kept as <dir>.previous-<timestamp>
   --allow-non-amd  Install on a host without an AMD GPU (software rendering only)
+  --pause          End with "Press Enter to close" (used by desktop icons)
   ARCHIVE          Bundle .tar.gz (default: the archive next to this script)
 HELP
 }
+# Set up cleanup and the optional close prompt before parsing, so even an
+# invalid option leaves a readable window when --pause is in effect.
+TEMP=''
+cleanup() {
+    [[ -n "${TEMP:-}" ]] && rm -f -- "$TEMP.meta"
+    [[ -z "${TEMP:-}" || ! -d "$TEMP" ]] && return
+    chmod -R u+rwX -- "$TEMP" 2>/dev/null || true
+    rm -rf -- "$TEMP"
+}
+# In a terminal window opened for the user, end with an explicit close prompt.
+pause_window() {
+    local status="$1" seconds=60
+    printf '\n'
+    if [[ "$status" == 0 ]]; then
+        printf '[DONE] Finished successfully.\n'
+    else
+        printf '[FAIL] Did not complete; see the messages above.\n'
+        seconds=600
+    fi
+    printf 'Press Enter to close this window (it closes by itself in %s seconds).\n' "$seconds"
+    read -r -t "$seconds" _ || true
+}
+finish() {
+    local status=$?
+    trap - EXIT
+    cleanup
+    [[ "$PAUSE" == false ]] || pause_window "$status"
+    exit "$status"
+}
+trap finish EXIT
+
 while (($#)); do
     case "$1" in
         --check) MODE=check; shift ;;
         --replace) REPLACE=true; shift ;;
         --allow-non-amd) ALLOW_NON_AMD=true; shift ;;
+        --pause) PAUSE=true; shift ;;
         -h|--help) usage; exit 0 ;;
         -*) fail "Unknown option: $1" ;;
         *) [[ -z "$ARCHIVE" ]] || fail 'Only one archive may be given'; ARCHIVE="$1"; shift ;;
@@ -47,8 +82,9 @@ done
 if [[ ! -t 0 && ! -t 1 && -z "${LEPTON_INSTALL_IN_TERMINAL:-}" &&
       ( -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ) ]] && command -v konsole >/dev/null 2>&1; then
     export LEPTON_INSTALL_IN_TERMINAL=1
-    exec konsole --hold -e bash "$(realpath -e -- "${BASH_SOURCE[0]}")" "$@"
+    exec konsole -e bash "$(realpath -e -- "${BASH_SOURCE[0]}")" --pause "${ORIG_ARGS[@]}"
 fi
+
 
 [[ $(id -u) -ne 0 ]] || fail 'Run as your normal user (deck), without sudo'
 [[ $(uname -m) == x86_64 ]] || fail 'This bundle requires an x86_64 host'
@@ -91,13 +127,6 @@ STEAM_TOOLS="$HOME/.local/share/Steam/compatibilitytools.d"
 mkdir -p -- "$DATA_HOME"
 DATA_HOME="$(realpath -e -- "$DATA_HOME")"
 TEMP="$(mktemp -d "$DATA_HOME/.lepton-install.XXXXXXXX")"
-cleanup() {
-    [[ -n "${TEMP:-}" ]] && rm -f -- "$TEMP.meta"
-    [[ -z "${TEMP:-}" || ! -d "$TEMP" ]] && return
-    chmod -R u+rwX -- "$TEMP" 2>/dev/null || true
-    rm -rf -- "$TEMP"
-}
-trap cleanup EXIT
 
 info 'Extracting bundle'
 tar -xzf "$ARCHIVE" -C "$TEMP" --no-same-owner
@@ -179,6 +208,7 @@ mkdir -p -- "$bin_dir"
 ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game" "$bin_dir/lepton-add-game"
 ln -sfn -- "$DEST/tests/runtime/run-apk.sh" "$bin_dir/lepton-run-apk"
 ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game-gui" "$bin_dir/lepton-add-game-gui"
+ln -sfn -- "$DEST/compat_tool/tools/lepton-in-terminal" "$bin_dir/lepton-in-terminal"
 pass "Commands: $bin_dir/lepton-add-game, $bin_dir/lepton-add-game-gui, $bin_dir/lepton-run-apk"
 
 # Menu (and desktop) entries: usable without a keyboard. They use the
@@ -186,9 +216,9 @@ pass "Commands: $bin_dir/lepton-add-game, $bin_dir/lepton-add-game-gui, $bin_dir
 apps="$DATA_HOME/applications"
 mkdir -p -- "$apps"
 if command -v konsole >/dev/null 2>&1; then
-    check_exec="konsole --hold -e \"$bin_dir/lepton-run-apk\" --gpu-check --execute"; check_terminal=false
+    check_exec="konsole -e \"$bin_dir/lepton-in-terminal\" \"$bin_dir/lepton-run-apk\" --gpu-check --execute"; check_terminal=false
 else
-    check_exec="\"$bin_dir/lepton-run-apk\" --gpu-check --execute"; check_terminal=true
+    check_exec="\"$bin_dir/lepton-in-terminal\" \"$bin_dir/lepton-run-apk\" --gpu-check --execute"; check_terminal=true
 fi
 cat > "$apps/lepton-x86_64-add-game.desktop" <<DESKTOP
 [Desktop Entry]

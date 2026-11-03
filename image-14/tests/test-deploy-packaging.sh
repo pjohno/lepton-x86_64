@@ -84,6 +84,14 @@ mkdir -p "$deck_home"
 deck() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 HOME="$deck_home" bash "$installer" --allow-non-amd "$@"; }
 mkdir -p "$deck_home/Desktop"
 deck --check > "$work/install-check.log"
+! grep -q 'Press Enter' "$work/install-check.log"
+# --pause ends with the close prompt, on success and on failure (stdin at EOF
+# makes the prompt return at once).
+deck --check --pause < /dev/null > "$work/install-pause.log"
+grep -q '^\[DONE\] Finished successfully' "$work/install-pause.log"
+grep -q 'Press Enter to close this window (it closes by itself in 60 seconds)' "$work/install-pause.log"
+if deck --pause --bogus < /dev/null > "$work/install-fail.log" 2>&1; then echo 'FAIL: bad option accepted'; exit 1; fi
+grep -q 'closes by itself in 600 seconds' "$work/install-fail.log"
 dest="$deck_home/.local/share/lepton_x86_64_fixture"
 [[ ! -e "$dest" && ! -e "$deck_home/.config" ]]
 deck > "$work/install.log"
@@ -98,6 +106,9 @@ grep -Fq '"Lepton x86_64 (community) - fixture"' "$vdf"
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game-gui")" == "$dest/compat_tool/tools/lepton-add-game-gui" ]]
 grep -Fqx "Exec=\"$deck_home/.local/bin/lepton-add-game-gui\"" "$deck_home/.local/share/applications/lepton-x86_64-add-game.desktop"
 grep -Fq -- '--gpu-check --execute' "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
+grep -Fq "lepton-in-terminal\" \"$deck_home/.local/bin/lepton-run-apk\"" "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
+! grep -q -- '--hold' "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
+[[ "$(readlink -f "$deck_home/.local/bin/lepton-in-terminal")" == "$dest/compat_tool/tools/lepton-in-terminal" ]]
 [[ -x "$deck_home/Desktop/lepton-x86_64-add-game.desktop" && -x "$deck_home/Desktop/lepton-x86_64-gpu-check.desktop" ]]
 if command -v desktop-file-validate >/dev/null; then
     desktop-file-validate "$deck_home/.local/share/applications/"lepton-x86_64-*.desktop
@@ -140,7 +151,7 @@ run --transfer-only --check --bundle-dir "$out" --bundle-id fixture --deck-ip 19
 run --transfer-only --execute --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1 > "$work/transfer.log"
 [[ $(wc -l < "$TRACE") == 4 ]]  # ssh mkdir, rsync, ssh verify, ssh desktop icon
 sed "s|@HOME@|/home/deck|g" "$TRACE.desktop" > "$work/lepton-install-fixture.desktop"
-grep -Fqx 'Exec=konsole --hold -e bash "/home/deck/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-fixture.install.sh"' "$work/lepton-install-fixture.desktop"
+grep -Fqx 'Exec=konsole -e bash "/home/deck/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-fixture.install.sh" --pause' "$work/lepton-install-fixture.desktop"
 if command -v desktop-file-validate >/dev/null; then desktop-file-validate "$work/lepton-install-fixture.desktop"; fi
 printf 'broken' >> "$archive"
 reject --transfer-only --check --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1

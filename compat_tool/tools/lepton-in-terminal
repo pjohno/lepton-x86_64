@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Run a command in a terminal window opened from a desktop icon, then end with
+# an explicit "Press Enter to close" prompt (auto-close after a timeout).
+#   lepton-in-terminal COMMAND [ARGS...]
+set -uo pipefail
+(($#)) || { printf 'Usage: lepton-in-terminal COMMAND [ARGS...]\n' >&2; exit 2; }
+
+# A handler (not "ignore") so Ctrl+C still stops the command itself, which
+# resets handlers on exec, while this wrapper survives to show the prompt.
+trap ':' INT
+"$@"
+status=$?
+trap - INT
+
+seconds=60
+printf '\n'
+if ((status == 0)); then
+    printf '[DONE] Finished successfully.\n'
+else
+    printf '[FAIL] Did not complete (exit status %s); see the messages above.\n' "$status"
+    seconds=600
+fi
+printf 'Press Enter to close this window (it closes by itself in %s seconds).\n' "$seconds"
+read -r -t "$seconds" _ || true
+exit "$status"

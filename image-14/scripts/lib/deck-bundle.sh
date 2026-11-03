@@ -79,7 +79,7 @@ transfer_bundle() {
 Type=Application
 Name=Install Lepton $bundle_id
 Comment=Install this Lepton x86_64 bundle and register it with Steam
-Exec=konsole --hold -e bash "@HOME@/Downloads/lepton-deck-bundles/$installer_name"
+Exec=konsole -e bash "@HOME@/Downloads/lepton-deck-bundles/$installer_name" --pause
 Icon=system-software-install
 Terminal=false
 DESKTOP
@@ -278,6 +278,8 @@ install -m 755 "$repo/compat_tool/tools/lepton-install-bundle" \
     "$tmp/payload/compat_tool/tools/lepton-install-bundle"
 install -m 755 "$repo/compat_tool/tools/lepton-add-game-gui" \
     "$tmp/payload/compat_tool/tools/lepton-add-game-gui"
+install -m 755 "$repo/compat_tool/tools/lepton-in-terminal" \
+    "$tmp/payload/compat_tool/tools/lepton-in-terminal"
 install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
     "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
 
