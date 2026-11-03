@@ -174,6 +174,20 @@ once. Optional per-game settings still go in the launch options, for example
 `LEPTON_GAMEPAD_HOTPLUG=true %command%`. `LEPTON_NO_BRIDGE=true %command%`
 starts without the nested Gamescope (for debugging).
 
+## Game data between launches
+
+A game's Android data (the installed app and everything it saves internally) is
+kept between launches, so the APK is not reinstalled each time and progress
+stays. It lives in Steam's compatdata folder for that shortcut, not in the
+Lepton install, so it survives updating or replacing an install. It is reset
+automatically (with a message in the Lepton log) when the game would start on a
+different Android image, for example after switching the game to another Lepton
+tool or installing a bundle with a new Android build; data a game keeps in
+shared storage (`/sdcard`) is never reset. To reset one game by hand, launch it
+once with the launch option `LEPTON_RESET_APP_DATA=true %command%`, then remove
+the option. `LEPTON_KEEP_APP_DATA=false %command%` restores the old behaviour
+(fresh install on every launch).
+
 ## Starting again from a clean slate
 
 To remove every Lepton install and trace from a Deck, run from the build

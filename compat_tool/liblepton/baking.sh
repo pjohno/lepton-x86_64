@@ -76,7 +76,11 @@ function is_app_baked()
     is_app &&
     [[ -f "$(app_install_complete_path)" ]] &&
     [[ "$(get_baked_app_data_dir)/data_overlay/system/packages.xml" -nt "$(get_apk_path)" ]] &&
-    [[ -n "$(grep "$(get_app_id)" "$(get_baked_app_data_dir)/data_overlay/system/packages.xml" 2>/dev/null)" ]]
+    # x86_64 port: Android 14 writes packages.xml as binary XML (ABX); GNU grep
+    # prints no line for binary matches, so test its exit status, as text.
+    grep -qaF -- "$(get_app_id)" "$(get_baked_app_data_dir)/data_overlay/system/packages.xml" 2>/dev/null &&
+    # The installed app is mounted back at its codePath; without it, reinstall.
+    [[ -n "$(get_app_mount_dir)" ]]
 }
 
 function autobake()

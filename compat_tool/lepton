@@ -253,7 +253,10 @@ case "${COMMAND}" in
                 println "Dumping logcat to $(logcat_debug_dir)"
                 dump_logcat "$(logcat_debug_dir)"
 
-                if [[ "${EARLY_SHUTDOWN}" == "1" ]]; then
+                # x86_64 port: with kept app data, a quick exit of a correctly
+                # installed game must not erase its saves; only clear when the
+                # app did not finish installing.
+                if [[ "${EARLY_SHUTDOWN}" == "1" ]] && ! { should_keep_app_data && is_app_baked; }; then
                     # Clearing baked app data in this case since something might be wrong.
                     clear_baked_app_data "early exit"
                 fi

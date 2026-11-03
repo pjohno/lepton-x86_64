@@ -89,13 +89,22 @@ function get_app_activity()
 function extract_app_mount_dir()
 {
     local PACKAGES_XML_DIR="${1:-$(get_baked_app_data_dir)/data_overlay/system}"
-    grep "$(get_app_id).*codePath" "${PACKAGES_XML_DIR}/packages.xml" 2>/dev/null | \
-        sed -E -e 's/.*codePath="([^"]+)".*/\1/g'
+    # x86_64 port: match the codePath itself, which works for text XML and for
+    # Android 14's binary packages.xml (ABX), where attributes are not text:
+    #   /data/app/~~<base64 id>/<package>-<base64 id>   (or older <package>-<n>)
+    local PACKAGE_RE="$(get_app_id)"
+    PACKAGE_RE="${PACKAGE_RE//./\\.}"
+    grep -aoE "/data/app/(~~[A-Za-z0-9_-]{22}==/)?${PACKAGE_RE}-([A-Za-z0-9_-]{22}==|[0-9]+)" \
+        "${PACKAGES_XML_DIR}/packages.xml" 2>/dev/null | head -n 1
 }
 APP_MOUNT_DIR=""
 function get_app_mount_dir()
 {
-    cached_app_metadata APP_MOUNT_DIR extract_app_mount_dir
+    local DIR
+    DIR="$(cached_app_metadata APP_MOUNT_DIR extract_app_mount_dir)"
+    # x86_64 port: earlier runs could cache an empty value; read it again.
+    [[ -n "${DIR}" ]] || DIR="$(extract_app_mount_dir)"
+    print "${DIR}"
 }
 
 APP_HASH=""

@@ -95,10 +95,66 @@ function clear_baked_app_data()
     fi
 }
 
+# x86_64 port: keep a Steam-launched game's Android data (installed app and
+# its internal storage) between launches, instead of reinstalling into a fresh
+# /data every time. LEPTON_KEEP_APP_DATA=false restores the upstream behaviour.
+function should_keep_app_data()
+{
+    is_steamlaunch && is_app && [[ -n "${STEAM_COMPAT_DATA_PATH:-}" ]] &&
+        [[ "${LEPTON_KEEP_APP_DATA:-true}" != false ]]
+}
+
+# Overlay work directories are scratch space; drop them but keep the data.
+function remove_baked_workdirs()
+{
+    local DIR
+    for DIR in "$(data_workdir "$@")" "$(app_workdir "$@")"; do
+        if [[ -d "${DIR}" ]]; then
+            chmod -R 700 "${DIR}"
+            rm -rf "${DIR}"
+        fi
+    done
+}
+
+# Identifies the Android image the kept data was created with: system and
+# framework build plus the baked system data the /data overlay sits on.
+function lepton_runtime_fingerprint()
+{
+    local ROOTFS="${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}"
+    cat "${ROOTFS}/system/build.prop" "${ROOTFS}/vendor/build.prop" \
+        "${ROOTFS}/system/framework/services.jar" \
+        "${BAKED_SYSTEM_DATA_DIR}/system/packages.xml" 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+
+# Before mounting: clear kept data on request or if the Android image changed
+# (another bundle/tool version), then record the current image.
+function check_kept_app_data()
+{
+    should_keep_app_data || return 0
+    local DIR FINGERPRINT_FILE CURRENT STORED
+    DIR="$(get_baked_app_data_dir)"
+    FINGERPRINT_FILE="${DIR}/lepton-runtime-fingerprint"
+    CURRENT="$(lepton_runtime_fingerprint)"
+    if [[ "${LEPTON_RESET_APP_DATA:-false}" == true ]]; then
+        clear_baked_app_data "LEPTON_RESET_APP_DATA=true (game data reset requested)"
+    elif [[ -d "$(data_mount_path)" ]]; then
+        STORED="$(cat "${FINGERPRINT_FILE}" 2>/dev/null || true)"
+        if [[ "${STORED}" != "${CURRENT}" ]]; then
+            clear_baked_app_data "Android runtime changed since this game's data was kept; reinstalling fresh"
+        fi
+    fi
+    mkdir -p "${DIR}"
+    print "${CURRENT}" > "${FINGERPRINT_FILE}"
+}
+
 function remove_prefix()
 {
     if [[ -n "${LEPTON_PREFIX:-}" ]]; then
-        prepare_baked_data_for_removal
+        if should_keep_app_data; then
+            remove_baked_workdirs
+        else
+            prepare_baked_data_for_removal
+        fi
 
         # clear the whole prefix
         rm -rf "${LEPTON_PREFIX}"
@@ -142,6 +198,7 @@ function app_datadir()
 function setup_container()
 {
     check_host_gpu
+    check_kept_app_data
     cleanup_container
 
     # Mount in vulkan layers, if requested by certain environment variables

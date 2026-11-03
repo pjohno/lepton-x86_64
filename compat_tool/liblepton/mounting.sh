@@ -137,6 +137,11 @@ function setup_mounts()
             fi
             mkdir -p "${STEAM_COMPAT_DATA_PATH}/external"
         fi
+        # x86_64 port: with kept app data, Android leaves this host-owned upper
+        # directory at 0550 after shutdown; make it writable to replace the link.
+        if [[ -d "$(data_mount_path)/media" ]]; then
+            chmod u+rwx -- "$(data_mount_path)/media"
+        fi
         rm -rf "$(data_mount_path)/media/0"
         mkdir -p "$(data_mount_path)/media"
         local TARGET_PATH="$(data_mount_path)/media/0"
