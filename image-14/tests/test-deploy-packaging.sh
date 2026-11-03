@@ -81,7 +81,8 @@ grep -Fq ' lepton-x86_64-steamdeck-fixture.install.sh' "$archive.sha256"
 deck_home="$work/deck-home"
 mkdir -p "$deck_home"
 # LEPTON_INSTALL_IN_TERMINAL stops the installer reopening itself in Konsole.
-deck() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 HOME="$deck_home" bash "$installer" --allow-non-amd "$@"; }
+deck() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 HOME="$deck_home" bash "$installer" --allow-non-amd "$@"; }
+manage() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$deck_home" python3 "$deck_home/.local/bin/lepton-manage-installs" "$@"; }
 mkdir -p "$deck_home/Desktop"
 deck --check > "$work/install-check.log"
 ! grep -q 'Press Enter' "$work/install-check.log"
@@ -123,9 +124,105 @@ assert (module.TOOL, str(module.INSTALL)) == ('lepton_x86_64_fixture', sys.argv[
 PYADD
 if deck > "$work/reinstall.log" 2>&1; then echo 'FAIL: installer overwrote an existing install'; exit 1; fi
 grep -q -- '--replace' "$work/reinstall.log"
+# --replace overwrites in place and removes the old copy unless --keep-previous.
 deck --replace > "$work/replace.log"
-compgen -G "$dest.previous-*" > /dev/null
+! compgen -G "$dest.previous-*" > /dev/null
+# ...but an old copy holding saved app profiles is always kept.
+mkdir -p "$dest/.runtime-profile.playgames"
+manage --list | grep -q '1 saved app profile(s)'
+deck --replace > "$work/replace-profile.log"
+grep -q 'contains saved app profiles' "$work/replace-profile.log"
+kept="$(compgen -G "$dest.previous-*")"
+[[ -d "$kept/.runtime-profile.playgames" ]]
+manage --remove "$(basename "$kept")" | grep -q 'deletes 1 saved app profile(s)'
+manage --remove "$(basename "$kept")" --execute > /dev/null
+! compgen -G "$dest.previous-*" > /dev/null
 [[ -x "$dest/compat_tool/lepton" ]]
+deck --replace --keep-previous > "$work/replace-keep.log"
+compgen -G "$dest.previous-*" > /dev/null
+manage --list > "$work/list.log"
+grep -q '^\* lepton_x86_64_fixture$' "$work/list.log"
+grep -q 'Backup of lepton_x86_64_fixture' "$work/list.log"
+backup="$(basename "$(compgen -G "$dest.previous-*")")"
+manage --remove "$backup" > "$work/remove-check.log"
+grep -q 'Nothing was changed' "$work/remove-check.log"
+compgen -G "$dest.previous-*" > /dev/null
+manage --remove "$backup" --execute > "$work/remove.log"
+! compgen -G "$dest.previous-*" > /dev/null
+[[ -x "$dest/compat_tool/lepton" ]]
+
+# A Steam shortcut mapped to the fixture tool (as lepton-add-game writes it).
+mkdir -p "$deck_home/.local/share/Steam/config"
+printf '"CompatToolMapping"\n{\n"1"\n{\n"name"\t\t"lepton_x86_64_fixture"\n}\n}\n' > "$deck_home/.local/share/Steam/config/config.vdf"
+manage --list | grep -q '1 Steam shortcut(s)'
+
+# A legacy, manually installed lepton-x86_64-dev registered with Steam.
+legacy="$deck_home/.local/share/lepton-x86_64-dev"
+mkdir -p "$legacy/compat_tool/liblepton"
+printf '#!/bin/sh\n' > "$legacy/compat_tool/lepton"
+printf '"compatibilitytools"\n{\n  "compat_tools"\n  {\n    "lepton_x86_64_dev"\n    {\n      "install_path" "%s/compat_tool"\n      "display_name" "Lepton x86_64 dev"\n    }\n  }\n}\n' "$legacy" \
+    > "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf"
+manage --list | grep -q '^  lepton_x86_64_dev$'
+# A running process inside an install blocks overwriting/removing it.
+(cd "$legacy" && exec sleep 30) &
+busy=$!
+if deck --into lepton_x86_64_dev > "$work/into-busy.log" 2>&1; then echo 'FAIL: overwrote a running install'; exit 1; fi
+grep -q 'is running' "$work/into-busy.log"
+if manage --remove lepton_x86_64_dev --execute > "$work/remove-busy.log" 2>&1; then echo 'FAIL: removed a running install'; exit 1; fi
+kill "$busy"; wait "$busy" 2>/dev/null || true
+# Overwrite the legacy install: same tool ID and directory, new contents and name.
+deck --into lepton_x86_64_dev > "$work/into.log"
+[[ -f "$legacy/BUNDLE.json" && ! -e "$deck_home/.local/share/lepton_x86_64_dev" ]]
+python3 - "$legacy/BUNDLE.json" <<'PYINTO'
+import json, sys
+m = json.load(open(sys.argv[1]))
+assert (m['tool_id'], m['install_directory'], m['packaged_tool_id']) == ('lepton_x86_64_dev', 'lepton-x86_64-dev', 'lepton_x86_64_fixture'), m
+PYINTO
+grep -Fq "\"$legacy/compat_tool\"" "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf"
+grep -Fq '"Lepton x86_64 (community) - fixture"' "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf"
+! compgen -G "$legacy.previous-*" > /dev/null
+[[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_dev.env ]]
+[[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$legacy/compat_tool/tools/lepton-add-game" ]]
+# --into requires an existing install.
+if deck --into lepton_missing > "$work/into-missing.log" 2>&1; then echo 'FAIL: --into missing accepted'; exit 1; fi
+# Remove the default install: default moves to the remaining install.
+manage --remove lepton_x86_64_dev --execute > "$work/remove-default.log"
+[[ ! -e "$legacy" && ! -e "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf" ]]
+[[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_fixture.env ]]
+[[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$dest/compat_tool/tools/lepton-add-game" ]]
+grep -q 'Default install: Lepton x86_64 (community) - fixture' "$work/remove-default.log"
+# Installer --remove: validated before any change, applied after success.
+mkdir -p "$legacy/compat_tool/liblepton" && printf '#!/bin/sh\n' > "$legacy/compat_tool/lepton"
+manage --list | grep -q 'Unregistered lepton-x86_64-dev'
+if deck --replace --remove lepton_unknown > "$work/remove-unknown.log" 2>&1; then echo 'FAIL: unknown --remove accepted'; exit 1; fi
+if deck --replace --remove lepton_x86_64_fixture > "$work/remove-self.log" 2>&1; then echo 'FAIL: removed itself'; exit 1; fi
+grep -q 'would remove the install being created' "$work/remove-self.log"
+deck --replace --remove "$(basename "$legacy")" > "$work/replace-remove.log"
+[[ ! -e "$legacy" && -x "$dest/compat_tool/lepton" ]]
+# Desktop-icon install (--pause + display): scripted zenity chooses to replace
+# a registered legacy install, then ticks the fixture install for removal.
+mkdir -p "$legacy/compat_tool/liblepton" && printf '#!/bin/sh\n' > "$legacy/compat_tool/lepton"
+printf '"compatibilitytools"\n{\n "compat_tools"\n {\n  "lepton_x86_64_dev"\n  {\n   "install_path" "%s/compat_tool"\n   "display_name" "Lepton dev"\n  }\n }\n}\n' "$legacy" \
+    > "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf"
+mkdir -p "$work/gui-bin"
+cat > "$work/gui-bin/zenity" <<'SH'
+#!/bin/bash
+echo "zenity $*" >> "$UI_LOG"
+case "$1" in
+  --list) if [[ " $* " == *" --radiolist "* ]]; then echo lepton_x86_64_dev; else echo lepton_x86_64_fixture; fi ;;
+  --question) exit 0 ;;
+esac
+SH
+chmod +x "$work/gui-bin/zenity"
+env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u LEPTON_NO_DIALOGS LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_DIALOG=zenity \
+    WAYLAND_DISPLAY=test-display UI_LOG="$work/gui-install.log" PATH="$work/gui-bin:$PATH" HOME="$deck_home" \
+    bash "$installer" --allow-non-amd --pause < /dev/null > "$work/gui-install.out"
+grep -q 'zenity --list --radiolist' "$work/gui-install.log"
+grep -q 'zenity --list --checklist' "$work/gui-install.log"
+[[ -f "$legacy/BUNDLE.json" && ! -e "$dest" ]]
+[[ ! -e "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_fixture.vdf" ]]
+[[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_dev.env ]]
+grep -q 'Press Enter to close' "$work/gui-install.out"
 mkdir -p "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore"
 printf 'synthetic' > "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk"
 mkdir -p "$stage/compat_tool/images/rootfs/system/framework"

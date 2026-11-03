@@ -88,8 +88,10 @@ bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-gapps-v1.install.sh
 The installer verifies the checksum, extracts to a new directory named after the
 tool ID, registers the tool and makes it the default for `~/.local/bin/lepton-*`.
 Restart Steam afterwards. Each bundle needs its own `--tool-id`; conflicting
-registrations and existing destination directories are refused (use `--replace`
-to update the same tool). GApps packaging defaults to `lepton_gapps_<bundle-id>`
+registrations and existing destination directories are refused unless you choose
+to replace an install (`--replace`, `--into TOOL_ID`, or the choice offered by the
+desktop icon); a replaced install holding saved Google profiles is kept as a
+`.previous-*` copy. GApps packaging defaults to `lepton_gapps_<bundle-id>`
 (dots and hyphens become underscores) and a normal package to
 `lepton_x86_64_<bundle-id>`, so neither reuses the legacy `lepton_x86_64_dev`. See
 [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md) for the full flow.

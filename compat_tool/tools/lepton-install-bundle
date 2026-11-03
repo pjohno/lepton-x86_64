@@ -4,7 +4,9 @@
 #
 #   bash lepton-x86_64-steamdeck-ID.install.sh            # install
 #   bash lepton-x86_64-steamdeck-ID.install.sh --check    # verify only
-#   bash lepton-x86_64-steamdeck-ID.install.sh --replace  # update same tool ID
+#   bash lepton-x86_64-steamdeck-ID.install.sh --replace  # overwrite this tool's install
+#   bash lepton-x86_64-steamdeck-ID.install.sh --into OLD_TOOL_ID   # overwrite another
+#   bash lepton-x86_64-steamdeck-ID.install.sh --remove OLD_TOOL_ID # remove after install
 #
 # Steps: verify checksum, extract to ~/.local/share/<install_directory>,
 # register the Steam compatibility tool, and write
@@ -17,6 +19,9 @@ ORIG_ARGS=("$@")
 MODE=execute
 PAUSE=false
 REPLACE=false
+INTO=''
+REMOVE_IDS=()
+KEEP_PREVIOUS=false
 ALLOW_NON_AMD=false
 ARCHIVE=''
 
@@ -28,8 +33,13 @@ usage() {
     cat <<'HELP'
 Options:
   --check          Verify the archive and destination; change nothing
-  --replace        Replace an existing install of the SAME tool ID; the old
-                   directory is kept as <dir>.previous-<timestamp>
+  --replace        Overwrite an existing install of this bundle's own tool ID
+  --into TOOL_ID   Overwrite another existing install (e.g. lepton_x86_64_dev).
+                   Its tool ID and directory are kept, so its Steam shortcuts
+                   keep working; Steam shows the new name after a restart
+  --keep-previous  With --replace/--into: keep the old copy as <dir>.previous-<date>
+  --remove TOOL_ID Remove another install after a successful install (repeatable;
+                   see lepton-manage-installs --list)
   --allow-non-amd  Install on a host without an AMD GPU (software rendering only)
   --pause          End with "Press Enter to close" (used by desktop icons)
   ARCHIVE          Bundle .tar.gz (default: the archive next to this script)
@@ -70,6 +80,9 @@ while (($#)); do
     case "$1" in
         --check) MODE=check; shift ;;
         --replace) REPLACE=true; shift ;;
+        --into) INTO="${2:?--into needs a tool ID}"; shift 2 ;;
+        --remove) REMOVE_IDS+=("${2:?--remove needs a tool ID}"); shift 2 ;;
+        --keep-previous) KEEP_PREVIOUS=true; shift ;;
         --allow-non-amd) ALLOW_NON_AMD=true; shift ;;
         --pause) PAUSE=true; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -149,18 +162,56 @@ rm -f -- "$TEMP.meta"
 (( ${#meta[@]} == 6 )) || fail 'Invalid BUNDLE.json'
 TOOL_ID="${meta[0]}"; TOOL_NAME="${meta[1]}"; INSTALL_NAME="${meta[2]}"
 BUNDLE_ID="${meta[3]}"; HAS_GAPPS="${meta[4]}"; HAS_NDK="${meta[5]}"
+MANAGE="$TEMP/compat_tool/tools/lepton-manage-installs"
+[[ -f "$MANAGE" ]] || fail 'Bundle lacks lepton-manage-installs'
+manage() { python3 "$MANAGE" "$@"; }
+# Started from a desktop icon: offer "new or replace" (tap-only).
+INTERACTIVE=false
+if [[ "$PAUSE" == true && "$MODE" == execute && -z "${LEPTON_NO_DIALOGS:-}" &&
+      ( -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ) ]] &&
+   { command -v zenity >/dev/null 2>&1 || command -v kdialog >/dev/null 2>&1; }; then
+    INTERACTIVE=true
+fi
+if [[ "$INTERACTIVE" == true && -z "$INTO" && "$REPLACE" == false ]]; then
+    choice="$(manage --gui-choose-target --new-id "$TOOL_ID" --new-name "$TOOL_NAME")" ||
+        fail 'Installation cancelled; nothing was changed'
+    [[ "$choice" == new ]] || INTO="$choice"
+fi
+
 DEST="$DATA_HOME/$INSTALL_NAME"
+[[ "$REPLACE" == false || -n "$INTO" || ! -e "$DEST" ]] || INTO="$TOOL_ID"
+BACKUP=''
+if [[ -n "$INTO" ]]; then
+    DEST="$(manage --print-dir "$INTO")" || fail "No existing install with tool ID $INTO (see lepton-manage-installs --list)"
+    DEST="$(realpath -e -- "$DEST")"
+    [[ "$DEST" == "$HOME/"* && -d "$DEST" && ! -L "$DEST" ]] || fail "Refusing to overwrite $DEST"
+    manage --check-free "$INTO" || fail 'Nothing was changed'
+    if [[ "$INTO" != "$TOOL_ID" ]]; then
+        info "Overwriting install $INTO (its Steam shortcuts keep working)"
+        TOOL_ID="$INTO"
+        INSTALL_NAME="$(basename -- "$DEST")"
+        # The installed copy identifies itself by the tool ID it now occupies.
+        python3 - "$TEMP/BUNDLE.json" "$TOOL_ID" "$INSTALL_NAME" <<'PYINTO' || fail 'Cannot update BUNDLE.json'
+import json, sys
+path, tool, directory = sys.argv[1:]
+data = json.load(open(path, encoding='utf-8'))
+data.setdefault('packaged_tool_id', data['tool_id'])
+data['tool_id'], data['install_directory'] = tool, directory
+open(path, 'w', encoding='utf-8').write(json.dumps(data, indent=2) + '\n')
+PYINTO
+    fi
+    BACKUP="$DEST.previous-$(date +%Y%m%d-%H%M%S)"
+elif [[ -e "$DEST" || -L "$DEST" ]]; then
+    fail "Already installed at $DEST. Use --replace to overwrite it (or install a bundle with a new ID)."
+fi
 info "Tool: $TOOL_NAME ($TOOL_ID)"
 info "Install directory: $DEST"
-
-BACKUP=''
-if [[ -e "$DEST" || -L "$DEST" ]]; then
-    [[ -d "$DEST" && ! -L "$DEST" ]] || fail "Destination is not a normal directory: $DEST"
-    [[ "$REPLACE" == true ]] || fail "Already installed at $DEST. Re-run with --replace to update it (the old copy is kept)."
-    old_tool="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tool_id"])' "$DEST/BUNDLE.json" 2>/dev/null || true)"
-    [[ "$old_tool" == "$TOOL_ID" ]] || fail "Existing directory belongs to another tool ID ('$old_tool'); refusing to replace"
-    BACKUP="$DEST.previous-$(date +%Y%m%d-%H%M%S)"
-    info "Existing install will be moved to $BACKUP"
+for id in "${REMOVE_IDS[@]}"; do
+    [[ "$id" != "$TOOL_ID" ]] || fail "--remove $id would remove the install being created"
+done
+if ((${#REMOVE_IDS[@]})); then
+    # Validates names and that none is running; changes nothing.
+    manage --remove "${REMOVE_IDS[@]}" | sed 's/^/[INFO] /' || fail 'Nothing was changed'
 fi
 registration="$STEAM_TOOLS/$TOOL_ID.vdf"
 if [[ -f "$registration" ]] && ! grep -Fq "\"$DEST/compat_tool\"" "$registration"; then
@@ -183,7 +234,7 @@ TEMP=''
 pass "Installed to $DEST"
 
 register_args=(--execute)
-[[ "$REPLACE" == false ]] || register_args+=(--replace)
+[[ -z "$INTO" ]] || register_args+=(--replace)
 python3 "$DEST/compat_tool/tools/lepton-register-tool" "${register_args[@]}"
 
 mkdir -p -- "$CONFIG_DIR"
@@ -209,6 +260,7 @@ ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game" "$bin_dir/lepton-add-game"
 ln -sfn -- "$DEST/tests/runtime/run-apk.sh" "$bin_dir/lepton-run-apk"
 ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game-gui" "$bin_dir/lepton-add-game-gui"
 ln -sfn -- "$DEST/compat_tool/tools/lepton-in-terminal" "$bin_dir/lepton-in-terminal"
+ln -sfn -- "$DEST/compat_tool/tools/lepton-manage-installs" "$bin_dir/lepton-manage-installs"
 pass "Commands: $bin_dir/lepton-add-game, $bin_dir/lepton-add-game-gui, $bin_dir/lepton-run-apk"
 
 # Menu (and desktop) entries: usable without a keyboard. They use the
@@ -240,13 +292,46 @@ Icon=video-display
 Terminal=$check_terminal
 Categories=Game;
 DESKTOP
+cat > "$apps/lepton-x86_64-manage-installs.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Lepton: Remove installs
+Comment=Remove old Lepton x86_64 installs and backups
+Exec="$bin_dir/lepton-manage-installs" --gui
+Icon=edit-delete
+Terminal=false
+Categories=Game;
+DESKTOP
 desktop_dir="$HOME/Desktop"
 if [[ -d "$desktop_dir" ]]; then
-    for entry in lepton-x86_64-add-game.desktop lepton-x86_64-gpu-check.desktop; do
+    for entry in lepton-x86_64-add-game.desktop lepton-x86_64-gpu-check.desktop lepton-x86_64-manage-installs.desktop; do
         install -m 755 "$apps/$entry" "$desktop_dir/$entry"
     done
 fi
-pass "Menu entries: Lepton: Add Android game, Lepton: Check graphics"
+pass "Menu entries: Lepton: Add Android game, Lepton: Check graphics, Lepton: Remove installs"
+
+installed_manage="$DEST/compat_tool/tools/lepton-manage-installs"
+if [[ -n "$BACKUP" ]]; then
+    if [[ "$KEEP_PREVIOUS" == true ]]; then
+        info "Previous copy kept at $BACKUP"
+    elif compgen -G "$BACKUP/.runtime-profile.*" > /dev/null; then
+        # Saved app profiles (e.g. Google sign-in) live inside the install.
+        KEEP_PREVIOUS=true
+        info "Previous copy kept at $BACKUP: it contains saved app profiles (e.g. Google sign-in)."
+        info 'Remove it with "Lepton: Remove installs" once they are no longer needed.'
+    elif python3 "$installed_manage" --remove "$(basename -- "$BACKUP")" --execute >/dev/null; then
+        pass 'Previous copy removed'
+    else
+        info "Could not remove the previous copy at $BACKUP; use \"Lepton: Remove installs\""
+    fi
+fi
+if ((${#REMOVE_IDS[@]})); then
+    python3 "$installed_manage" --remove "${REMOVE_IDS[@]}" --execute | sed 's/^/[PASS] /' ||
+        info 'Some installs were not removed; see above'
+elif [[ "$INTERACTIVE" == true ]]; then
+    python3 "$installed_manage" --gui --quiet-if-empty --exclude "$TOOL_ID" \
+        --prompt "Installed $TOOL_NAME. Optionally remove older Lepton installs:" || true
+fi
 
 cat <<EOF
 
@@ -258,6 +343,6 @@ Next steps (desktop icons or application menu > Games; no typing needed)
 Terminal equivalents: lepton-run-apk --gpu-check --execute,
                       lepton-add-game GAME.apk (with Steam exited; in ~/.local/bin)
 EOF
-if [[ -n "$BACKUP" ]]; then
-    printf '\nPrevious install kept at %s (delete it once the new one works).\n' "$BACKUP"
+if [[ -n "$BACKUP" && "$KEEP_PREVIOUS" == true ]]; then
+    printf '\nPrevious install kept at %s (remove it with "Lepton: Remove installs").\n' "$BACKUP"
 fi

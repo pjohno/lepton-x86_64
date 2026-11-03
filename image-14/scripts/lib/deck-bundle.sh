@@ -280,6 +280,8 @@ install -m 755 "$repo/compat_tool/tools/lepton-add-game-gui" \
     "$tmp/payload/compat_tool/tools/lepton-add-game-gui"
 install -m 755 "$repo/compat_tool/tools/lepton-in-terminal" \
     "$tmp/payload/compat_tool/tools/lepton-in-terminal"
+install -m 755 "$repo/compat_tool/tools/lepton-manage-installs" \
+    "$tmp/payload/compat_tool/tools/lepton-manage-installs"
 install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
     "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
 
@@ -322,8 +324,11 @@ Install (Desktop Mode): double-tap the "Install Lepton {bundle}" desktop icon
 
 The installer verifies the checksum, extracts to ~/.local/share/{directory},
 registers the Steam compatibility tool "{name}", and writes
-~/.config/lepton-x86_64/{tool}.env. It never overwrites an existing install;
-use --replace to update this same tool (the old copy is kept).
+~/.config/lepton-x86_64/{tool}.env. It never overwrites an existing install
+unless you choose to: from the desktop icon it asks "new tool or replace?" and
+then offers to remove older installs; in a terminal use --into TOOL_ID,
+--replace or --remove TOOL_ID. "Lepton: Remove installs" cleans up later.
+Steam does not need to be closed to install or remove; restart it afterwards.
 
 Then use the new desktop/menu entries (no typing needed):
   "Lepton: Check graphics"      confirms AMD RADV graphics

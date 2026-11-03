@@ -80,9 +80,16 @@ The installer:
 6. adds **Lepton: Add Android game** and **Lepton: Check graphics** to the desktop
    and to the application menu (Games).
 
-Use `--check` to verify without installing. To update the same tool later, run
-the new bundle's installer with `--replace`; the old copy is kept as
-`<directory>.previous-<date>`.
+When started from the desktop icon and other Lepton installs exist, the
+installer first asks whether to **install as a new tool** or **replace** one of
+them, and afterwards offers a tick-list of older installs to remove. Steam does
+not need to be closed for installing, replacing or removing (only for adding
+games); restart Steam afterwards so it shows the new tool.
+
+Terminal options: `--check` verifies without installing; `--into TOOL_ID`
+replaces an existing install; `--replace` replaces this bundle's own earlier
+install; `--remove TOOL_ID` (repeatable) removes others after installing;
+`--keep-previous` keeps the replaced copy as `<directory>.previous-<date>`.
 
 ## 4. Check graphics
 
@@ -120,24 +127,37 @@ does not reach Android.
 Controllers present at launch are passed to Android. Live controller hotplug is
 experimental (`--hotplug`) and exposes all host input devices to the container.
 
-## Several installs side by side
+## Several installs side by side, replacing and removing
 
 Each bundle ID installs as its own Steam tool (`lepton_x86_64_<bundle-id>`, or
 `lepton_gapps_<bundle-id>` with Google apps), so an older install such as
-`~/.local/share/lepton-x86_64-dev` is left alone. `lepton-add-game` uses the most
-recently installed one; pick another with `--tool-id <tool id>` (tool IDs are
-listed in `~/.config/lepton-x86_64/`).
+`~/.local/share/lepton-x86_64-dev` is left alone unless you choose to replace it.
+`lepton-add-game` uses the most recently installed one; pick another with
+`--tool-id <tool id>`.
 
-## Removing an install
+**Replacing** an install keeps its tool ID and directory, so the games already
+added for it keep working; Steam shows the new bundle's name after a restart.
+If the replaced install holds saved app profiles (for example a Google
+sign-in), its old copy is kept as `<directory>.previous-<date>` so nothing is
+lost; the removal list shows profile counts.
 
-With Steam exited (replace `DIR` and `TOOL` with the names the installer printed):
+**Removing**: double-tap **Lepton: Remove installs** and tick what to delete.
+It lists every Lepton install (including older manual ones registered with
+Steam), leftover `.previous-*` backups and unregistered Lepton folders, with the
+number of Steam shortcuts using each. In a terminal:
 
 ```bash
-chmod -R u+rwX ~/.local/share/DIR && rm -rf ~/.local/share/DIR
-rm ~/.local/share/Steam/compatibilitytools.d/TOOL.vdf ~/.config/lepton-x86_64/TOOL.env
+~/.local/bin/lepton-manage-installs --list
+~/.local/bin/lepton-manage-installs --remove TOOL_ID            # shows what would happen
+~/.local/bin/lepton-manage-installs --remove TOOL_ID --execute
 ```
 
-Shortcuts for that tool remain in Steam until you delete them there.
+An install that is running a game or test is never replaced or removed. If the
+default install is removed, the newest remaining one becomes the default. Steam
+shortcuts that used a removed tool stay in Steam; delete them there or select
+another compatibility tool for them. The downloaded archives in
+`~/Downloads/lepton-deck-bundles/` are not touched; delete them in Dolphin when
+no longer needed.
 
 ## Troubleshooting
 

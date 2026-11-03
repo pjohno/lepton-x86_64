@@ -1,0 +1,402 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""List and remove Lepton x86_64 installations for the current user.
+
+  lepton-manage-installs --list                 # show installs and backups
+  lepton-manage-installs --remove ID [ID...]    # show what would be removed
+  lepton-manage-installs --remove ID --execute  # remove it
+  lepton-manage-installs --gui                  # tick-list window (zenity/kdialog)
+
+An install is found from its Steam registration
+(~/.local/share/Steam/compatibilitytools.d/<id>.vdf), from
+~/.config/lepton-x86_64/<id>.env, as a "<dir>.previous-<date>" backup, or as
+an unregistered Lepton directory in ~/.local/share.
+Removing deletes the directory, its registration and its env file, and moves
+the default (~/.local/bin links) to the newest remaining install. Steam does
+not need to be closed; restart it afterwards to refresh its tool list. An
+install that is currently running is never removed. This tool never closes
+or starts Steam.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+
+HOME = Path.home()
+DATA = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share")
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "lepton-x86_64"
+STEAM = HOME / ".local/share/Steam"
+TOOLS_DIR = STEAM / "compatibilitytools.d"
+BIN = HOME / ".local/bin"
+LINKS = {
+    "lepton-add-game": "compat_tool/tools/lepton-add-game",
+    "lepton-add-game-gui": "compat_tool/tools/lepton-add-game-gui",
+    "lepton-in-terminal": "compat_tool/tools/lepton-in-terminal",
+    "lepton-manage-installs": "compat_tool/tools/lepton-manage-installs",
+    "lepton-run-apk": "tests/runtime/run-apk.sh",
+}
+DESKTOP_ENTRIES = ("lepton-x86_64-add-game.desktop", "lepton-x86_64-gpu-check.desktop",
+                   "lepton-x86_64-manage-installs.desktop")
+TITLE = "Lepton: Manage installs"
+
+
+def fail(message):
+    raise ValueError(message)
+
+
+def read_env(path):
+    values = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            parsed = shlex.split(value)
+            values[key] = parsed[0] if parsed else ""
+    return values
+
+
+def vdf_value(text, key):
+    match = re.search(r'"%s"\s*"((?:[^"\\]|\\.)*)"' % re.escape(key), text)
+    return json.loads('"' + match.group(1) + '"') if match else None
+
+
+def is_lepton_dir(path):
+    return (path / "compat_tool/lepton").is_file() and (path / "compat_tool/liblepton").is_dir()
+
+
+def safe_dir(path):
+    """Only directories strictly inside the user's home may be removed."""
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return False
+    home = HOME.resolve()
+    return (resolved.is_dir() and not resolved.is_symlink() and home in resolved.parents
+            and resolved not in (home, DATA.resolve(), STEAM.resolve()))
+
+
+def default_tool():
+    try:
+        return read_env(CONFIG / "default.env").get("LEPTON_X86_TOOL_ID")
+    except OSError:
+        return None
+
+
+def shortcut_count(tool):
+    """Count Steam shortcuts mapped to this tool (read-only)."""
+    try:
+        text = (STEAM / "config/config.vdf").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    return len(re.findall(r'"name"\s*"%s"' % re.escape(tool), text))
+
+
+def discover():
+    found = {}
+
+    def add(tool, directory, name=None, kind="install"):
+        directory = Path(directory)
+        if not is_lepton_dir(directory):
+            return
+        key = tool or directory.name
+        entry = found.setdefault(key, dict(id=key, dir=str(directory), name=name or key, kind=kind,
+                                           vdf=None, env=None))
+        if name and entry["name"] == key:
+            entry["name"] = name
+
+    if TOOLS_DIR.is_dir():
+        for vdf in sorted(TOOLS_DIR.glob("*.vdf")):
+            try:
+                text = vdf.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            path = vdf_value(text, "install_path")
+            if path and Path(path).name == "compat_tool":
+                add(vdf.stem, Path(path).parent, vdf_value(text, "display_name"))
+                if vdf.stem in found and found[vdf.stem]["dir"] == str(Path(path).parent):
+                    found[vdf.stem]["vdf"] = str(vdf)
+    if CONFIG.is_dir():
+        for env in sorted(CONFIG.glob("*.env")):
+            if env.name == "default.env" or env.is_symlink():
+                continue
+            try:
+                values = read_env(env)
+            except OSError:
+                continue
+            tool = values.get("LEPTON_X86_TOOL_ID", env.stem)
+            add(tool, values.get("LEPTON_X86_INSTALL_DIR", ""), values.get("LEPTON_X86_TOOL_NAME"))
+            if tool in found:
+                found[tool]["env"] = str(env)
+    if DATA.is_dir():
+        for backup in sorted(DATA.glob("*.previous-*")):
+            add(None, backup, "Backup of " + backup.name.split(".previous-")[0], "backup")
+        # Lepton directories without a registration or env file (old manual
+        # extractions, or leftovers after a registration was deleted).
+        known = {e["dir"] for e in found.values()}
+        for candidate in sorted(DATA.iterdir()):
+            if (not candidate.name.startswith(".") and str(candidate) not in known
+                    and candidate.is_dir() and not candidate.is_symlink()):
+                add(None, candidate, "Unregistered " + candidate.name, "unregistered")
+    default = default_tool()
+    for entry in found.values():
+        entry["default"] = entry["id"] == default
+        entry["shortcuts"] = shortcut_count(entry["id"]) if entry["kind"] == "install" else 0
+        entry["profiles"] = len(list(Path(entry["dir"]).glob(".runtime-profile.*")))
+    return list(found.values())
+
+
+def lookup(installs, key):
+    for entry in installs:
+        if key in (entry["id"], entry["dir"], Path(entry["dir"]).name):
+            return entry
+    fail("No Lepton install or backup named " + key + " (see --list)")
+
+
+def in_use(directory):
+    """True if any other process runs from, or references, this directory."""
+    marker = str(Path(directory).resolve()) + "/"
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit() or int(proc.name) == os.getpid():
+            continue
+        try:
+            cmdline = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+            cwd = os.readlink(proc / "cwd") + "/"
+        except OSError:
+            continue
+        if marker in cmdline + " " or cwd.startswith(marker):
+            return True
+    return False
+
+
+def remove_tree(directory):
+    # Android data can contain mode-000 directories and, after container use,
+    # files owned by the user's subordinate IDs; podman unshare handles both.
+    if shutil.which("podman"):
+        result = subprocess.run(["podman", "unshare", "sh", "-c",
+                                 'chmod -R u+rwX -- "$1" && rm -rf -- "$1"', "sh", directory],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        if result.returncode == 0 and not Path(directory).exists():
+            return
+    subprocess.run(["chmod", "-R", "u+rwX", "--", directory], stderr=subprocess.DEVNULL)
+    shutil.rmtree(directory)
+
+
+def set_default(entry):
+    """Point default.env and the ~/.local/bin links at this install (or nothing)."""
+    default = CONFIG / "default.env"
+    if entry is None:
+        default.unlink(missing_ok=True)
+        for name in LINKS:
+            link = BIN / name
+            if link.is_symlink():
+                link.unlink()
+        for directory in (DATA / "applications", HOME / "Desktop"):
+            for name in DESKTOP_ENTRIES:
+                (directory / name).unlink(missing_ok=True)
+        return
+    if entry.get("env"):
+        default.unlink(missing_ok=True)
+        default.symlink_to(Path(entry["env"]).name)
+    BIN.mkdir(parents=True, exist_ok=True)
+    for name, relative in LINKS.items():
+        link, target = BIN / name, Path(entry["dir"]) / relative
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        if target.exists():
+            link.symlink_to(target)
+
+
+def remove(keys, execute):
+    installs = discover()
+    selected = []
+    for key in keys:
+        entry = lookup(installs, key)
+        if entry not in selected:
+            selected.append(entry)
+    for entry in selected:
+        if not safe_dir(Path(entry["dir"])):
+            fail("Refusing to remove a directory outside your home: " + entry["dir"])
+        if in_use(entry["dir"]):
+            fail(entry["name"] + " is running (a game or test uses it); stop it first. Nothing was removed.")
+    messages = []
+    for entry in selected:
+        note = ""
+        if entry["shortcuts"]:
+            note = " (%d Steam shortcut(s) use it; choose another compatibility tool for them)" % entry["shortcuts"]
+        if entry["profiles"]:
+            note += " (deletes %d saved app profile(s))" % entry["profiles"]
+        messages.append(("Removed: " if execute else "Would remove: ") + entry["name"] + " - " + entry["dir"] + note)
+        if not execute:
+            continue
+        remove_tree(entry["dir"])
+        if entry.get("vdf"):
+            Path(entry["vdf"]).unlink(missing_ok=True)
+        if entry.get("env"):
+            Path(entry["env"]).unlink(missing_ok=True)
+    if execute:
+        remaining = [e for e in discover() if e["kind"] == "install"]
+        current = default_tool()
+        removed_default = any(e["default"] for e in selected)
+        links_broken = any(link.is_symlink() and not link.exists() for link in (BIN / n for n in LINKS))
+        if removed_default or links_broken or current not in [e["id"] for e in remaining]:
+            with_env = sorted((e for e in remaining if e.get("env")),
+                              key=lambda e: Path(e["env"]).stat().st_mtime, reverse=True)
+            new_default = (with_env or remaining or [None])[0]
+            set_default(new_default)
+            messages.append("Default install: " + (new_default["name"] if new_default else "none (no installs left)"))
+        if any(e["kind"] == "install" for e in selected):
+            messages.append("Restart Steam when convenient to refresh its compatibility tool list.")
+    else:
+        messages.append("Nothing was changed; add --execute to remove.")
+    return messages
+
+
+def dialog_tool():
+    choice = os.environ.get("LEPTON_DIALOG")
+    if choice in ("zenity", "kdialog"):
+        return choice
+    for tool in ("zenity", "kdialog"):
+        if shutil.which(tool):
+            return tool
+    fail("Neither zenity nor kdialog is available; use --list / --remove in a terminal")
+
+
+def dialog(ui, kind, text, extra=()):
+    if ui == "zenity":
+        args = ["zenity", "--" + kind, "--title=" + TITLE, "--no-markup", "--width=520", "--text=" + text]
+    else:
+        args = ["kdialog", "--title", TITLE, {"info": "--msgbox", "error": "--error",
+                                             "question": "--yesno"}[kind], text]
+    return subprocess.run(args + list(extra), stderr=subprocess.DEVNULL).returncode == 0
+
+
+def choose(ui, prompt, rows, radio=False):
+    """rows: [(tag, label, checked)]; returns the selected tags (None = cancelled)."""
+    if ui == "zenity":
+        args = ["zenity", "--list", "--radiolist" if radio else "--checklist", "--title=" + TITLE,
+                "--text=" + prompt, "--width=760", "--height=420", "--column=",
+                "--column=ID", "--column=Install", "--print-column=2", "--separator=\n", "--hide-column=2"]
+        for tag, label, checked in rows:
+            args += ["TRUE" if checked else "FALSE", tag, label]
+    else:
+        args = ["kdialog", "--title", TITLE, "--radiolist" if radio else "--checklist", prompt]
+        for tag, label, checked in rows:
+            args += [tag, label, "on" if checked else "off"]
+    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    if result.returncode != 0:
+        return None
+    output = result.stdout.strip()
+    tags = output.splitlines() if ui == "zenity" else shlex.split(output)
+    return [t for t in tags if t]
+
+
+def describe(entry):
+    parts = [entry["name"]]
+    if entry["default"]:
+        parts.append("[default]")
+    if entry["kind"] == "install":
+        parts.append("%d Steam shortcut(s)" % entry["shortcuts"])
+    if entry["profiles"]:
+        parts.append("%d saved app profile(s), e.g. Google sign-in" % entry["profiles"])
+    parts.append(entry["dir"])
+    return " - ".join(parts)
+
+
+def gui_remove(exclude, prompt, quiet_if_empty):
+    ui = dialog_tool()
+    candidates = [e for e in discover() if e["id"] not in exclude]
+    if not candidates:
+        if not quiet_if_empty:
+            dialog(ui, "info", "No other Lepton installs or backups were found.")
+        return 0
+    picked = choose(ui, prompt, [(e["id"], describe(e), False) for e in candidates])
+    if not picked:
+        return 0
+    names = "\n".join("  - " + lookup(candidates, p)["name"] for p in picked)
+    if not dialog(ui, "question", "Remove these permanently?\n\n" + names +
+                  "\n\nSteam does not need to be closed. Shortcuts that use a removed tool "
+                  "will need another compatibility tool.", ["--ok-label=Remove"] if ui == "zenity" else []):
+        return 0
+    try:
+        dialog(ui, "info", "\n".join(remove(picked, True)))
+    except (ValueError, OSError) as exc:
+        dialog(ui, "error", str(exc))
+        return 1
+    return 0
+
+
+def gui_choose_target(new_id, new_name):
+    """Ask whether to install as a new tool or overwrite an existing install."""
+    installs = [e for e in discover() if e["kind"] == "install" and e["id"] != new_id]
+    if not installs:
+        print("new")
+        return 0
+    ui = dialog_tool()
+    rows = [("new", "Install as a new tool: " + new_name + " (keep the others)", True)]
+    rows += [(e["id"], "Replace " + describe(e) + " (its Steam shortcuts keep working)", False)
+             for e in installs]
+    picked = choose(ui, "How should " + new_name + " be installed?", rows, radio=True)
+    if not picked:
+        return 1
+    print(picked[0])
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--list", action="store_true", help="List installs and backups")
+    action.add_argument("--remove", nargs="+", metavar="ID", help="Tool ID, directory or backup name")
+    action.add_argument("--gui", action="store_true", help="Choose installs to remove in a window")
+    action.add_argument("--print-dir", metavar="ID", help="Print the directory of an install")
+    action.add_argument("--check-free", metavar="ID", help="Fail if the install is currently running")
+    action.add_argument("--gui-choose-target", action="store_true",
+                        help="(installer) ask: install as new or replace an existing install")
+    parser.add_argument("--json", action="store_true", help="With --list: machine-readable output")
+    parser.add_argument("--execute", action="store_true", help="With --remove: actually remove")
+    parser.add_argument("--exclude", action="append", default=[], help="With --gui: hide this tool ID")
+    parser.add_argument("--prompt", default="Select Lepton installs to remove:", help="With --gui")
+    parser.add_argument("--quiet-if-empty", action="store_true", help="With --gui: no message if nothing found")
+    parser.add_argument("--new-id", help="With --gui-choose-target")
+    parser.add_argument("--new-name", help="With --gui-choose-target")
+    args = parser.parse_args()
+    if args.list:
+        installs = discover()
+        if args.json:
+            print(json.dumps(installs, indent=2))
+        elif not installs:
+            print("No Lepton installs found.")
+        else:
+            for entry in installs:
+                print(("* " if entry["default"] else "  ") + entry["id"] + "\n      " + describe(entry))
+        return 0
+    if args.remove:
+        for line in remove(args.remove, args.execute):
+            print(line)
+        return 0
+    if args.print_dir:
+        print(lookup(discover(), args.print_dir)["dir"])
+        return 0
+    if args.check_free:
+        entry = lookup(discover(), args.check_free)
+        if in_use(entry["dir"]):
+            fail(entry["name"] + " is running (a game or test uses it); stop it first")
+        return 0
+    if args.gui_choose_target:
+        if not (args.new_id and args.new_name):
+            fail("--gui-choose-target needs --new-id and --new-name")
+        return gui_choose_target(args.new_id, args.new_name)
+    return gui_remove(set(args.exclude), args.prompt, args.quiet_if_empty)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (ValueError, OSError, KeyError) as exc:
+        print("ERROR:", exc, file=sys.stderr)
+        sys.exit(1)
