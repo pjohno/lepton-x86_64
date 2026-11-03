@@ -12,7 +12,8 @@ mkdir -p "$work/bin"
 cat > "$work/bin/podman" <<'SH'
 #!/bin/bash
 case "$1" in
-  ps) [[ -n "${FAKE_CONTAINERS:-}" ]] && printf '%s\n' "$FAKE_CONTAINERS"; exit 0 ;;
+  ps) [[ -z "${FAKE_EAT_STDIN:-}" ]] || cat > /dev/null  # a command that reads stdin
+      [[ -n "${FAKE_CONTAINERS:-}" ]] && printf '%s\n' "$FAKE_CONTAINERS"; exit 0 ;;
   rm) echo "rm $*" >> "$PODMAN_LOG"; exit 0 ;;
   *) exit 1 ;;  # unshare unavailable: the script falls back to chmod + rm
 esac
@@ -73,10 +74,14 @@ for path in "${unrelated[@]}"; do [[ -e "$path" ]]; done
 printf '#!/bin/bash\necho "ssh $1" >> "$PODMAN_LOG"\nshift\nexec "$@"\n' > "$work/bin/ssh"
 chmod +x "$work/bin/ssh"
 mk_install "$share/lepton_x86_64_c"
-env HOME="$home" PATH="$work/bin:/usr/bin:/bin" PODMAN_LOG="$work/podman.log" \
+# Over SSH the script is bash's stdin; a command reading stdin must not cut it short.
+env HOME="$home" PATH="$work/bin:/usr/bin:/bin" PODMAN_LOG="$work/podman.log" FAKE_EAT_STDIN=1 \
     bash "$script" --deck-ip 192.0.2.7 --check > "$work/remote.log"
+grep -q '^\[PASS\] Nothing was changed' "$work/remote.log"
 grep -qx 'ssh deck@192.0.2.7' "$work/podman.log"
 grep -Fqx "  $share/lepton_x86_64_c" "$work/remote.log"
 [[ -d "$share/lepton_x86_64_c" ]]
 if bash "$script" --deck-ip not-an-ip --check > /dev/null 2>&1; then echo 'FAIL: bad IP accepted'; exit 1; fi
+# No dependency on the hostname command (absent on SteamOS).
+! grep -Eq '\$\(hostname|`hostname' "$script"
 echo 'PASS: deck clean slate: lists, removes only Lepton items, guards running games, opt-in game data, SSH mode'

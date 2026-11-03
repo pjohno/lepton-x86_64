@@ -18,6 +18,9 @@
 # It never closes or starts Steam; Steam may stay open.
 set -Eeuo pipefail
 
+# Over SSH this script arrives on bash's standard input. Braces make bash read
+# the whole script before running it, so no command can swallow the rest.
+{
 MODE=''
 DECK_IP=''
 LOCAL=false
@@ -50,7 +53,7 @@ share="$HOME/.local/share"
 steam="$share/Steam"
 
 # Refuse while anything Lepton is running.
-if pgrep -f '/compat_tool/(lepton|lepton-x86_64-entry|tools/lepton-gamescope-bridge)( |$)' >/dev/null 2>&1; then
+if pgrep -f '/compat_tool/(lepton|lepton-x86_64-entry|tools/lepton-gamescope-bridge)( |$)' >/dev/null 2>&1 < /dev/null; then
     fail 'A Lepton game or test is running; stop it first. Nothing was removed.'
 fi
 running=()
@@ -60,7 +63,7 @@ if command -v podman >/dev/null 2>&1; then
         [[ "$name" == lepton-* ]] || continue
         containers+=("$name")
         [[ "$state" != running ]] || running+=("$name")
-    done < <(podman ps -a --format '{{.Names}} {{.State}}' 2>/dev/null || true)
+    done < <(podman ps -a --format '{{.Names}} {{.State}}' 2>/dev/null < /dev/null || true)
 fi
 ((${#running[@]} == 0)) || fail "Lepton container(s) running: ${running[*]}; stop the game first. Nothing was removed."
 
@@ -89,7 +92,8 @@ for path in "$steam"/steamapps/compatdata/*; do
 done
 shopt -u nullglob dotglob
 
-printf 'Lepton items on %s (%s):\n' "$(hostname)" "$HOME"
+# SteamOS has no hostname command; bash provides $HOSTNAME.
+printf 'Lepton items on %s (%s):\n' "${HOSTNAME:-this computer}" "$HOME"
 for path in "${targets[@]}"; do printf '  %s\n' "$path"; done
 ((${#targets[@]})) || printf '  (none)\n'
 for name in "${containers[@]}"; do printf '  podman container %s\n' "$name"; done
@@ -111,14 +115,14 @@ remove() {
     # Android data can contain mode-000 directories and files owned by the
     # user's subordinate IDs (from containers); podman unshare handles both.
     if command -v podman >/dev/null 2>&1 &&
-       podman unshare sh -c 'chmod -R u+rwX -- "$1" 2>/dev/null; rm -rf -- "$1"' sh "$1" 2>/dev/null &&
+       podman unshare sh -c 'chmod -R u+rwX -- "$1" 2>/dev/null; rm -rf -- "$1"' sh "$1" 2>/dev/null < /dev/null &&
        [[ ! -e "$1" && ! -L "$1" ]]; then
         return 0
     fi
     chmod -R u+rwX -- "$1" 2>/dev/null || true
     rm -rf -- "$1"
 }
-for name in "${containers[@]}"; do podman rm -f "$name" >/dev/null 2>&1 || true; done
+for name in "${containers[@]}"; do podman rm -f "$name" >/dev/null 2>&1 < /dev/null || true; done
 [[ "$GAME_DATA" == true ]] && targets+=("${game_data[@]}")
 failed=0
 for path in "${targets[@]}"; do
@@ -132,3 +136,5 @@ done
 ((failed == 0)) || fail 'Some items could not be removed (see above)'
 printf '[PASS] Lepton removed. Restart Steam when convenient so it forgets the tools;\n'
 printf '       delete the old game shortcuts in Steam (Library > Non-Steam).\n'
+exit 0
+}
