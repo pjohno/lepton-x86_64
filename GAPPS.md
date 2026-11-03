@@ -98,8 +98,21 @@ desktop icon); a replaced install holding saved Google profiles is kept as a
 
 ## Registration, install/play, then Gaming Mode
 
-Start from the Deck's Wayland Desktop Mode, without sudo. Place the game/APKM
-outside the installation directory. For the tested native Play Games APKM:
+**Tap-only (recommended).** GApps installs put two icons on the desktop:
+
+- **Lepton: Add Google game (<bundle>)**: pick the game (`.apk`/`.apkm`), sign
+  in to Google in the Android window and tap **Done**, let the game install and
+  open and tap **Done**, then exit Steam when asked and tap **Steam is closed**.
+  If Google says the device is not certified, the dialog shows the GSF ID to
+  register at google.com/android/uncertified. Each game gets its own profile
+  (sign-in plus game data), named after the game.
+- **Lepton: Google sign-in (<bundle>)**: sign in again for an existing profile.
+
+Nothing closes or starts Steam; start Steam again when told it is safe. The
+terminal steps below do the same and remain available for debugging.
+
+**Terminal.** Start from the Deck's Wayland Desktop Mode, without sudo. Place the
+game/APKM outside the installation directory. For the tested native Play Games APKM:
 
 The runner uses the default (most recently installed) bundle, with AMD rendering
 on the desktop; pass `--stage-dir DIR` to select another installation.
@@ -146,8 +159,9 @@ Profiles live under `$stage/.runtime-profile.NAME/`. They retain Google identity
 account data, game state and installed splits, and are never packaged. One game
 package is pinned to each profile. Runtime fingerprint changes require explicit
 `--accept-runtime-update`; ordinary launches need no registration or reinstall.
-This opt-in persistence does not alter Valve cleanup for normal APK shortcuts.
-The separate persistence feature branch has not been merged.
+Profiles are separate from the kept game data of normal APK shortcuts (see
+INSTALL-STEAM-DECK.md, "Game data between launches"). Replacing an install that
+holds profiles keeps its old copy, so sign-ins are not lost.
 
 ## Fixes and evidence
 

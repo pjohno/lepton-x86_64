@@ -234,6 +234,14 @@ def remove(keys, execute):
         if not execute:
             continue
         remove_tree(entry["dir"])
+        # Icons that start something inside this install (e.g. Google games).
+        for icons in (DATA / "applications", HOME / "Desktop"):
+            for icon in icons.glob("lepton-x86_64-*.desktop") if icons.is_dir() else ():
+                try:
+                    if entry["dir"] + "/" in icon.read_text(encoding="utf-8", errors="replace"):
+                        icon.unlink()
+                except OSError:
+                    pass
         if entry.get("vdf"):
             Path(entry["vdf"]).unlink(missing_ok=True)
         if entry.get("env"):

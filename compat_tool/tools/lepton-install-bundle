@@ -309,6 +309,31 @@ if [[ -d "$desktop_dir" ]]; then
     done
 fi
 pass "Menu entries: Lepton: Add Android game, Lepton: Check graphics, Lepton: Remove installs"
+if [[ "$HAS_GAPPS" == true ]]; then
+    # Google games use saved profiles inside THIS install, so these icons point
+    # at its own copy (not the ~/.local/bin default links).
+    google_gui="$DEST/compat_tool/tools/lepton-google-game-gui"
+    for kind in add sign-in; do
+        entry="lepton-x86_64-google-$kind-$TOOL_ID.desktop"
+        if [[ "$kind" == add ]]; then
+            label="Lepton: Add Google game ($BUNDLE_ID)"; args=''; icon=list-add
+        else
+            label="Lepton: Google sign-in ($BUNDLE_ID)"; args=' --sign-in'; icon=system-users
+        fi
+        cat > "$apps/$entry" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=$label
+Comment=Google sign-in and Steam shortcuts for games that need Google services
+Exec="$google_gui"$args
+Icon=$icon
+Terminal=false
+Categories=Game;
+DESKTOP
+        [[ ! -d "$desktop_dir" ]] || install -m 755 "$apps/$entry" "$desktop_dir/$entry"
+    done
+    pass "Google game icons: Lepton: Add Google game, Lepton: Google sign-in ($BUNDLE_ID)"
+fi
 
 installed_manage="$DEST/compat_tool/tools/lepton-manage-installs"
 if [[ -n "$BACKUP" ]]; then

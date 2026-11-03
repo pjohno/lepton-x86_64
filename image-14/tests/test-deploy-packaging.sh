@@ -242,6 +242,24 @@ assert metadata['tool_id'] == 'lepton_gapps_gapps_fixture'
 assert metadata['install_directory'] == metadata['tool_id']
 assert metadata['gapps'] is True and metadata['ndk'] is False
 PYMETA
+# GApps installs get Google game icons pointing at their own install;
+# removing the install removes them.
+g_home="$work/gapps-home"; mkdir -p "$g_home/Desktop"
+env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 HOME="$g_home" \
+    bash "$out/lepton-x86_64-steamdeck-gapps-fixture.install.sh" --allow-non-amd > "$work/gapps-install.log"
+g_dest="$g_home/.local/share/lepton_gapps_gapps_fixture"
+for kind in add sign-in; do
+    icon="$g_home/.local/share/applications/lepton-x86_64-google-$kind-lepton_gapps_gapps_fixture.desktop"
+    grep -Fq "Exec=\"$g_dest/compat_tool/tools/lepton-google-game-gui\"" "$icon"
+    [[ -x "$g_home/Desktop/${icon##*/}" ]]
+    if command -v desktop-file-validate >/dev/null; then desktop-file-validate "$icon"; fi
+done
+grep -q 'Name=Lepton: Google sign-in (gapps-fixture)' "$g_home/.local/share/applications/lepton-x86_64-google-sign-in-lepton_gapps_gapps_fixture.desktop"
+[[ -x "$g_dest/compat_tool/tools/lepton-google-game-gui" ]]
+env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$g_home" python3 "$g_home/.local/bin/lepton-manage-installs" \
+    --remove lepton_gapps_gapps_fixture --execute > /dev/null
+! compgen -G "$g_home/.local/share/applications/lepton-x86_64-google-*" > /dev/null
+! compgen -G "$g_home/Desktop/lepton-x86_64-google-*" > /dev/null
 reject --package-only --check --stage-dir "$stage" --bundle-dir "$out" --bundle-id invalid-tool --tool-id ../bad
 [[ ! -e "$TRACE" ]]
 reject --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id fixture

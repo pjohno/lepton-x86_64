@@ -82,8 +82,10 @@ The installer:
 3. registers the Steam compatibility tool **Lepton x86_64 (community) - my-deck-01**;
 4. writes `~/.config/lepton-x86_64/<tool id>.env` and makes it the default;
 5. links `lepton-add-game`, `lepton-add-game-gui` and `lepton-run-apk` into `~/.local/bin`;
-6. adds **Lepton: Add Android game** and **Lepton: Check graphics** to the desktop
-   and to the application menu (Games).
+6. adds **Lepton: Add Android game**, **Lepton: Check graphics** and **Lepton:
+   Remove installs** to the desktop and the application menu (Games); GApps
+   bundles also add **Lepton: Add Google game** and **Lepton: Google sign-in**
+   (see [GAPPS.md](GAPPS.md)).
 
 When started from the desktop icon and other Lepton installs exist, the
 installer first asks whether to **install as a new tool** or **replace** one of
