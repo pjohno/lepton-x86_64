@@ -252,10 +252,11 @@ cat <<EOF
 
 Next steps (desktop icons or application menu > Games; no typing needed)
   1. "Lepton: Check graphics" (about a minute; should report RADV)
-  2. "Lepton: Add Android game": pick an APK; Steam restarts by itself
+  2. "Lepton: Add Android game": pick an APK; exit Steam when asked,
+     then start Steam again once it reports success
   3. In the game's controller layout enable Touchscreen Native Support
 Terminal equivalents: lepton-run-apk --gpu-check --execute,
-                      lepton-add-game --restart-steam GAME.apk (in ~/.local/bin)
+                      lepton-add-game GAME.apk (with Steam exited; in ~/.local/bin)
 EOF
 if [[ -n "$BACKUP" ]]; then
     printf '\nPrevious install kept at %s (delete it once the new one works).\n' "$BACKUP"

@@ -327,10 +327,11 @@ use --replace to update this same tool (the old copy is kept).
 
 Then use the new desktop/menu entries (no typing needed):
   "Lepton: Check graphics"      confirms AMD RADV graphics
-  "Lepton: Add Android game"    picks an APK; Steam restarts by itself
+  "Lepton: Add Android game"    picks an APK; asks you to exit Steam, then
+                                says when it is safe to start Steam again
 Terminal equivalents:
   ~/.local/bin/lepton-run-apk --gpu-check --execute
-  ~/.local/bin/lepton-add-game --restart-steam ~/path/to/game.apk
+  ~/.local/bin/lepton-add-game ~/path/to/game.apk   # with Steam exited
 
 Enable Touchscreen Native Support in the game's controller
 layout (Controller Settings > Edit Layout > Default Action Set >

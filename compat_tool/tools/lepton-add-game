@@ -12,10 +12,8 @@ from pathlib import Path
 import re
 import shlex
 import struct
-import subprocess
 import sys
 import tempfile
-import time
 import zlib
 
 LEGACY_TOOL = "lepton_x86_64_dev"
@@ -79,38 +77,6 @@ def steam_running():
         if comm in {"steam", "steam.sh", "steamwebhelper"}:
             return True
     return False
-
-
-STEAM_STOPPED = False
-
-
-def stop_steam(timeout=90):
-    """Ask the running Steam client to exit and wait for it (Desktop Mode)."""
-    global STEAM_STOPPED
-    print("Closing Steam (it will be started again afterwards)...", flush=True)
-    try:
-        subprocess.run(["steam", "-shutdown"], stdin=subprocess.DEVNULL,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    STEAM_STOPPED = True
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not steam_running():
-            time.sleep(2)  # let Steam finish writing its own configuration
-            return
-        time.sleep(1)
-    fail("Steam did not exit within %d seconds; exit it manually and retry" % timeout)
-
-
-def start_steam():
-    """Start Steam again, detached from this helper."""
-    print("Starting Steam...", flush=True)
-    try:
-        subprocess.Popen(["steam"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
-    except OSError as exc:
-        print("WARNING: could not start Steam (%s); start it manually." % exc, file=sys.stderr)
 
 
 def cstr(data, index):
@@ -239,8 +205,6 @@ def main():
     parser.add_argument("--name", help="Name displayed in Steam (default: APK stem)")
     parser.add_argument("--hotplug", action="store_true",
                         help="Enable experimental /dev/input mount and live gamepad hotplug")
-    parser.add_argument("--restart-steam", action="store_true",
-                        help="If Steam is running, close it, add the shortcut, then start Steam again")
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate shortcut and compatibility mapping without modifying Steam files")
     parser.add_argument("--userdata", type=Path,
@@ -289,11 +253,11 @@ def main():
         profile = INSTALL / (".runtime-profile." + args.runtime_profile)
         if not runner.is_file() or not (profile / "profile-fingerprint").is_file():
             fail("Runtime runner or saved profile missing; complete setup first")
+    # Never close or start Steam from here: the user exits Steam themselves.
+    # A dry run only reads Steam's files, so it is allowed while Steam runs.
     if not args.dry_run and steam_running():
-        if not args.restart_steam:
-            fail("Exit Steam completely (including Gaming Mode) before editing its "
-                 "configuration, or use --restart-steam")
-        stop_steam()
+        fail("Steam is still running. Exit Steam completely (Steam menu > Exit), "
+             "then try again. Nothing was changed.")
     if not (INSTALL / "compat_tool/tools/lepton-gamescope-bridge").is_file():
         fail("Lepton installation not found at " + str(INSTALL))
     if not args.runtime_profile and not (STEAM / "compatibilitytools.d" / (TOOL + ".vdf")).is_file():
@@ -395,18 +359,13 @@ def main():
     print("Steam AppID:", appid)
     print("Saved runtime profile:" if args.runtime_profile else "Compatibility tool:", args.runtime_profile or TOOL)
     print("Hotplug:", "enabled (experimental)" if args.hotplug else "off (safe startup mounts)")
-    print("Restart Steam and find the new entry under Non-Steam games.")
+    print("It is now safe to start Steam again; the game is under Non-Steam games.")
     print("Steam Input native touchscreen layout must be enabled manually.")
 
 
 if __name__ == "__main__":
     try:
-        try:
-            main()
-        finally:
-            # Always bring Steam back if this helper closed it, even on errors.
-            if STEAM_STOPPED:
-                start_steam()
+        main()
     except (ValueError, OSError, UnicodeError) as exc:
         print("ERROR:", exc, file=sys.stderr)
         sys.exit(1)

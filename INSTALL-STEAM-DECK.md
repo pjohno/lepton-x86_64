@@ -94,13 +94,23 @@ graphics line names `RADV VANGOGH`.
 
 ## 5. Add a game
 
-Double-tap **Lepton: Add Android game**, pick the APK, confirm the name. Steam
-closes, the shortcut is added, and Steam starts again by itself, so no typing is
-needed after Steam exits (the on-screen keyboard is part of Steam). The game
-appears under Non-Steam games with the Lepton tool selected.
+Steam must be closed while a shortcut is added, and its on-screen keyboard
+closes with it, so the add-game window needs only taps:
 
-From a terminal: `~/.local/bin/lepton-add-game --restart-steam ~/Downloads/my-game.apk`
-(add `--dry-run` to check first, `--name "Title"` to change the Steam name).
+1. Double-tap **Lepton: Add Android game**, pick the APK and confirm the name
+   (this is checked while Steam is still running).
+2. When asked, **exit Steam yourself**: Steam menu (top left) > Exit, or
+   right-click the Steam taskbar icon > Exit. Wait until both have gone, then
+   tap **Steam is closed**.
+3. When it reports success, it is **safe to start Steam again**. The game appears
+   under Non-Steam games with the Lepton tool selected.
+
+Lepton never closes or starts Steam itself. If Steam is still running at step 2,
+nothing is changed; close Steam and try again.
+
+From a terminal, with Steam exited: `~/.local/bin/lepton-add-game ~/Downloads/my-game.apk`
+(add `--dry-run` to check first, which also works while Steam runs, and
+`--name "Title"` to change the Steam name).
 
 **Touch input**: in the game's controller layout enable
 Controller Settings > Edit Layout > Default Action Set > Always-On Command >

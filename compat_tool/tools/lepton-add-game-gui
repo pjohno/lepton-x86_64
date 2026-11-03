@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # Touch-friendly "add Android game to Steam" for Steam Deck Desktop Mode.
-# Uses zenity (or kdialog) so nothing has to be typed: the Steam on-screen
-# keyboard disappears once Steam exits, so lepton-add-game --restart-steam
-# closes Steam, adds the shortcut and starts Steam again by itself.
+# Uses zenity (or kdialog) so nothing has to be typed: Steam's on-screen
+# keyboard disappears once Steam exits. This tool NEVER closes or starts
+# Steam: it asks the user to exit Steam, refuses to change anything while
+# Steam is still running, and then says when it is safe to start Steam.
 set -Euo pipefail
 
 TOOLS="$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")"
@@ -38,11 +39,12 @@ ask_name() {
         kdialog --title "$TITLE" --inputbox 'Name shown in Steam:' "$1"
     fi
 }
-confirm() {
+confirm() {  # confirm TEXT OK_LABEL
     if [[ "$UI" == zenity ]]; then
-        zenity --question --title="$TITLE" --no-markup --width=420 --text="$1" 2>/dev/null
+        zenity --question --title="$TITLE" --no-markup --width=460 --text="$1" \
+            --ok-label="$2" --cancel-label=Cancel 2>/dev/null
     else
-        kdialog --title "$TITLE" --yesno "$1"
+        kdialog --title "$TITLE" --yes-label "$2" --no-label Cancel --yesno "$1"
     fi
 }
 show() {  # show info|error TEXT
@@ -71,28 +73,25 @@ if ! check="$(python3 "$ADD_GAME" "$apk" --name "$name" --dry-run 2>&1)"; then
 $check"
     exit 1
 fi
-confirm "Add \"$name\" to Steam?
+confirm "Ready to add \"$name\" to Steam.
 
-Steam will close, the shortcut will be added, and Steam will start again.
-This can take up to a minute." || exit 0
+Now exit Steam yourself:
+  - Steam window: Steam menu (top left) > Exit, or
+  - taskbar: right-click the Steam icon > Exit.
+Wait until the Steam window and its taskbar icon have gone.
+
+Then tap \"Steam is closed\". The touchscreen keeps working without Steam.
+This tool never closes or starts Steam." "Steam is closed" || exit 0
 
 log="$(mktemp)"
 trap 'rm -f -- "$log"' EXIT
-run_add() { python3 "$ADD_GAME" "$apk" --name "$name" --restart-steam > "$log" 2>&1; }
-if [[ "$UI" == zenity ]]; then
-    rc_file="$(mktemp)"
-    { run_add; echo $? > "$rc_file"; echo 100; } |
-        zenity --progress --pulsate --auto-close --no-cancel --title="$TITLE" \
-            --text="Adding \"$name\" (Steam will restart)..." 2>/dev/null || true
-    rc="$(cat "$rc_file")"
-    rm -f -- "$rc_file"
-else
-    rc=0
-    run_add || rc=$?
-fi
+rc=0
+python3 "$ADD_GAME" "$apk" --name "$name" > "$log" 2>&1 || rc=$?
 
 if [[ "$rc" == 0 ]]; then
     show info "\"$name\" was added to Steam (Non-Steam games).
+
+It is now safe to start Steam again.
 
 For touch input, open the game's controller layout and enable:
 Edit Layout > Default Action Set > Always-On Command > System >
@@ -102,6 +101,8 @@ $(cat "$log")"
 else
     show error "Adding the game failed:
 
-$(cat "$log")"
+$(cat "$log")
+
+Steam's shortcuts were not changed. You can start Steam again."
     exit 1
 fi

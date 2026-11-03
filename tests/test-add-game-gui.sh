@@ -10,13 +10,14 @@ mkdir -p "$work/tools" "$work/bin" "$work/home/Downloads"
 cp "$repo/compat_tool/tools/lepton-add-game-gui" "$work/tools/"
 apk="$work/home/Downloads/My Game.apk"
 touch "$apk"
-# Fake lepton-add-game: record arguments; fail when FAKE_ADD_FAIL matches the mode.
+# Fake lepton-add-game: record arguments; fail when FAKE_ADD_FAIL matches the mode
+# (FAKE_ADD_FAIL=add simulates "Steam is still running").
 cat > "$work/tools/lepton-add-game" <<'PY'
 import os, sys
 open(os.environ['LOG'], 'a').write(repr(sys.argv[1:]) + '\n')
 mode = 'dry' if '--dry-run' in sys.argv else 'add'
 if os.environ.get('FAKE_ADD_FAIL') == mode:
-    print('ERROR: simulated ' + mode + ' failure'); sys.exit(1)
+    print('ERROR: simulated ' + mode + ' failure' + (': Steam is still running. Nothing was changed.' if mode == 'add' else '')); sys.exit(1)
 print('Added Steam shortcut: ' + sys.argv[sys.argv.index('--name') + 1])
 PY
 # Scripted zenity: answers come from environment variables.
@@ -26,40 +27,47 @@ echo "zenity $1" >> "$UI_LOG"
 case "$1" in
   --file-selection) [[ -n "${PICK:-}" ]] && printf '%s\n' "$PICK" || exit 1 ;;
   --entry) printf '%s\n' "$NAME_ANSWER" ;;
-  --question) exit "${CONFIRM_RC:-0}" ;;
-  --progress) cat > /dev/null ;;
+  --question) printf '%s\n' "$@" > "$UI_LOG.question"; exit "${CONFIRM_RC:-0}" ;;
   --info|--error) for a in "$@"; do [[ "$a" == --text=* ]] && printf '%s\n' "${a#--text=}" > "$UI_LOG.$1"; done ;;
 esac
 SH
 chmod +x "$work/bin/zenity"
+# Any attempt to run Steam is recorded and fails the test.
+printf '#!/bin/sh\necho "steam $*" >> "$UI_LOG.steam"\n' > "$work/bin/steam"
+chmod +x "$work/bin/steam"
 gui() { env LEPTON_DIALOG=zenity HOME="$work/home" PATH="$work/bin:/usr/bin:/bin" LOG="$work/add.log" UI_LOG="$work/ui.log" "$@" bash "$work/tools/lepton-add-game-gui"; }
 reset() { rm -f "$work/add.log" "$work/ui.log"*; }
 
-# Success: dry run first, then --restart-steam with the chosen name.
+# Success: dry run first, user is asked to exit Steam, then the real add.
 reset
 gui PICK="$apk" NAME_ANSWER='Nice Name'
 grep -Fqx "['$apk', '--name', 'Nice Name', '--dry-run']" "$work/add.log"
-grep -Fqx "['$apk', '--name', 'Nice Name', '--restart-steam']" "$work/add.log"
+grep -Fqx "['$apk', '--name', 'Nice Name']" "$work/add.log"
+grep -Fq 'Now exit Steam yourself' "$work/ui.log.question"
+grep -Fqx -- '--ok-label=Steam is closed' "$work/ui.log.question"
+grep -Fq 'It is now safe to start Steam again' "$work/ui.log.--info"
 grep -Fq 'Touchscreen Native Support' "$work/ui.log.--info"
 
 # Cancel at file picker or confirmation: nothing is added.
 reset; gui PICK='' NAME_ANSWER=x
 [[ ! -e "$work/add.log" ]]
 reset; gui PICK="$apk" NAME_ANSWER=x CONFIRM_RC=1
-! grep -q -- '--restart-steam' "$work/add.log"
+[[ $(wc -l < "$work/add.log") == 1 ]]  # dry run only
 
 # Validation error stops before Steam is touched; add failure is reported.
 reset
 if gui PICK="$apk" NAME_ANSWER=x FAKE_ADD_FAIL=dry; then echo 'FAIL: dry-run error accepted'; exit 1; fi
-! grep -q -- '--restart-steam' "$work/add.log"
+[[ $(wc -l < "$work/add.log") == 1 ]] && [[ ! -e "$work/ui.log.question" ]]
 grep -Fq 'simulated dry failure' "$work/ui.log.--error"
+# User taps "Steam is closed" but Steam is still running: fail, nothing changed.
 reset
 if gui PICK="$apk" NAME_ANSWER=x FAKE_ADD_FAIL=add; then echo 'FAIL: add error accepted'; exit 1; fi
-grep -Fq 'simulated add failure' "$work/ui.log.--error"
+grep -Fq 'Steam is still running. Nothing was changed.' "$work/ui.log.--error"
+grep -Fq 'You can start Steam again' "$work/ui.log.--error"
 
 # Empty name falls back to the APK file name.
 reset; gui PICK="$apk" NAME_ANSWER=''
-grep -Fq "'--name', 'My Game', '--restart-steam'" "$work/add.log"
+grep -Fqx "['$apk', '--name', 'My Game']" "$work/add.log"
 
 # kdialog fallback when zenity is absent.
 rm "$work/bin/zenity"
@@ -73,8 +81,13 @@ esac
 SH
 chmod +x "$work/bin/kdialog"
 reset; gui LEPTON_DIALOG=kdialog PICK="$apk" NAME_ANSWER='KDE Name'
-grep -Fqx "['$apk', '--name', 'KDE Name', '--restart-steam']" "$work/add.log"
+grep -Fqx "['$apk', '--name', 'KDE Name']" "$work/add.log"
+grep -q 'kdialog --title .* --yes-label Steam is closed --no-label Cancel --yesno' "$work/ui.log"
 grep -q 'kdialog --title .* --msgbox' "$work/ui.log"
+# The GUI never ran Steam in any scenario above.
+[[ ! -e "$work/ui.log.steam" ]]
+grep -Eq '^[^#]*\bsteam\b +-' "$repo/compat_tool/tools/lepton-add-game-gui" && { echo 'FAIL: GUI invokes steam'; exit 1; }
+
 # lepton-in-terminal: keeps the command's status and always ends with the prompt.
 wrap="$repo/compat_tool/tools/lepton-in-terminal"
 bash "$wrap" true < /dev/null > "$work/wrap-ok.log"
@@ -82,4 +95,4 @@ grep -q 'closes by itself in 60 seconds' "$work/wrap-ok.log"
 if bash "$wrap" sh -c 'exit 3' < /dev/null > "$work/wrap-fail.log"; then echo 'FAIL: status lost'; exit 1; fi
 grep -q 'exit status 3' "$work/wrap-fail.log"
 grep -q 'closes by itself in 600 seconds' "$work/wrap-fail.log"
-echo 'PASS: add-game GUI success, cancel, validation/add errors, default name and kdialog fallback; terminal close prompt'
+echo 'PASS: add-game GUI success, cancel, validation/add errors, default name and kdialog fallback; never runs Steam; terminal close prompt'
