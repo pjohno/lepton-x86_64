@@ -588,7 +588,7 @@ else
 info 'Installing APK'
 if [[ "$APKM" == true ]]; then
     podman cp "$WORK/apks" "$container:/data/local/tmp/lepton-apks"
-    timeout --foreground "${TIMEOUT}s" podman exec "$container" /system/bin/pm install-create -r --abi "$EXPECT_ABI" > "$WORK/install-session.log"
+    timeout --foreground "${TIMEOUT}s" podman exec "$container" /system/bin/pm install-create -r -g --abi "$EXPECT_ABI" > "$WORK/install-session.log"
     session_result="$(cat "$WORK/install-session.log")"
     [[ "$session_result" =~ \[([0-9]+)\] ]] || fail "Cannot create install session: $session_result"
     session_id="${BASH_REMATCH[1]}"
@@ -600,7 +600,7 @@ if [[ "$APKM" == true ]]; then
     timeout --foreground "${TIMEOUT}s" podman exec "$container" /system/bin/pm install-commit "$session_id" | tee "$WORK/install.log"
 else
     podman cp "$APK" "$container:/data/local/tmp/lepton-smoke.apk"
-    timeout --foreground "${TIMEOUT}s" podman exec "$container" /system/bin/pm install -r --abi "$EXPECT_ABI" /data/local/tmp/lepton-smoke.apk | tee "$WORK/install.log"
+    timeout --foreground "${TIMEOUT}s" podman exec "$container" /system/bin/pm install -r -g --abi "$EXPECT_ABI" /data/local/tmp/lepton-smoke.apk | tee "$WORK/install.log"
 fi
 grep -qx 'Success' "$WORK/install.log" || fail 'Android package installation failed'
 if [[ -n "$PROFILE" ]]; then
@@ -609,6 +609,13 @@ if [[ -n "$PROFILE" ]]; then
 fi
 fi
 if [[ "$APP_MODE" == true ]]; then
+    # Android's runtime-permission prompts open in a separate screen that the
+    # game window does not show. Grant what the app requests (also for apps
+    # installed earlier without -g); failures are harmless and ignored.
+    podman exec "$container" /system/bin/dumpsys package "$PACKAGE" > "$WORK/permissions-before.txt" 2>&1 || true
+    while read -r permission; do
+        podman exec "$container" /system/bin/pm grant "$PACKAGE" "$permission" > /dev/null 2>&1 || true
+    done < <(sed -n 's/^ *\([A-Za-z0-9_.]*\): granted=false.*/\1/p' "$WORK/permissions-before.txt" | sort -u)
     podman exec "$container" /system/bin/pm path "$PACKAGE" > "$WORK/apk-paths.txt"
     if [[ -n "$PROFILE" ]]; then
         sed -n 's|^package:\(.*\)/base\.apk$|\1|p' "$WORK/apk-paths.txt" > "$WORK/profile-code-path"

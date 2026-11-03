@@ -654,7 +654,7 @@ function install_app()
             # If it's a steamlaunch we can use a shortcut:
             # Since we mount the apk folder into the container,
             # there is no streaming via adb needed.
-            timeout "${INSTALL_TIMEOUT}" "$ADB" -P "${TEMP_PORT}" -s localhost:"${ADB_PORT}" shell pm install "\"${APK_PATH}\"" || INSTALL_RET=$?
+            timeout "${INSTALL_TIMEOUT}" "$ADB" -P "${TEMP_PORT}" -s localhost:"${ADB_PORT}" shell pm install -g "\"${APK_PATH}\"" || INSTALL_RET=$?
         else
             timeout "${INSTALL_TIMEOUT}" "$ADB" -P "${TEMP_PORT}" -s localhost:"${ADB_PORT}" install -g "${APK_PATH}" || INSTALL_RET=$?
         fi
