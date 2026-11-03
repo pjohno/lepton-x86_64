@@ -117,6 +117,9 @@ fi
 BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder-ubuntu26:latest}"
 [[ "$BUILDER" == 'lepton-builder-ubuntu26:latest' ]] ||
     fail 'The clean AMD x86_64 workflow requires lepton-builder-ubuntu26:latest'
+# Child scripts retain legacy defaults when invoked directly. The full pipeline
+# must pass its selected builder through even with an older .build-env.
+export LEPTON_BUILD_CONTAINER="$BUILDER"
 [[ "$LEPTON_BUILD_TARGET" == 'aosp_lepton_x86_64-ap2a-userdebug' ]] ||
     fail 'Unexpected Android build target'
 

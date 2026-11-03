@@ -6,6 +6,7 @@ for test_name in test-build-pipeline-cli test-deploy-compat-rootfs-source test-d
     bash "$repo/image-14/tests/$test_name.sh"
 done
 bash "$repo/compat_tool/liblepton/ndk_auxv/test.sh"
+python3 -B "$repo/tests/test-build-integration.py"
 python3 -B "$repo/tests/test-add-game-tool-selection.py"
 python3 -B "$repo/tests/test-register-tool.py"
 python3 -B "$repo/tests/runtime/test-apkm.py"
