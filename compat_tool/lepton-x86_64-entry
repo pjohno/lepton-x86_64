@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Steam entry point for x86_64 Lepton bundles (toolmanifest "commandline").
+#
+# Makes each installed tool self-contained, so game shortcuts need no launch
+# options and switching a game's compatibility tool switches everything:
+#   - LEPTON_ADB and PATH point at this install's tools/ (unless already set);
+#   - APP_WANTS_FLATSCREEN defaults to true (flatscreen-only port);
+#   - game launches (waitforexitandrun) run inside this install's
+#     lepton-gamescope-bridge, unless already inside a bridge (e.g. an older
+#     shortcut whose launch options still start one).
+# Every other verb goes straight to Valve's unchanged ./lepton script.
+set -euo pipefail
+
+TOOL="$(cd -- "$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")" && pwd -P)"
+ROOT="$(dirname -- "$TOOL")"
+
+if [[ -z "${LEPTON_ADB:-}" && -x "$ROOT/tools/platform-tools/adb" ]]; then
+    export LEPTON_ADB="$ROOT/tools/platform-tools/adb"
+fi
+if [[ -d "$ROOT/tools/bin" ]]; then
+    export PATH="$ROOT/tools/bin:$PATH"
+fi
+export APP_WANTS_FLATSCREEN="${APP_WANTS_FLATSCREEN:-true}"
+
+# True if this process already runs inside a lepton-gamescope-bridge.
+inside_bridge() {
+    [[ "${LEPTON_BRIDGE_ACTIVE:-}" == 1 ]] && return 0
+    local pid=$PPID depth=0 cmdline stat
+    while (( pid > 1 && depth < 32 )); do
+        cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+        [[ "$cmdline" == *lepton-gamescope-bridge* ]] && return 0
+        stat="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
+        [[ -n "$stat" ]] || break
+        stat="${stat##*) }"          # drop "pid (comm) " (comm may contain spaces)
+        read -r _ pid _ <<< "$stat"  # state, ppid, ...
+        depth=$((depth + 1))
+    done
+    return 1
+}
+
+if [[ "${1:-}" == waitforexitandrun && "${LEPTON_NO_BRIDGE:-false}" != true ]] && ! inside_bridge; then
+    exec "$TOOL/tools/lepton-gamescope-bridge" "$TOOL/lepton" "$@"
+fi
+exec "$TOOL/lepton" "$@"

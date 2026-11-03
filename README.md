@@ -146,7 +146,8 @@ side-by-side Deck bundles, persistent sign-in and APKM Gaming Mode shortcuts.
 
 The Deck bundle includes `compat_tool/tools/lepton-add-game`, a standard-library
 Python script to register a non-Steam APK shortcut, its Lepton compatibility
-tool mapping, and its Gamescope launch options. The installer links it into
+tool mapping. Bundled tools start their own Gamescope bridge and ADB, so the
+shortcut needs no launch options. The installer links it into
 `~/.local/bin`, and it finds its own installation. After **fully exiting Steam**
 from Desktop Mode:
 

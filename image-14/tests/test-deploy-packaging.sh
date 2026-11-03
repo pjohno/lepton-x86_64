@@ -62,6 +62,8 @@ tar -tzf "$archive" > "$work/contents"
 grep -qx './compat_tool/liblepton/ndk_auxv/runtime.sh' "$work/contents"
 grep -qx './compat_tool/images/rootfs/system/target/required' "$work/contents"
 ! grep -q 'apk_extractor/target/' "$work/contents"
+tar -xOf "$archive" ./compat_tool/toolmanifest.vdf | grep -Fq '"commandline" "/lepton-x86_64-entry %verb% --"'
+grep -qx './compat_tool/lepton-x86_64-entry' "$work/contents"
 for file in compat_tool/liblepton/properties.sh compat_tool/liblepton/networking.sh compat_tool/images/rootfs_overlay/system/bin/cmd tests/runtime/run-apk.sh tests/runtime/unpack-apkm.py tests/runtime/read-gsf-id.py; do
     tar -xOf "$archive" "./$file" > "$work/packaged-source"
     cmp "$repo/$file" "$work/packaged-source"

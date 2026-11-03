@@ -282,6 +282,16 @@ install -m 755 "$repo/compat_tool/tools/lepton-in-terminal" \
     "$tmp/payload/compat_tool/tools/lepton-in-terminal"
 install -m 755 "$repo/compat_tool/tools/lepton-manage-installs" \
     "$tmp/payload/compat_tool/tools/lepton-manage-installs"
+# Self-contained tool: Steam starts lepton-x86_64-entry, which supplies this
+# install's bridge, ADB and flatscreen default, so shortcuts need no launch
+# options. The repository's Valve manifest is left unchanged.
+install -m 755 "$repo/compat_tool/lepton-x86_64-entry" "$tmp/payload/compat_tool/lepton-x86_64-entry"
+grep -Fq '"commandline" "/lepton %verb% --"' "$repo/compat_tool/toolmanifest.vdf" || {
+    echo 'ERROR: unexpected Valve toolmanifest.vdf commandline' >&2; exit 1;
+}
+sed 's|"commandline" "/lepton %verb% --"|"commandline" "/lepton-x86_64-entry %verb% --"|' \
+    "$repo/compat_tool/toolmanifest.vdf" > "$tmp/payload/compat_tool/toolmanifest.vdf"
+grep -Fq '/lepton-x86_64-entry %verb%' "$tmp/payload/compat_tool/toolmanifest.vdf"
 install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
     "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
 

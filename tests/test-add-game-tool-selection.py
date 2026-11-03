@@ -139,6 +139,27 @@ class ToolSelectionTests(unittest.TestCase):
                  contextlib.redirect_stderr(io.StringIO()):
                 self.module.main()
 
+    def make_self_contained(self, location):
+        (location / 'compat_tool/toolmanifest.vdf').write_text('"manifest"\n{\n "commandline" "/lepton-x86_64-entry %verb% --"\n}\n')
+        (location / 'compat_tool/lepton-x86_64-entry').touch()
+
+    def test_self_contained_tool_gets_empty_launch_options(self):
+        self.make_self_contained(self.module.INSTALL)
+        self.run_main()
+        entries, _, _ = self.module.read_binary((self.user / 'shortcuts.vdf').read_bytes())
+        self.assertEqual(entries['0']['LaunchOptions'], '')
+
+    def test_self_contained_hotplug_is_the_only_option(self):
+        self.make_self_contained(self.module.INSTALL)
+        self.run_main('--hotplug')
+        entries, _, _ = self.module.read_binary((self.user / 'shortcuts.vdf').read_bytes())
+        self.assertEqual(entries['0']['LaunchOptions'], 'LEPTON_GAMEPAD_HOTPLUG=true %command%')
+
+    def test_legacy_tool_keeps_bridge_launch_options(self):
+        self.run_main()
+        entries, _, _ = self.module.read_binary((self.user / 'shortcuts.vdf').read_bytes())
+        self.assertIn('lepton-gamescope-bridge %command%', entries['0']['LaunchOptions'])
+
     def test_invalid_tool_id_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Invalid compatibility-tool ID'):
             self.run_main('--tool-id', '../wrong')

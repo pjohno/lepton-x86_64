@@ -159,6 +159,32 @@ another compatibility tool for them. The downloaded archives in
 `~/Downloads/lepton-deck-bundles/` are not touched; delete them in Dolphin when
 no longer needed.
 
+## How games are started
+
+Each installed tool is self-contained: Steam starts the tool's own
+`lepton-x86_64-entry`, which uses that install's Gamescope bridge and ADB. Game
+shortcuts therefore have **empty launch options**, and changing a game's
+compatibility tool in Steam (Properties > Compatibility) switches everything at
+once. Optional per-game settings still go in the launch options, for example
+`LEPTON_GAMEPAD_HOTPLUG=true %command%`. `LEPTON_NO_BRIDGE=true %command%`
+starts without the nested Gamescope (for debugging).
+
+## Starting again from a clean slate
+
+To remove every Lepton install and trace from a Deck, run from the build
+computer (SSH as in step 2; Steam may stay open, no game may be running):
+
+```bash
+bash image-14/scripts/deck-clean-slate.sh --deck-ip 192.168.1.50 --check     # list
+bash image-14/scripts/deck-clean-slate.sh --deck-ip 192.168.1.50 --execute   # remove
+```
+
+It removes installs, backups, Steam tool registrations, settings, command links,
+menu/desktop icons, downloaded bundles and stopped Lepton containers. Android app
+data (game saves) is kept unless you add `--game-data`. Delete the game shortcuts
+in Steam yourself and restart Steam afterwards. On the Deck itself, use `--local`
+instead of `--deck-ip`.
+
 ## Troubleshooting
 
 | Symptom | What to check |

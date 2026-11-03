@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 set -euo pipefail
+# Tells lepton-x86_64-entry (inside the nested Gamescope) not to add another bridge.
+export LEPTON_BRIDGE_ACTIVE=1
 
 # Lepton BinderFS preflight. Never load or install kernel modules.
 lepton_check_binder() {

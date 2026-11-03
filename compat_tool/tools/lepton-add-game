@@ -66,6 +66,16 @@ def fail(message):
     raise ValueError(message)
 
 
+def self_contained(install):
+    """True if the tool's manifest starts lepton-x86_64-entry (bridge + ADB built in)."""
+    try:
+        manifest = (install / "compat_tool/toolmanifest.vdf").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return ("lepton-x86_64-entry" in manifest
+            and (install / "compat_tool/lepton-x86_64-entry").is_file())
+
+
 def steam_running():
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
@@ -300,7 +310,7 @@ def main():
         if isinstance(value, dict) and value.get("appid") == appid:
             fail("Shortcut AppID collision; try a different --name")
 
-    options = (
+    legacy_options = (
         "APP_WANTS_FLATSCREEN=true "
         + ("LEPTON_GAMEPAD_HOTPLUG=true " if args.hotplug else "")
         + "LEPTON_ADB=" + shlex.quote(str(INSTALL / "tools/platform-tools/adb")) + " "
@@ -308,12 +318,19 @@ def main():
         + shlex.quote(str(INSTALL / "compat_tool/tools/lepton-gamescope-bridge")) + " %command%"
     )
     if args.runtime_profile:
-        options += " " + shlex.join([
+        # Saved profiles run a specific install's runner (no compatibility tool).
+        options = legacy_options + " " + shlex.join([
             str(runner), "--stage-dir", str(INSTALL), "--apk", str(apk),
             "--expect-abi", args.expect_abi, "--app", "--profile", args.runtime_profile,
             "--rendering", "amd", "--display", "desktop", "--network-sysctls",
             "--until-exit", "--execute",
         ])
+    elif self_contained(INSTALL):
+        # The tool supplies its bridge, ADB and flatscreen default itself, so
+        # switching the game's compatibility tool in Steam switches everything.
+        options = "LEPTON_GAMEPAD_HOTPLUG=true %command%" if args.hotplug else ""
+    else:
+        options = legacy_options  # older installs without lepton-x86_64-entry
     new_shortcuts = data[:insertion] + shortcut_entry(
         slot, appid, name, executable, options, INSTALL if args.runtime_profile else None
     ) + (data[insertion:] if data else b"\x08")
