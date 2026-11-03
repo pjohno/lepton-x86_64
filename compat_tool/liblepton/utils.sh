@@ -82,9 +82,9 @@ function wait_for_container_file()
     fi
 }
 
-STEAMVR_LOGS_DIR="$(command -v steamvr >/dev/null 2>&1 && steamvr logpath || true)"
-[[ -n "${STEAMVR_LOGS_DIR}" ]] || STEAMVR_LOGS_DIR="${HOME}/.local/share/lepton/logs"
-mkdir -p "${STEAMVR_LOGS_DIR}"
+STEAM_LOG_PATH="$HOME/.steam/steam/logs"
+# x86_64: ensure the log directory exists on hosts without SteamVR.
+mkdir -p "${STEAM_LOG_PATH}"
 
 function lepton_version()
 {
@@ -102,7 +102,7 @@ function lepton_rootfs_version()
 function lepton_log_file()
 {
     local CONTEXT="${1:-${LEPTON_CONTEXT}}"
-    print "${1:-/${STEAMVR_LOGS_DIR}/lepton-${CONTEXT}.log}"
+    print "${1:-/${STEAM_LOG_PATH}/lepton-${CONTEXT}.log}"
 }
 
 

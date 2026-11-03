@@ -37,12 +37,16 @@ function start_gdb_server()
         die "No application pid to attach to!"
     fi
 
+    if [[ ! -e "/usr/share/guestos/android/vendor/bin/gdbserver" ]]; then
+        die "gdbserver is not present, try: \"pacman -S gdbserver-android\" then restart the container"
+    fi
+
     local APP_CONTAINER_PID="$(map_pid "${PID}")"
     if [[ "${PID}" != "${APP_CONTAINER_PID}" ]]; then
         echo "PID automapped from ${PID} -> ${APP_CONTAINER_PID} within the container"
     fi
 
-    local GDB_PID="$(podman_attach pidof gdbserver64)"
+    local GDB_PID="$(podman_attach pidof gdbserver)"
     if [[ -n "${GDB_PID}" ]]; then
         echo "gdbserver already running on localhost:${PORT}"
         return
@@ -52,7 +56,7 @@ function start_gdb_server()
     (
         uninherit_lepton_lock
 
-        podman_attach /system/bin/gdbserver64 --multi "localhost:${PORT}" --attach "${APP_CONTAINER_PID}"
+        podman_attach /vendor/bin/gdbserver --multi "localhost:${PORT}" --attach "${APP_CONTAINER_PID}"
     ) &
     GDBSERVER_PID="$!"
     # Some time to settle...
@@ -105,7 +109,7 @@ function start_lldb_server()
 function kill_gdb_server()
 {
     local PREFIX="$(prefix "${1:-${LEPTON_CONTEXT}}")"
-    podman_attach sh -c "killall gdbserver64 2>/dev/null" || true
+    podman_attach sh -c "killall gdbserver 2>/dev/null" || true
 }
 function kill_lldb_server()
 {

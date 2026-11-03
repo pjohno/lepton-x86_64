@@ -1,0 +1,2 @@
+# BUILDID(readelf -n file.so) REPLACEMENT_FILE
+25f52dbf904d24e2 /data/steamvr/runtime/bin/androidarm64/libopenxr_loader.so

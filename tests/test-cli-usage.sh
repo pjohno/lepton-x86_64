@@ -420,7 +420,7 @@ test_log "Testing install_completions"
 
 test_log "Testing bootchart"
 
-if [[ "$(ls -1 /home/steamos/.local/share/Steam/logs/lepton-logcats/bootchart 2>/dev/null)" != "" ]]; then
+if [[ "$(ls -1 /home/steamos/.steam/steam/logs/lepton-logcats/bootchart 2>/dev/null)" != "" ]]; then
     test_log "bootchart test failed due to bootchart folder being non-emtpy!"
     test_failure
 fi
@@ -430,7 +430,7 @@ LOGCAT_PID="$!"
 
 ./lepton bootchart
 
-BOOTCHART_FILE_LIST="$(ls -1 /home/steamos/.local/share/Steam/logs/lepton-logcats/bootchart 2>/dev/null | sort)"
+BOOTCHART_FILE_LIST="$(ls -1 /home/steamos/.steam/steam/logs/lepton-logcats/bootchart 2>/dev/null | sort)"
 BOOTCHART_FILE_LIST="${BOOTCHART_FILE_LIST//$'\n'/ }"
 
 if [[ "${BOOTCHART_FILE_LIST}" != "header logcat-crash.log logcat-kernel.log logcat-lepton.log logcat-main.log logcat-radio.log logcat-system.log proc_diskstats.log proc_ps.log proc_stat.log" ]]; then

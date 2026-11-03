@@ -31,6 +31,7 @@ mkdir -p liblepton/ndk_auxv
 cp -a "${PROJECT_DIR}/compat_tool/liblepton/ndk_auxv/runtime.sh" liblepton/ndk_auxv/
 cp -a ${PROJECT_DIR}/compat_tool/liblepton/lepton.seccomp.json liblepton
 cp -a ${PROJECT_DIR}/compat_tool/liblepton/openvrpaths.vrpath liblepton
+cp -a ${PROJECT_DIR}/compat_tool/liblepton/soreplacements.txt liblepton
 cp -ra ${PROJECT_DIR}/compat_tool/liblepton/perfetto liblepton
 mkdir -p images
 cp -ra ${PROJECT_DIR}/compat_tool/images/rootfs_overlay images

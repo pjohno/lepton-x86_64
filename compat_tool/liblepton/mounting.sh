@@ -595,7 +595,7 @@ function setup_podman_mounts()
         # Add our steamvr build into `/data/steamvr/runtime` and `/data/steamvr/config`
         podman_mount_entry "$(steamvr path)" "/data/steamvr/runtime" rw
 
-        podman_mount_entry "${STEAMVR_LOGS_DIR}" "/data/steamvr/logs" rw
+        podman_mount_entry "${STEAM_LOG_PATH}" "/data/steamvr/logs" rw
         podman_mount_entry "$(steamvr configpath)" "/data/steamvr/config" ro
     fi
 
@@ -701,15 +701,15 @@ function ensure_permissions_ok()
 {
     local APP_ID="$(get_app_id)"
     if ! is_sysbake && [[ "${LEPTON_CONTEXT:-}" == "steamlaunch-"* ]]; then
-        if [[ -n "${STEAMVR_LOGS_DIR}" ]]; then
+        if [[ -n "${STEAM_LOG_PATH}" ]]; then
             # Log files we touch but are not owned by us will cause trouble
-            for not_owned_by_us in $(find "${STEAMVR_LOGS_DIR}" ! -uid "$(id -u)" -name "*app_process64*" -type f); do
+            for not_owned_by_us in $(find "${STEAM_LOG_PATH}" ! -uid "$(id -u)" -name "*app_process64*" -type f); do
                 # Since the dir is owned by us, we can rm files within it.
                 rm -f "${not_owned_by_us}"
             done
 
             if [[ -n "${APP_ID}" ]]; then
-                for not_owned_by_us in $(find "${STEAMVR_LOGS_DIR}" ! -uid "$(id -u)" -name "*${APP_ID}*" -type f); do
+                for not_owned_by_us in $(find "${STEAM_LOG_PATH}" ! -uid "$(id -u)" -name "*${APP_ID}*" -type f); do
                     # Since the dir is owned by us, we can rm files within it.
                     rm -f "${not_owned_by_us}"
                 done

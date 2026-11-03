@@ -10,12 +10,19 @@ function setup_props()
     local CONTEXT="${1:-${LEPTON_CONTEXT}}"
     PROPS_FILE="$(props_file)"
     PROPERTIES=""
+    SOREPLACEMENTS_FILE="${LEPTON_DIR}/soreplacements.txt"
     function props_echo()
     {
         PROPERTIES+="$@"$'\n'
     }
     rm -f "${PROPS_FILE}"
-    
+
+    # Parse the list of so file replacements based on their buildid
+    while read -r BUILDID SONAME; do
+        [[ "${BUILDID}" == \#* ]] && continue
+        props_echo "ro.lepton.soreplace.${BUILDID}=${SONAME}"
+    done < "${SOREPLACEMENTS_FILE}"
+
     # If we don't have `ashmem`, tell android to use `memfd` instead.
     if [[ ! -e /dev/ashmem ]]; then
         props_echo "sys.use_memfd=true"

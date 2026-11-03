@@ -27,6 +27,8 @@ class BuildIntegrationTests(unittest.TestCase):
             library = repo / 'compat_tool/liblepton'
             for source in (ROOT / 'compat_tool/liblepton').glob('*.sh'):
                 write(library / source.name, source.read_text())
+            write(library / 'soreplacements.txt',
+                  (ROOT / 'compat_tool/liblepton/soreplacements.txt').read_text())
             write(library / 'ndk_auxv/runtime.sh',
                   (ROOT / 'compat_tool/liblepton/ndk_auxv/runtime.sh').read_text())
             for path in ('compat_tool/lepton', 'compat_tool/toolmanifest.vdf',

@@ -568,7 +568,14 @@ function install_app()
             fi
         fi
         local INSTALL_RET=0
-        timeout "${INSTALL_TIMEOUT}" "$ADB" -P "${TEMP_PORT}" -s localhost:"${ADB_PORT}" install -g "${APK_PATH}" || INSTALL_RET=$?
+        if is_steamlaunch; then
+            # If it's a steamlaunch we can use a shortcut:
+            # Since we mount the apk folder into the container,
+            # there is no streaming via adb needed.
+            timeout "${INSTALL_TIMEOUT}" "$ADB" -P "${TEMP_PORT}" -s localhost:"${ADB_PORT}" shell pm install "\"${APK_PATH}\"" || INSTALL_RET=$?
+        else
+            timeout "${INSTALL_TIMEOUT}" "$ADB" -P "${TEMP_PORT}" -s localhost:"${ADB_PORT}" install -g "${APK_PATH}" || INSTALL_RET=$?
+        fi
         if [[ "${INSTALL_RET}" != "0" ]]; then
             if [[ "${INSTALL_RET}" == "124" ]]; then
                 println "App installation timed out after ${INSTALL_TIMEOUT} seconds!"

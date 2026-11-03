@@ -1,0 +1,138 @@
+From 4b51300849467ff9066270235613b343cb9e879b Mon Sep 17 00:00:00 2001
+From: Frajo <frajo@frajo.fi>
+Date: Sat, 31 Oct 2026 13:08:21 +0000
+Subject: [PATCH 1/1] linker: replace libraries by GNU build-id via
+ ro.lepton.soreplace.* props
+
+When loading a library (DT_NEEDED, dlopen, android_dlopen_ext incl.
+ANDROID_DLEXT_USE_LIBRARY_FD), read its NT_GNU_BUILD_ID note and look up
+the property ro.lepton.soreplace.<build-id hex>. If it is set to an absolute
+path, load that file instead of the original.
+
+Similarly replace a library if ro.lepton.soreplace.<soname> is set.
+---
+ linker/linker.cpp | 80 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 80 insertions(+)
+
+diff --git a/linker/linker.cpp b/linker/linker.cpp
+index f24167722..724fa2d46 100644
+--- a/linker/linker.cpp
++++ b/linker/linker.cpp
+@@ -27,6 +27,7 @@
+  */
+ 
+ #include <android/api-level.h>
++#include <ctype.h>
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <inttypes.h>
+@@ -44,6 +45,7 @@
+ #include <unordered_map>
+ #include <vector>
+ 
++#include <android-base/file.h>
+ #include <android-base/properties.h>
+ #include <android-base/scopeguard.h>
+ #include <async_safe/log.h>
+@@ -1288,6 +1290,82 @@ static bool load_library(android_namespace_t* ns,
+   return true;
+ }
+ 
++// Lepton: library replacement via "ro.lepton.soreplace.<key>" properties.
++// <key> is the library's GNU build-id in lowercase hex or, if no property
++// exists for that, its soname (the basename of the name being loaded, which
++// for DT_NEEDED is the dependency's DT_SONAME). Characters that aren't legal
++// in property names map to '_' (libc++.so -> libc__.so).
++
++// Returns the GNU build-id of the ELF image in |fd| at |file_offset| as
++// lowercase hex, or "" if there is none.
++static std::string read_build_id(int fd, off64_t file_offset) {
++  ElfW(Ehdr) ehdr;
++  if (!android::base::ReadFullyAtOffset(fd, &ehdr, sizeof(ehdr), file_offset) ||
++      memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0 || ehdr.e_phentsize != sizeof(ElfW(Phdr)) ||
++      ehdr.e_phnum > 512) {
++    return "";
++  }
++  std::vector<ElfW(Phdr)> phdrs(ehdr.e_phnum);
++  if (!android::base::ReadFullyAtOffset(fd, phdrs.data(), phdrs.size() * sizeof(ElfW(Phdr)),
++                                        file_offset + ehdr.e_phoff)) {
++    return "";
++  }
++  for (const ElfW(Phdr)& phdr : phdrs) {
++    if (phdr.p_type != PT_NOTE || phdr.p_filesz > 64 * 1024) continue;
++    std::vector<char> notes(phdr.p_filesz);
++    if (!android::base::ReadFullyAtOffset(fd, notes.data(), notes.size(),
++                                          file_offset + phdr.p_offset)) {
++      continue;
++    }
++    for (size_t off = 0; notes.size() - off >= sizeof(ElfW(Nhdr));) {
++      ElfW(Nhdr) nhdr;
++      memcpy(&nhdr, &notes[off], sizeof(nhdr));
++      if (nhdr.n_namesz > notes.size() || nhdr.n_descsz > notes.size()) break;
++      size_t name_off = off + sizeof(nhdr);
++      size_t desc_off = name_off + __BIONIC_ALIGN(nhdr.n_namesz, 4);
++      off = desc_off + __BIONIC_ALIGN(nhdr.n_descsz, 4);
++      if (off > notes.size()) break;
++      if (nhdr.n_type == NT_GNU_BUILD_ID && nhdr.n_namesz == 4 &&
++          memcmp(&notes[name_off], "GNU", 4) == 0) {
++        std::string hex;
++        for (size_t i = 0; i < nhdr.n_descsz; ++i) {
++          hex += android::base::StringPrintf("%02x", static_cast<uint8_t>(notes[desc_off + i]));
++        }
++        return hex;
++      }
++    }
++  }
++  return "";
++}
++
++// If a replacement is configured for the library held by |task|, swaps the
++// task's fd for the replacement. Called before the library is stat'ed/read so
++// that de-duplication (by st_dev/st_ino) and ELF parsing see the replacement.
++static void maybe_replace_library(LoadTask* task, std::string* realpath) {
++  std::string key = read_build_id(task->get_fd(), task->get_file_offset());
++  std::string path = key.empty() ? "" : android::base::GetProperty("ro.lepton.soreplace." + key, "");
++  if (path.empty()) {
++    key = android::base::Basename(task->get_name());
++    for (char& c : key) {
++      if (!isalnum(c) && strchr("._-@:", c) == nullptr) c = '_';
++    }
++    path = android::base::GetProperty("ro.lepton.soreplace." + key, "");
++  }
++  if (path.empty()) return;
++
++  int fd = TEMP_FAILURE_RETRY(open(path.c_str(), O_RDONLY | O_CLOEXEC));
++  if (fd == -1) {
++    DL_WARN("soreplace: unable to open \"%s\" (ro.lepton.soreplace.%s) for \"%s\": %s",
++            path.c_str(), key.c_str(), task->get_name(), strerror(errno));
++    return;
++  }
++  async_safe_format_log(ANDROID_LOG_INFO, "linker", "soreplace: \"%s\" -> \"%s\" (%s)",
++                        task->get_name(), path.c_str(), key.c_str());
++  task->set_fd(fd, true);  // closes the original fd if we owned it
++  task->set_file_offset(0);
++  if (!realpath_fd(fd, realpath)) *realpath = path;
++}
++
+ static bool load_library(android_namespace_t* ns,
+                          LoadTask* task,
+                          ZipArchiveCache* zip_archive_cache,
+@@ -1318,6 +1396,7 @@ static bool load_library(android_namespace_t* ns,
+ 
+     task->set_fd(extinfo->library_fd, false);
+     task->set_file_offset(file_offset);
++    maybe_replace_library(task, &realpath);
+     return load_library(ns, task, load_tasks, rtld_flags, realpath, search_linked_namespaces);
+   }
+ 
+@@ -1344,6 +1423,7 @@ static bool load_library(android_namespace_t* ns,
+ 
+   task->set_fd(fd, true);
+   task->set_file_offset(file_offset);
++  maybe_replace_library(task, &realpath);
+ 
+   return load_library(ns, task, load_tasks, rtld_flags, realpath, search_linked_namespaces);
+ }
+-- 
+2.56.0
+

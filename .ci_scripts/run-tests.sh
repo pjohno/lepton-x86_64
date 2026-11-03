@@ -9,10 +9,10 @@ mkdir -p "${WORKDIR}"
 
 pushd "${WORKDIR}"
 
-tar -xf "${OWD}"/compat_tool.tar.zst -p
-tar -xf "${OWD}"/rootfs.tar.zst -p
+tar -xpf "${OWD}"/compat_tool.tar.zst
+tar -xpf "${OWD}"/rootfs.tar.zst
 mkdir -p sysbake
-tar --xattrs -xf "${OWD}"/install/sysbake.tar.zst -p -C sysbake
+tar --xattrs -xpf "${OWD}"/install/sysbake.tar.zst -C sysbake
 cp "${OWD}"/install/sysbake.xattrs .
 cp -ra "${OWD}"/tests .
 
@@ -37,7 +37,7 @@ podman system reset --force
 /usr/share/deckard/steamvr_first_init.sh
 
 mkdir -p /home/steamos/.local/share/Steam/config
-mkdir -p /home/steamos/.local/share/Steam/logs
+mkdir -p /home/steamos/.steam/steam/logs
 
 # Makes it easier to figure out if something is wrong on gitlab ci:
 export LEPTON_ALLOW_KMSG=true
