@@ -31,8 +31,13 @@ public final class MediaProbe {
                         Log.i(TAG, "decoder=" + info.getName());
                     }
                 }
-                int video = decode(activity, "probe.mp4", "video/avc");
+                Log.i(TAG, "LEPTON_MEDIA_DECODERS count=" + count);
+                // Audio first: games' SoundPool/MediaPlayer/WebView audio needs
+                // these decoders even when video output is unavailable.
                 int audio = decode(activity, "probe.ogg", "audio/vorbis");
+                Log.i(TAG, "LEPTON_MEDIA_AUDIO_PASS vorbis_buffers=" + audio);
+                playAudio(activity);
+                int video = decode(activity, "probe.mp4", "video/avc");
                 final String result = "LEPTON_MEDIA_SMOKE_PASS decoders=" + count +
                     " avc_frames=" + video + " vorbis_buffers=" + audio;
                 Log.i(TAG, result);
@@ -76,6 +81,26 @@ public final class MediaProbe {
                 });
             }
         }, "LeptonMediaProbe").start();
+    }
+
+    // Plays the generated tone through MediaPlayer (decoder + AudioTrack), the
+    // path many games use; logs the outcome without failing the probe.
+    private static void playAudio(Activity activity) {
+        try {
+            android.content.res.AssetFileDescriptor fd = activity.getAssets().openFd("probe.ogg");
+            android.media.MediaPlayer player = new android.media.MediaPlayer();
+            player.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
+            player.setOnErrorListener((mp, what, extra) -> {
+                Log.e(TAG, "LEPTON_MEDIA_PLAYBACK_FAIL what=" + what + " extra=" + extra);
+                return true;
+            });
+            player.setOnCompletionListener(mp -> Log.i(TAG, "LEPTON_MEDIA_PLAYBACK_DONE"));
+            player.prepare();
+            player.start();
+            Log.i(TAG, "LEPTON_MEDIA_PLAYBACK_STARTED duration_ms=" + player.getDuration());
+        } catch (Exception error) {
+            Log.e(TAG, "LEPTON_MEDIA_PLAYBACK_FAIL", error);
+        }
     }
 
     private static int decode(Activity activity, String asset, String mime) throws Exception {
