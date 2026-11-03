@@ -5,7 +5,7 @@
 package_deck_bundle() (
 set -Eeuo pipefail
 local repo="$1" stage="$2" outdir="$3" bundle_id="$4" deck_ip="$5" transfer_only="$6" mode="$7"
-local tool_id="${8:-}" tool_name="${9:-}" install_name
+local tool_id="${8:-}" tool_name="${9:-}" deck_replace="${10:-}" install_name
 [[ "$bundle_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${#bundle_id} -le 64 ]] || {
     echo 'ERROR: bundle ID must contain 1-64 letters, digits, dots, dashes or underscores' >&2
     exit 2
@@ -85,6 +85,13 @@ Terminal=false
 DESKTOP
     printf 'PASS: transferred and verified on Steam Deck at %s\n' "$remote"
     printf 'Desktop icon added on the Deck: Install Lepton %s\n' "$bundle_id"
+    if [[ -n "$deck_replace" ]]; then
+        # Non-interactive install over SSH: no dialogs or Konsole window. The
+        # installer refuses if a game from that install is running.
+        printf 'Installing on the Deck, overwriting %s...\n' "$deck_replace"
+        ssh "$remote" "LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 bash \"\$HOME/Downloads/lepton-deck-bundles/$installer_name\" --into $deck_replace"
+        printf 'PASS: Deck install %s overwritten; restart Steam to see its new name.\n' "$deck_replace"
+    fi
     printf 'NOTE: existing Steam Deck Lepton installation was not changed.\n'
     printf 'To install: double-tap "Install Lepton %s" on the Deck desktop, or run\n' "$bundle_id"
     printf '  bash ~/Downloads/lepton-deck-bundles/%s\n' "$(basename -- "$installer")"

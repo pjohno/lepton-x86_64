@@ -39,7 +39,7 @@ for command in ssh rsync; do
         printf '#!/bin/bash\nfor arg in "$@"; do if [[ "$arg" == deck@* ]]; then echo rsync >> "$TRACE"; exit 0; fi; done\nexec %q "$@"\n' "$real_rsync" > "$work/bin/rsync"
     else
         # Keep the desktop entry the transfer writes on the Deck for validation.
-        printf '#!/bin/sh\necho ssh >> "$TRACE"\ncase "$*" in *Desktop*) cat > "$TRACE.desktop";; esac\n' > "$work/bin/ssh"
+        printf '#!/bin/sh\necho ssh >> "$TRACE"\necho "$*" >> "$TRACE.args"\ncase "$*" in *Desktop*) cat > "$TRACE.desktop";; esac\n' > "$work/bin/ssh"
     fi
     chmod +x "$work/bin/$command"
 done
@@ -252,6 +252,14 @@ run --transfer-only --execute --bundle-dir "$out" --bundle-id fixture --deck-ip 
 sed "s|@HOME@|/home/deck|g" "$TRACE.desktop" > "$work/lepton-install-fixture.desktop"
 grep -Fqx 'Exec=konsole -e bash "/home/deck/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-fixture.install.sh" --pause' "$work/lepton-install-fixture.desktop"
 if command -v desktop-file-validate >/dev/null; then desktop-file-validate "$work/lepton-install-fixture.desktop"; fi
+# --deck-replace: after transfer, install over SSH into an existing tool.
+reject --transfer-only --execute --bundle-dir "$out" --bundle-id fixture --deck-replace lepton_x
+reject --transfer-only --execute --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1 --deck-replace '../bad'
+rm -f "$TRACE" "$TRACE.args"
+run --transfer-only --execute --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1 --deck-replace lepton_x86_64_old > "$work/transfer-replace.log"
+[[ $(wc -l < "$TRACE") == 5 ]]
+grep -q 'LEPTON_NO_DIALOGS=1 bash "$HOME/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-fixture.install.sh" --into lepton_x86_64_old$' "$TRACE.args"
+grep -q 'Deck install lepton_x86_64_old overwritten' "$work/transfer-replace.log"
 printf 'broken' >> "$archive"
 reject --transfer-only --check --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1
 echo 'PASS: read-only packaging/transfer checks, real archive, xattr preservation, overwrite guards and mocked transfer'

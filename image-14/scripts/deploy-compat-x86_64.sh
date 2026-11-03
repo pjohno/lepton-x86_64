@@ -15,6 +15,7 @@ PACKAGE_ONLY=false
 BUNDLE_DIR=''
 BUNDLE_ID=''
 DECK_IP=''
+DECK_REPLACE=''
 TRANSFER_ONLY=false
 WITH_GAPPS=false
 GOOGLE_IMAGES=''
@@ -56,6 +57,8 @@ Default (legacy): stage Android rootfs under repository compat_tool/images/rootf
 --bundle-dir DIR: archive destination (default LEPTON_DECK_BUNDLE_DIR).
 --bundle-id ID: required archive identifier for packaging/transfer.
 --deck-ip IPv4: transfer the archive/checksum after packaging, only in --execute.
+--deck-replace TOOL_ID: after transfer, install on the Deck over SSH, overwriting
+                 the existing install TOOL_ID (its Steam shortcuts keep working).
 --transfer-only: verify/send an existing archive without repackaging.
 Packaging/transfer --check validates inputs without writing or connecting remotely.
 
@@ -79,6 +82,7 @@ while (($#)); do
         --bundle-dir) (($# >= 2)) || fail '--bundle-dir requires a path'; BUNDLE_DIR="$2"; shift 2 ;;
         --bundle-id) (($# >= 2)) || fail '--bundle-id requires ID'; BUNDLE_ID="$2"; shift 2 ;;
         --deck-ip) (($# >= 2)) || fail '--deck-ip requires IPv4'; DECK_IP="$2"; shift 2 ;;
+        --deck-replace) DECK_REPLACE="${2:?--deck-replace requires a tool ID}"; shift 2 ;;
         --transfer-only) TRANSFER_ONLY=true; PACKAGE_ONLY=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) fail "Unknown argument: $1" ;;
@@ -93,10 +97,14 @@ if [[ "$PACKAGE_ONLY" == true ]]; then
     STAGE_DIR="${STAGE_DIR:-${LEPTON_DECK_STAGE_DIR:-}}"
     BUNDLE_DIR="${BUNDLE_DIR:-${LEPTON_DECK_BUNDLE_DIR:-$HOME/lepton-deck-bundles}}"
     source "$ROOT/image-14/scripts/lib/deck-bundle.sh"
-    package_deck_bundle "$ROOT" "$STAGE_DIR" "$BUNDLE_DIR" "$BUNDLE_ID" "$DECK_IP" "$TRANSFER_ONLY" "$MODE" "$TOOL_ID" "$TOOL_NAME"
+    if [[ -n "$DECK_REPLACE" ]]; then
+        [[ "$DECK_REPLACE" =~ ^[A-Za-z0-9_]{1,96}$ ]] || fail 'Invalid --deck-replace tool ID'
+        [[ -n "$DECK_IP" ]] || fail '--deck-replace requires --deck-ip'
+    fi
+    package_deck_bundle "$ROOT" "$STAGE_DIR" "$BUNDLE_DIR" "$BUNDLE_ID" "$DECK_IP" "$TRANSFER_ONLY" "$MODE" "$TOOL_ID" "$TOOL_NAME" "$DECK_REPLACE"
     exit 0
 fi
-[[ -z "$BUNDLE_DIR" && -z "$BUNDLE_ID" && -z "$DECK_IP" && -z "$TOOL_ID" && -z "$TOOL_NAME" ]] || fail 'Bundle options require --package-only or --transfer-only'
+[[ -z "$BUNDLE_DIR" && -z "$BUNDLE_ID" && -z "$DECK_IP" && -z "$DECK_REPLACE" && -z "$TOOL_ID" && -z "$TOOL_NAME" ]] || fail 'Bundle options require --package-only or --transfer-only'
 [[ "$WITH_NDK" == true || -z "$NDK_PAYLOAD" ]] || fail '--ndk-payload requires --with-ndk'
 if [[ "$WITH_NDK" == true ]]; then
     [[ -n "$STAGE_DIR" ]] || fail '--with-ndk requires --stage-dir (existing deployments stay unchanged)'

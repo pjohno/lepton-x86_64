@@ -494,6 +494,27 @@ function auto_install_apps()
     done
 }
 
+# x86_64 port: true if PATH is inside a host directory that setup_mounts
+# bind-mounts at the same path (STEAM_COMPAT_CLIENT_INSTALL_PATH and
+# STEAM_COMPAT_LIBRARY_PATHS), i.e. Android can read it directly.
+function apk_path_in_container()
+{
+    local path root roots=()
+    # install_app passes the resolved APK path; Android must see exactly it.
+    path="$(realpath -s -m -- "$1")"
+    [[ -z "${STEAM_COMPAT_CLIENT_INSTALL_PATH:-}" ]] || roots+=("${STEAM_COMPAT_CLIENT_INSTALL_PATH}")
+    local library_paths=()
+    IFS=: read -ra library_paths <<< "${STEAM_COMPAT_LIBRARY_PATHS:-}"
+    roots+=("${library_paths[@]}")
+    for root in "${roots[@]}"; do
+        [[ -n "${root}" ]] || continue
+        # Mount targets keep the path as given, so do not resolve symlinks here.
+        root="$(realpath -s -m -- "${root}")"
+        [[ "${path}" == "${root}/"* ]] && return 0
+    done
+    return 1
+}
+
 function install_app()
 {
     local APK_PATH="${1:-$(get_apk_path)}"
@@ -569,7 +590,10 @@ function install_app()
             fi
         fi
         local INSTALL_RET=0
-        if is_steamlaunch; then
+        # x86_64 port: the shortcut only works when the APK lies in a folder
+        # mounted into the container (Steam client or library paths). Non-Steam
+        # shortcuts usually point at ~/Downloads etc., so stream those via adb.
+        if is_steamlaunch && apk_path_in_container "${APK_PATH}"; then
             # If it's a steamlaunch we can use a shortcut:
             # Since we mount the apk folder into the container,
             # there is no streaming via adb needed.

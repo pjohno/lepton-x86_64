@@ -58,6 +58,11 @@ This copies all three files to `~/Downloads/lepton-deck-bundles/` on the Deck,
 verifies the checksum there, and puts an **Install Lepton my-deck-01** icon on the
 Deck's desktop. You can also add `--deck-ip` to step 1.
 
+**Updating an existing install over SSH.** Add `--deck-replace TOOL_ID` to
+the transfer command to install straight away, overwriting that install (its
+games keep working; no game from it may be running). Tool IDs are shown by
+`lepton-manage-installs --list` on the Deck.
+
 **By USB drive.** Copy the three files into one folder on the Deck.
 
 ## 3. Install (Steam Deck, Desktop Mode)
