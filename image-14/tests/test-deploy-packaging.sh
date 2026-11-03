@@ -18,6 +18,7 @@ printf 'ro.build.version.sdk=34\nro.dalvik.vm.native.bridge=0\n' > "$stage/compa
 printf 'test-radv\n' > "$stage/compat_tool/images/rootfs/vendor/lib64/hw/vulkan.radeon.so"
 printf '#!/bin/sh\n' > "$stage/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure"
 chmod +x "$stage/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure"
+printf '# stale networking from an older stage\n' > "$stage/compat_tool/liblepton/networking.sh"
 printf '<packages/>\n' > "$stage/compat_tool/sysbake/system/packages.xml"
 printf '# file: sysbake/system/packages.xml\nuser.fake=0x31\nsecurity.selinux=0x32\n' > "$stage/compat_tool/sysbake.xattrs"
 mkdir -p "$stage/compat_tool/liblepton/apk_extractor/target" "$stage/compat_tool/images/rootfs/system/target"
@@ -59,7 +60,7 @@ tar -tzf "$archive" > "$work/contents"
 grep -qx './compat_tool/liblepton/ndk_auxv/runtime.sh' "$work/contents"
 grep -qx './compat_tool/images/rootfs/system/target/required' "$work/contents"
 ! grep -q 'apk_extractor/target/' "$work/contents"
-for file in compat_tool/liblepton/properties.sh compat_tool/images/rootfs_overlay/system/bin/cmd tests/runtime/run-apk.sh tests/runtime/unpack-apkm.py tests/runtime/read-gsf-id.py; do
+for file in compat_tool/liblepton/properties.sh compat_tool/liblepton/networking.sh compat_tool/images/rootfs_overlay/system/bin/cmd tests/runtime/run-apk.sh tests/runtime/unpack-apkm.py tests/runtime/read-gsf-id.py; do
     tar -xOf "$archive" "./$file" > "$work/packaged-source"
     cmp "$repo/$file" "$work/packaged-source"
 done

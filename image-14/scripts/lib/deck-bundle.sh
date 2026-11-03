@@ -95,7 +95,7 @@ for program in rsync tar gzip sha256sum awk grep mktemp install; do
     command -v "$program" >/dev/null || { echo "ERROR: missing $program" >&2; exit 1; }
 done
 
-for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh networking.sh; do
     [[ -f "$repo/compat_tool/liblepton/$script" ]] || {
         echo "ERROR: missing Fedora source compat_tool/liblepton/$script" >&2
         exit 1
@@ -139,7 +139,7 @@ grep -q 'binderfs-ensure' "$stage/compat_tool/images/rootfs/system/etc/init/hw/i
 grep -q 'steamlaunch-0' "$repo/compat_tool/liblepton/liblepton.sh" || {
     echo 'ERROR: Fedora installer lacks the tested steamlaunch-0 installation route' >&2; exit 1;
 }
-for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh networking.sh; do
     bash -n "$repo/compat_tool/liblepton/$script"
 done
 grep -Fq 'no-force-stop' "$repo/compat_tool/liblepton/app_metadata.sh" || {
@@ -190,7 +190,7 @@ rsync -a --no-owner --no-group -- "$stage/tools/" "$tmp/payload/tools/"
 mkdir -p -- "$tmp/payload/compat_tool/liblepton" "$tmp/payload/compat_tool/tools"
 rsync -a --no-owner --no-group -- "$repo/compat_tool/liblepton/ndk_auxv/" \
     "$tmp/payload/compat_tool/liblepton/ndk_auxv/"
-for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh networking.sh; do
     install -m 755 "$repo/compat_tool/liblepton/$script" \
         "$tmp/payload/compat_tool/liblepton/$script"
 done
@@ -280,7 +280,7 @@ install -m 644 "$repo/GAPPS.md" "$tmp/payload/GAPPS.md"
 [[ -f "$tmp/payload/compat_tool/images/rootfs/system/etc/init/hw/init.rc" ]]
 [[ -x "$tmp/payload/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure" ]]
 [[ -s "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" ]]
-for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh; do
+for script in liblepton.sh app_metadata.sh mounting.sh baking.sh properties.sh networking.sh; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
 python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$tmp/payload/compat_tool/tools/lepton-add-game"
