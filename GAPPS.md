@@ -160,8 +160,9 @@ account data, game state and installed splits, and are never packaged. One game
 package is pinned to each profile. Runtime fingerprint changes require explicit
 `--accept-runtime-update`; ordinary launches need no registration or reinstall.
 Profiles are separate from the kept game data of normal APK shortcuts (see
-INSTALL-STEAM-DECK.md, "Game data between launches"). Replacing an install that
-holds profiles keeps its old copy, so sign-ins are not lost.
+INSTALL-STEAM-DECK.md, "Game data between launches"). Replacing an install moves
+its profiles into the new copy, so sign-ins are kept; after an Android image
+change the runner asks for `--accept-runtime-update` before reusing them.
 
 ## Fixes and evidence
 

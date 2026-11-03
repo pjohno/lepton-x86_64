@@ -337,6 +337,15 @@ fi
 
 installed_manage="$DEST/compat_tool/tools/lepton-manage-installs"
 if [[ -n "$BACKUP" ]]; then
+    # Carry saved app profiles (Google sign-in + game data) into the new copy.
+    # Same Android image: they work at once; a changed image makes run-apk ask
+    # for --accept-runtime-update before reusing them.
+    moved=0
+    for profile in "$BACKUP"/.runtime-profile.*; do
+        [[ -d "$profile" && ! -e "$DEST/${profile##*/}" ]] || continue
+        mv -T -- "$profile" "$DEST/${profile##*/}" && moved=$((moved + 1))
+    done
+    ((moved == 0)) || pass "Moved $moved saved app profile(s) into the new install"
     if [[ "$KEEP_PREVIOUS" == true ]]; then
         info "Previous copy kept at $BACKUP"
     elif compgen -G "$BACKUP/.runtime-profile.*" > /dev/null; then

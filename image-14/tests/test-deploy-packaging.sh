@@ -129,16 +129,21 @@ grep -q -- '--replace' "$work/reinstall.log"
 # --replace overwrites in place and removes the old copy unless --keep-previous.
 deck --replace > "$work/replace.log"
 ! compgen -G "$dest.previous-*" > /dev/null
-# ...but an old copy holding saved app profiles is always kept.
+# Saved app profiles move into the new copy; the old copy is then removed.
 mkdir -p "$dest/.runtime-profile.playgames"
+echo signed-in > "$dest/.runtime-profile.playgames/profile-fingerprint"
 manage --list | grep -q '1 saved app profile(s)'
 deck --replace > "$work/replace-profile.log"
-grep -q 'contains saved app profiles' "$work/replace-profile.log"
-kept="$(compgen -G "$dest.previous-*")"
-[[ -d "$kept/.runtime-profile.playgames" ]]
-manage --remove "$(basename "$kept")" | grep -q 'deletes 1 saved app profile(s)'
-manage --remove "$(basename "$kept")" --execute > /dev/null
+grep -q 'Moved 1 saved app profile(s) into the new install' "$work/replace-profile.log"
+[[ "$(cat "$dest/.runtime-profile.playgames/profile-fingerprint")" == signed-in ]]
 ! compgen -G "$dest.previous-*" > /dev/null
+# A profile left in an old copy (e.g. a name clash) still keeps that copy.
+backup_dir="$dest.previous-20260101-000000"
+mk_backup() { mkdir -p "$backup_dir/compat_tool/liblepton" "$backup_dir/.runtime-profile.orphan"; printf '#!/bin/sh\n' > "$backup_dir/compat_tool/lepton"; }
+mk_backup
+manage --remove "$(basename "$backup_dir")" | grep -q 'deletes 1 saved app profile(s)'
+manage --remove "$(basename "$backup_dir")" --execute > /dev/null
+[[ ! -e "$backup_dir" ]]
 [[ -x "$dest/compat_tool/lepton" ]]
 deck --replace --keep-previous > "$work/replace-keep.log"
 compgen -G "$dest.previous-*" > /dev/null

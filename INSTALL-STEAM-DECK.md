@@ -144,9 +144,8 @@ Each bundle ID installs as its own Steam tool (`lepton_x86_64_<bundle-id>`, or
 
 **Replacing** an install keeps its tool ID and directory, so the games already
 added for it keep working; Steam shows the new bundle's name after a restart.
-If the replaced install holds saved app profiles (for example a Google
-sign-in), its old copy is kept as `<directory>.previous-<date>` so nothing is
-lost; the removal list shows profile counts.
+Saved app profiles (for example a Google sign-in) are moved into the new copy,
+so nothing is lost; the removal list shows profile counts.
 
 **Removing**: double-tap **Lepton: Remove installs** and tick what to delete.
 It lists every Lepton install (including older manual ones registered with
