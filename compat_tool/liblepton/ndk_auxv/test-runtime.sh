@@ -96,6 +96,15 @@ mkdir -p "$lib"; cp "$work/unity-before.so" "$lib/libunity.so"
 LEPTON_NDK_COMPAT=false ndk_prepare_installed_app
 cmp "$work/unity-before.so" "$lib/libunity.so"            # opted out: untouched
 
+# An already installed game without a recorded choice is prepared at launch,
+# before Android starts, and uses the result immediately.
+rm -f "$work/baked/lepton-ndk-mode"; rm -f "$lib"/*.so
+make_lib "$lib/libunity.so" d50320bf d503205f
+: > "$rc"; configure_ndk_compat "$rc" > "$work/late.log"
+[[ "$(cat "$work/baked/lepton-ndk-mode")" == tiered && "$LEPTON_NDK_ACTIVE_MODE" == tiered && "$LEPTON_NDK_MODE_SOURCE" == game ]]
+[[ "$(words "$lib/libunity.so")" == 'd503201f d503201f d50320bf' ]]
+grep -q 'translator mode: tiered' "$work/late.log"
+
 # Early exit in the automatically chosen tiered mode reverts the game to light.
 echo tiered > "$work/baked/lepton-ndk-mode"
 LEPTON_NDK_MODE_SOURCE=game LEPTON_NDK_ACTIVE_MODE=tiered ndk_note_early_exit > /dev/null

@@ -51,6 +51,11 @@ function configure_ndk_compat()
     local tmode="${LEPTON_NDK_TRANSLATION_MODE:-}" game_mode=""
     export LEPTON_NDK_MODE_SOURCE=setting
     if [[ -z "$tmode" ]]; then
+        # Games installed before this existed: prepare them now, before Android
+        # starts, so this launch already loads the patched libraries.
+        if [[ ! -f "$(ndk_game_mode_file)" && -d "$(app_datadir)/lib/arm64" ]]; then
+            ndk_prepare_installed_app | sed 's/ from next launch//'
+        fi
         game_mode="$(cat "$(ndk_game_mode_file)" 2>/dev/null || true)"
         if [[ "$game_mode" == tiered || "$game_mode" == light-translate-or-interpret ]]; then
             tmode="$game_mode"; LEPTON_NDK_MODE_SOURCE=game
