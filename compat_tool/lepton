@@ -261,6 +261,7 @@ case "${COMMAND}" in
                 # x86_64 port: with kept app data, a quick exit of a correctly
                 # installed game must not erase its saves; only clear when the
                 # app did not finish installing.
+                [[ "${EARLY_SHUTDOWN}" != "1" ]] || ndk_note_early_exit
                 if [[ "${EARLY_SHUTDOWN}" == "1" ]] && ! { should_keep_app_data && is_app_baked; }; then
                     # Clearing baked app data in this case since something might be wrong.
                     clear_baked_app_data "early exit"
@@ -307,6 +308,8 @@ case "${COMMAND}" in
         elif ! is_app_baked; then
             clear_app_install_complete
             if install_app; then
+                # x86_64 port: patch ARM64 wait hints; pick the translator mode.
+                ndk_prepare_installed_app
                 update_baked_app_metadata
                 mark_app_install_complete
                 # If the app is not baked yet, the container will wait for a

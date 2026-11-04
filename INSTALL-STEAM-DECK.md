@@ -175,6 +175,11 @@ once. Optional per-game settings still go in the launch options, for example
 `LEPTON_GAMEPAD_HOTPLUG=true %command%`. `LEPTON_NO_BRIDGE=true %command%`
 starts without the nested Gamescope (for debugging).
 
+ARM64-only games (with an NDK bundle) are prepared for the translator's faster
+mode from their second launch, which removes most stutter; if one misbehaves,
+`LEPTON_NDK_TRANSLATION_MODE=light-translate-or-interpret %command%` forces the
+slower, most compatible mode (see `compat_tool/liblepton/ndk_auxv/README.md`).
+
 ## Game data between launches
 
 A game's Android data (the installed app and everything it saves internally) is

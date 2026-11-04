@@ -33,8 +33,32 @@ and rendered age verification, but after age entry its Firebase messaging
 initialization failed because Google dependencies were missing. Neither
 environment has reached gameplay.
 
-The light JIT remains enabled. Heavy optimization is disabled while using this
-shim. This is a compatibility experiment for one translator version, not a
+## Translator mode and performance
+
+The shim's instruction emulation only works when the translator falls back to
+its interpreter, so the default mode is `light-translate-or-interpret` (light
+JIT plus interpreter, no heavy optimizer), which stutters in demanding games.
+
+After installing an ARM64 game, Lepton runs `arm64_hints.py` on its extracted
+libraries: it replaces the wait hints `SEVL`, `SEV` and `WFE` (architecturally
+allowed to be no-ops) with `NOP` in executable segments, and checks for the
+reads only the shim can emulate (`MIDR_EL1`, `CNTFRQ_EL0`, `CNTVCT_EL0`). If none
+remain, the game uses the translator's own **tiered** mode (light JIT, then heavy
+optimization of hot code) from its next launch. The choice is stored with the
+game's data (`baked/lepton-ndk-mode`). If a game exits early in that mode (code
+generated at run time, or libraries loaded straight from the APK, cannot be
+scanned), Lepton switches it back to the light mode for the next launch.
+
+Crossy Road on Fedora (AMD), 15 s of gameplay each: light mode 56 fps with a
+worst frame gap of at least 250 ms; tiered after patching 52 SEVL + 52 WFE in
+`libunity.so` 60.8-61.3 fps, worst gap at least 66 ms. AAAAXY's Go runtime reads
+the timer registers, so it keeps the light mode.
+
+Per-game override in Steam launch options:
+`LEPTON_NDK_TRANSLATION_MODE=light-translate-or-interpret %command%` (or
+`tiered`, `heavy-optimize`, `interpret-only`); translator flags via
+`LEPTON_ENV_NDK_TRANSLATION_FLAGS` (default `accurate-sigsegv`, `none` for none).
+The CPU-feature filtering of `/proc/self/auxv` stays active in every mode. This is a compatibility experiment for one translator version, not a
 complete ARM system-register implementation or a general Go compatibility claim.
 
 The APK, proprietary bridge and original rootfs remain unchanged. This directory
