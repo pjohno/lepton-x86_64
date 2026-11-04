@@ -436,10 +436,10 @@ index 0000000000000000000000000000000000000000..a0d4b1960b2162b53bbcd792b6cda52b
 +#endif
 diff --git a/gbm_mesa_driver/gbm_mesa_internals.cpp b/gbm_mesa_driver/gbm_mesa_internals.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..78890bfa72d727f6ba00fa13d83528d3a1136dd6
+index 0000000000000000000000000000000000000000..65576fc01908c82c9a324b23d66af03b9cba889e
 --- /dev/null
 +++ b/gbm_mesa_driver/gbm_mesa_internals.cpp
-@@ -0,0 +1,507 @@
+@@ -0,0 +1,517 @@
 +/*
 + * Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
 + *
@@ -797,10 +797,14 @@ index 0000000000000000000000000000000000000000..78890bfa72d727f6ba00fa13d83528d3
 +	}
 +
 +	if (format == DRM_FORMAT_YVU420_ANDROID) {
++		/* One GR88 surface holds the whole YV12 buffer: a Y plane of
++		 * stride S, then V and U planes of stride S/2 (S is 1024-aligned,
++		 * so S/2 meets YV12's 16-byte rule). */
 +		alloc_args.width /= 2;
-+		alloc_args.height += height / 2;
++		alloc_args.height += DIV_ROUND_UP(height, 2);
 +		alloc_args.width = ALIGN(alloc_args.width, 512);
-+		bo->meta.num_planes = drv_num_planes_from_format(DRM_FORMAT_R8);
++		/* The plane layout is only meaningful for a linear surface. */
++		alloc_args.force_linear = true;
 +	}
 +
 +	err = wr->alloc(&alloc_args);
@@ -816,19 +820,28 @@ index 0000000000000000000000000000000000000000..78890bfa72d727f6ba00fa13d83528d3
 +		return err;
 +	}
 +
-+	if (!bo_layout_ready)
-+		drv_bo_from_format(bo, alloc_args.out_stride, 1, alloc_args.height, (format == DRM_FORMAT_YVU420_ANDROID) ? DRM_FORMAT_R8 : format);
++	if (format == DRM_FORMAT_YVU420_ANDROID)
++		/* Real three-plane layout, so lockYCbCr reports chroma planes. */
++		drv_bo_from_format(bo, alloc_args.out_stride, 1, height, format);
++	else if (!bo_layout_ready)
++		drv_bo_from_format(bo, alloc_args.out_stride, 1, alloc_args.height, format);
 +
 +	drv_logv("Allocated: %dx%d, stride: %d, map_stride: %d", width, height,
 +		 alloc_args.out_stride, alloc_args.out_map_stride);
 +
 +	auto priv = new GbmMesaBoPriv();
++	/* All planes share the one buffer; each UniqueFd needs its own fd. */
 +	for (size_t plane = 0; plane < bo->meta.num_planes; plane++) {
-+		priv->fds[plane] = UniqueFd(alloc_args.out_fd);
++		priv->fds[plane] = UniqueFd(plane == 0 ? alloc_args.out_fd : dup(alloc_args.out_fd));
 +	}
 +
 +	priv->map_stride = alloc_args.out_map_stride;
 +	bo->meta.format_modifier = alloc_args.out_modifier;
++	/* Linear GR88 surfaces are created without modifiers, so gbm reports
++	 * DRM_FORMAT_MOD_INVALID. Vulkan importers (RADV) then assume a tiled
++	 * surface and reject the YV12 plane pitches; state that it is linear. */
++	if (format == DRM_FORMAT_YVU420_ANDROID && bo->meta.format_modifier == DRM_FORMAT_MOD_INVALID)
++		bo->meta.format_modifier = DRM_FORMAT_MOD_LINEAR;
 +
 +	bo->priv = priv;
 +	priv->drv = drv;
@@ -846,9 +859,6 @@ index 0000000000000000000000000000000000000000..78890bfa72d727f6ba00fa13d83528d3
 +	}
 +	auto priv = new GbmMesaBoPriv();
 +
-+	if (data->format == DRM_FORMAT_YVU420_ANDROID) {
-+		bo->meta.num_planes = drv_num_planes_from_format(DRM_FORMAT_R8);
-+	}
 +	for (size_t plane = 0; plane < bo->meta.num_planes; plane++) {
 +		priv->fds[plane] = UniqueFd(dup(data->fds[plane]));
 +	}
@@ -868,7 +878,7 @@ index 0000000000000000000000000000000000000000..78890bfa72d727f6ba00fa13d83528d3
 +		}
 +		if (s_format == DRM_FORMAT_YVU420_ANDROID) {
 +			s_width /= 2;
-+			s_height += data->height / 2;
++			s_height += DIV_ROUND_UP(data->height, 2);
 +			s_width = ALIGN(s_width, 512);
 +		}
 +		priv->drv = drv;
@@ -918,7 +928,7 @@ index 0000000000000000000000000000000000000000..78890bfa72d727f6ba00fa13d83528d3
 +	}
 +	if (s_format == DRM_FORMAT_YVU420_ANDROID) {
 +		s_width /= 2;
-+		s_height += bo->meta.height / 2;
++		s_height += DIV_ROUND_UP(bo->meta.height, 2);
 +		s_width = ALIGN(s_width, 512);
 +	}
 +

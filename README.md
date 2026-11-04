@@ -83,6 +83,8 @@ The local deploy step copies the packaged rootfs into `compat_tool/images/rootfs
 
 The native controller range correction is held in `image-14/patches/0007-eventhub-preserve-evdev-axes.patch` and is applied during the source preparation workflow to the AOSP `frameworks/native` checkout. It preserves synthetic Wayland input ranges while restoring the evdev axis information of real controllers.
 
+Video playback (Android's software decoders, e.g. YouTube) relies on two patches applied the same way. `0004-minigbm-gbm-mesa-driver.patch` gives YV12 video buffers a real linear three-plane layout, so decoders can write frames. `0002-radv-android-yv12-hardware-buffers.patch` lets RADV import those buffers as an external YCbCr format, so SurfaceFlinger (Skia on ANGLE/Vulkan) can display them. Tested with H.264 on Fedora (RX 6700-class) and YouTube up to 1080p on a Steam Deck.
+
 ARM64 NDK translation is **opt-in**. To assemble a separate stage from a native
 rootfs and an already extracted local payload, use:
 

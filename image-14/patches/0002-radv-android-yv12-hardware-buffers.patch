@@ -1,0 +1,55 @@
+diff --git a/src/amd/vulkan/radv_android.c b/src/amd/vulkan/radv_android.c
+index 3b8ec10d708..2073d71825f 100644
+--- a/src/amd/vulkan/radv_android.c
++++ b/src/amd/vulkan/radv_android.c
+@@ -152,6 +152,11 @@ vk_format_from_android(unsigned android_format, unsigned android_usage)
+    switch (android_format) {
+    case AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420:
+       return VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
++   case AHARDWAREBUFFER_FORMAT_YV12:
++      /* Software video decoders output YV12. The import swaps the V and U
++       * planes to match this format (vk_gralloc_to_drm_explicit_layout);
++       * it is only exposed as an external format (see below). */
++      return VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM;
+    case AHARDWAREBUFFER_FORMAT_IMPLEMENTATION_DEFINED:
+       if (android_usage & AHARDWAREBUFFER_USAGE_CAMERA_MASK)
+          return VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+@@ -243,6 +248,12 @@ get_ahb_buffer_format_properties(VkDevice device_h, const struct AHardwareBuffer
+    p->suggestedXChromaOffset = VK_CHROMA_LOCATION_MIDPOINT;
+    p->suggestedYChromaOffset = VK_CHROMA_LOCATION_MIDPOINT;
+ 
++   /* YV12 has no equivalent Vulkan format in the spec's table, so it is
++    * reported as an external format only (sampled through a YCbCr conversion),
++    * which is what ANGLE expects for video frames. */
++   if (desc.format == AHARDWAREBUFFER_FORMAT_YV12)
++      p->format = VK_FORMAT_UNDEFINED;
++
+    return VK_SUCCESS;
+ }
+ 
+@@ -316,6 +327,12 @@ get_ahb_buffer_format_properties2(VkDevice device_h, const struct AHardwareBuffe
+    p->suggestedXChromaOffset = VK_CHROMA_LOCATION_MIDPOINT;
+    p->suggestedYChromaOffset = VK_CHROMA_LOCATION_MIDPOINT;
+ 
++   /* YV12 has no equivalent Vulkan format in the spec's table, so it is
++    * reported as an external format only (sampled through a YCbCr conversion),
++    * which is what ANGLE expects for video frames. */
++   if (desc.format == AHARDWAREBUFFER_FORMAT_YV12)
++      p->format = VK_FORMAT_UNDEFINED;
++
+    return VK_SUCCESS;
+ }
+ 
+@@ -436,6 +453,12 @@ radv_import_ahb_memory(struct radv_device *device, struct radv_device_memory *me
+             mem->image->planes[plane].surface.modifier = mod_info.drmFormatModifier;
+          }
+          mod_info_p = &mod_info;
++         /* A multi-planar YUV buffer (e.g. YV12 from software video decoders)
++          * may be allocated as one larger surface whose BO metadata describes
++          * that surface, not the image. The gralloc's explicit plane layout
++          * describes it fully, so do not apply the metadata. */
++         if (mem->image->plane_count > 1)
++            create_info.bo_metadata = NULL;
+       }
+ 
+       result = radv_image_create_layout(device, create_info, mod_info_p, NULL, mem->image);

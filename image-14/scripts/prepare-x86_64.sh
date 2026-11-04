@@ -87,6 +87,7 @@ for name in \
   "$IMAGE/.buildscripts/copy_vendored_projects.sh" \
   "$IMAGE/android_vendor_valve/patches/apply-patches.sh" \
   "$IMAGE/patches/0001-mesa-android-sdk34-link-libzstd.patch" \
+  "$IMAGE/patches/0002-radv-android-yv12-hardware-buffers.patch" \
   "$IMAGE/patches/0004-minigbm-gbm-mesa-driver.patch" \
   "$IMAGE/patches/0007-eventhub-preserve-evdev-axes.patch" \
   "$IMAGE/patches/0008-inputreader-separate-steam-input-pads.patch"; do
@@ -300,6 +301,7 @@ apply_custom() {
   fi
 }
 apply_custom /workspace/output/external/mesa /workspace/patches/0001-mesa-android-sdk34-link-libzstd.patch Mesa-zstd
+apply_custom /workspace/output/external/mesa /workspace/patches/0002-radv-android-yv12-hardware-buffers.patch RADV-YV12
 apply_custom /workspace/output/external/minigbm /workspace/patches/0004-minigbm-gbm-mesa-driver.patch minigbm
 apply_custom /workspace/output/frameworks/native /workspace/patches/0007-eventhub-preserve-evdev-axes.patch EventHub
 apply_custom /workspace/output/frameworks/native /workspace/patches/0008-inputreader-separate-steam-input-pads.patch SteamInputPads
