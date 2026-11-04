@@ -100,18 +100,31 @@ desktop icon); a replaced install holding saved Google profiles is kept as a
 
 **Tap-only (recommended).** GApps installs put two icons on the desktop:
 
-- **Lepton: Add Google game (<bundle>)**: pick the game (`.apk`/`.apkm`), sign
-  in to Google in the Android window and tap **Done**, let the game install and
-  open and tap **Done**, then exit Steam when asked and tap **Steam is closed**.
-  If Google says the device is not certified, the dialog shows the GSF ID to
-  register at google.com/android/uncertified. Each game gets its own profile
-  (sign-in plus game data), named after the game.
-- **Lepton: Google sign-in (<bundle>)**: sign in again for an existing profile.
+- **Lepton: Add Google game (<bundle>)**: pick the game (`.apk` or `.apkm`) and
+  confirm its name. Step 1 opens Android in a window, installs the game and
+  shows the Play Store: sign in to Google and tap **Done**. Step 2 opens the
+  game: check it and tap **Done**. Step 3 asks you to exit Steam, then adds a
+  normal Steam shortcut. If Google says the device is not certified, the dialog
+  shows the GSF ID to register at google.com/android/uncertified.
+- **Lepton: Google sign-in (<bundle>)**: sign in again for a Google game.
 
-Nothing closes or starts Steam; start Steam again when told it is safe. The
-terminal steps below do the same and remain available for debugging.
+Google games use the **normal Steam launch path**, like every other game. Their
+installed app, saved data and Google sign-in live in the shortcut's Steam
+compatdata, so in **Properties > Compatibility** they can be switched to another
+GApps install and keep the sign-in (a different Android build may make Lepton
+reinstall the app; see INSTALL-STEAM-DECK.md, "Game data between launches").
+Lepton refuses to start them on a tool without Google services and says so.
+Split bundles (`.apkm`) are unpacked once into compatdata; ARM64-only games
+need an install with ARM translation (NDK). During sign-in the Play Store may
+update Google Play services and restart; the session continues until **Done**.
 
-**Terminal.** Start from the Deck's Wayland Desktop Mode, without sudo. Place the
+Nothing closes or starts Steam; start Steam again when told it is safe.
+
+**Saved-profile runner (test tool).** `tests/runtime/run-apk.sh` with
+`--profile` runs a separate, isolated Android with its own profile inside the
+install. It is kept for diagnostics only: it is not the path Steam uses, and
+its audio output does not reach the host. Start from the Deck's Wayland Desktop
+Mode, without sudo, for the steps below. Place the
 game/APKM outside the installation directory. For the tested native Play Games APKM:
 
 The runner uses the default (most recently installed) bundle, with AMD rendering

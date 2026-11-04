@@ -405,7 +405,10 @@ function wait_for_container()
 
     unlock_lepton
 
-    if is_app; then
+    # x86_64 port: during Google sign-in the Play Store (and Play services,
+    # which update themselves) restart several times; only Done (SIGTERM) or the
+    # container stopping ends the session, not the observed app exiting.
+    if is_app && ! google_signin_mode; then
         println "Waiting for app $(get_app_id) to exit..."
 
         (
@@ -416,6 +419,7 @@ function wait_for_container()
 
         WAIT_FILE_PID="$!"
     else
+        # (The Google game window also waits for this line in sign-in mode.)
         println "Waiting for ${CONTEXT} to exit..."
     fi
 

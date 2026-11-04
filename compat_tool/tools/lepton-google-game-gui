@@ -109,7 +109,7 @@ launch() {
             printf '# %s\n' "$waiting"
             said='' gsf='' tick=0
             while alive "$pid"; do
-                if [[ -z "$said" ]] && grep -q 'Waiting for app' "$log"; then
+                if [[ -z "$said" ]] && grep -q 'Waiting for ' "$log"; then
                     printf '# %s\n' "$ready"; said=1
                 fi
                 # Only once Android is up (its data then holds the real ID).
