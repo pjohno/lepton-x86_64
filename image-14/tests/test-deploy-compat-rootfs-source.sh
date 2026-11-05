@@ -5,16 +5,16 @@
 set -Eeuo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-DEPLOY="$REPO/image-14/scripts/deploy-compat-x86_64.sh"
+DEPLOY="$REPO/image-14/scripts/internal/deploy-compat-x86_64.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf -- "$TMP"' EXIT
 
 FAKE="$TMP/fake-repo"
 OUTPUT="$TMP/output"
 BIN="$TMP/bin"
-mkdir -p "$FAKE/image-14/scripts" "$FAKE/compat_tool/liblepton/apk_extractor" \
+mkdir -p "$FAKE/image-14/scripts/internal" "$FAKE/compat_tool/liblepton/apk_extractor" \
     "$OUTPUT/repro-rootfs-auto/rootfs" "$OUTPUT/native-bridge-research/test-rootfs" "$BIN"
-cp "$DEPLOY" "$FAKE/image-14/scripts/"
+cp "$DEPLOY" "$FAKE/image-14/scripts/internal/"
 mkdir -p "$FAKE/compat_tool/liblepton/ndk_auxv"
 cp "$REPO/compat_tool/liblepton/ndk_auxv/runtime.sh" "$FAKE/compat_tool/liblepton/ndk_auxv/"
 : > "$FAKE/compat_tool/lepton"
@@ -49,7 +49,7 @@ STUB
 chmod +x "$BIN/cargo" "$BIN/make"
 export PATH="$BIN:$PATH"
 
-run() { bash "$FAKE/image-14/scripts/deploy-compat-x86_64.sh" "$@"; }
+run() { bash "$FAKE/image-14/scripts/internal/deploy-compat-x86_64.sh" "$@"; }
 expect_fail() {
     if run "$@" > "$TMP/failure.log" 2>&1; then
         echo "FAIL: unexpectedly succeeded: $*" >&2
@@ -93,7 +93,7 @@ cmp "$NORMAL/system/build.prop" "$OUTPUT/standard-stage/compat_tool/images/rootf
 
 # Opt-in NDK deployment invokes the real injector, never downloads a payload,
 # and leaves the original native source untouched. Only the compiler is stubbed.
-cp "$REPO/image-14/scripts/inject-ndk-translation.sh" "$FAKE/image-14/scripts/"
+cp "$REPO/image-14/scripts/internal/inject-ndk-translation.sh" "$FAKE/image-14/scripts/internal/"
 mkdir -p "$OUTPUT/prebuilts/clang/host/linux-x86/clang-r510928/bin"
 printf '#!/bin/sh\nexit 0\n' > "$OUTPUT/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang"
 chmod +x "$OUTPUT/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang"

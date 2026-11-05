@@ -152,7 +152,7 @@ BUILDER_DIR="$IMAGE_DIR/.buildscripts_x86_64"
 BUILDER_FILE="$BUILDER_DIR/Containerfile.ubuntu26"
 [[ -f "$BUILDER_FILE" ]] ||
     fail "Missing x86_64 builder Containerfile: $BUILDER_FILE (apply directory-layout change first)"
-[[ -f "$IMAGE_DIR/scripts/provision-deck-tools.sh" &&
+[[ -f "$IMAGE_DIR/scripts/internal/provision-deck-tools.sh" &&
    -f "$BUILDER_DIR/Containerfile.deck-tools" ]] || fail 'Missing Deck tools source files'
 
 for cmd in bash git podman rsync realpath df awk grep sha256sum curl unzip \
@@ -213,20 +213,21 @@ for part in system vendor; do
         fail "Missing newly compiled Android image: $part.img"
 done
 
-step 'Package fresh Android 14 rootfs'
-bash "$IMAGE_DIR/scripts/package-repro-rootfs.sh" "$TARGET"
+# build-images-x86_64.sh also packaged the rootfs (repro-rootfs-auto/rootfs).
+[[ -f "$TARGET/repro-rootfs-auto/rootfs/system/build.prop" ]] ||
+    fail 'Missing packaged rootfs after the image build'
 
 step 'Create standalone compatibility-tool stage'
-bash "$IMAGE_DIR/scripts/deploy-compat-x86_64.sh" --check --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
-bash "$IMAGE_DIR/scripts/deploy-compat-x86_64.sh" --execute --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
+bash "$IMAGE_DIR/scripts/internal/deploy-compat-x86_64.sh" --check --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
+bash "$IMAGE_DIR/scripts/internal/deploy-compat-x86_64.sh" --execute --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
 
 step 'Build and verify Steam Deck tools'
-bash "$IMAGE_DIR/scripts/provision-deck-tools.sh" --execute --stage-dir "$STAGE"
-bash "$IMAGE_DIR/scripts/provision-deck-tools.sh" --check --stage-dir "$STAGE"
+bash "$IMAGE_DIR/scripts/internal/provision-deck-tools.sh" --execute --stage-dir "$STAGE"
+bash "$IMAGE_DIR/scripts/internal/provision-deck-tools.sh" --check --stage-dir "$STAGE"
 
 step 'Bake Android system data with private Podman storage'
-bash "$IMAGE_DIR/scripts/sysbake-isolated-x86_64.sh" --check --stage-dir "$STAGE" --rendering "$SYSBAKE_RENDERING"
-bash "$IMAGE_DIR/scripts/sysbake-isolated-x86_64.sh" --execute \
+bash "$IMAGE_DIR/scripts/internal/sysbake-isolated-x86_64.sh" --check --stage-dir "$STAGE" --rendering "$SYSBAKE_RENDERING"
+bash "$IMAGE_DIR/scripts/internal/sysbake-isolated-x86_64.sh" --execute \
     --stage-dir "$STAGE" --timeout "$SYSBAKE_TIMEOUT" --rendering "$SYSBAKE_RENDERING"
 
 step 'Record build provenance in staged bundle'
@@ -260,7 +261,7 @@ PROVENANCE="$STAGE/tools/BUILD-PROVENANCE.txt"
 } > "$PROVENANCE"
 
 step 'Package the distributable bundle (local only)'
-bash "$IMAGE_DIR/scripts/deploy-compat-x86_64.sh" --package-only --execute \
+bash "$IMAGE_DIR/scripts/internal/deploy-compat-x86_64.sh" --package-only --execute \
     --stage-dir "$STAGE" --bundle-dir "$BUNDLE_DIR" --bundle-id "$BUNDLE_ID" "${BUNDLE_ARGS[@]}"
 ( cd "$BUNDLE_DIR" && sha256sum -c "$(basename -- "$ARCHIVE").sha256" )
 gzip -t "$ARCHIVE"

@@ -34,6 +34,7 @@ Options:
   --rootfs-source DIR         Alternative packaged Android 14 x86_64 rootfs
   --with-ndk [--ndk-payload DIR]          Add local ARM64 NDK translation
   --with-gapps [--google-images DIR]      Add local Google Play services
+  --with-widevine              Add Widevine L3 DRM from the same Google image
   --services-jar FILE         Tested framework override (older rootfs + GApps)
   --tool-id ID / --tool-name NAME         Steam tool identity
   --from-stage DIR | --adb-zip FILE       Offline Deck tool provisioning
@@ -58,7 +59,7 @@ while (($#)); do
         --deck-ip) DECK_IP="${2:?--deck-ip requires IPv4}"; shift 2 ;;
         --rootfs-source|--ndk-payload|--google-images|--services-jar)
             DEPLOY_ARGS+=("$1" "${2:?$1 requires a value}"); shift 2 ;;
-        --with-ndk|--with-gapps) DEPLOY_ARGS+=("$1"); shift ;;
+        --with-ndk|--with-gapps|--with-widevine) DEPLOY_ARGS+=("$1"); shift ;;
         --tool-id|--tool-name) BUNDLE_ARGS+=("$1" "${2:?$1 requires a value}"); shift 2 ;;
         --from-stage|--adb-zip) PROVISION_ARGS+=("$1" "${2:?$1 requires a value}"); shift 2 ;;
         --sysbake-rendering) SYSBAKE_RENDERING="${2:?}"; shift 2 ;;
@@ -94,7 +95,7 @@ info "Sysbake: $SYSBAKE_RENDERING rendering"
 [[ -z "$DECK_IP" ]] || info "Transfer to: deck@$DECK_IP (after packaging)"
 
 step 'Check: stage inputs'
-bash "$SCRIPT_DIR/deploy-compat-x86_64.sh" --check --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
+bash "$SCRIPT_DIR/internal/deploy-compat-x86_64.sh" --check --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
 if [[ "$MODE" == --check ]]; then
     info 'Tool provisioning, sysbake and packaging checks need the stage; they run during --execute'
     printf '[PASS] Bundle pipeline preflight passed; nothing was changed\n'
@@ -102,22 +103,22 @@ if [[ "$MODE" == --check ]]; then
 fi
 
 step '1/4 Stage Android rootfs and launcher'
-bash "$SCRIPT_DIR/deploy-compat-x86_64.sh" --execute --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
+bash "$SCRIPT_DIR/internal/deploy-compat-x86_64.sh" --execute --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
 
 step '2/4 Provision Steam Deck tools (ADB, inotify-tools)'
-bash "$SCRIPT_DIR/provision-deck-tools.sh" --execute --stage-dir "$STAGE" "${PROVISION_ARGS[@]}"
-bash "$SCRIPT_DIR/provision-deck-tools.sh" --check --stage-dir "$STAGE"
+bash "$SCRIPT_DIR/internal/provision-deck-tools.sh" --execute --stage-dir "$STAGE" "${PROVISION_ARGS[@]}"
+bash "$SCRIPT_DIR/internal/provision-deck-tools.sh" --check --stage-dir "$STAGE"
 
 step '3/4 Bake Android system data (private Podman storage)'
-bash "$SCRIPT_DIR/sysbake-isolated-x86_64.sh" --check --stage-dir "$STAGE" --rendering "$SYSBAKE_RENDERING"
-bash "$SCRIPT_DIR/sysbake-isolated-x86_64.sh" --execute --stage-dir "$STAGE" \
+bash "$SCRIPT_DIR/internal/sysbake-isolated-x86_64.sh" --check --stage-dir "$STAGE" --rendering "$SYSBAKE_RENDERING"
+bash "$SCRIPT_DIR/internal/sysbake-isolated-x86_64.sh" --execute --stage-dir "$STAGE" \
     --timeout "$SYSBAKE_TIMEOUT" --rendering "$SYSBAKE_RENDERING"
 
 step '4/4 Package bundle and installer'
-bash "$SCRIPT_DIR/deploy-compat-x86_64.sh" --package-only --execute --stage-dir "$STAGE" \
+bash "$SCRIPT_DIR/internal/deploy-compat-x86_64.sh" --package-only --execute --stage-dir "$STAGE" \
     --bundle-dir "$BUNDLE_DIR" --bundle-id "$BUNDLE_ID" "${BUNDLE_ARGS[@]}" "${TRANSFER_ARGS[@]}"
 
 printf '\n[PASS] Bundle ready: %s\n' "$ARCHIVE"
 if [[ -z "$DECK_IP" ]]; then
-    info "Send it with: bash image-14/scripts/deploy-compat-x86_64.sh --transfer-only --execute --bundle-id $BUNDLE_ID --bundle-dir $BUNDLE_DIR --deck-ip DECK_IP"
+    info "Send it with: bash image-14/scripts/transfer-deck-bundle.sh --bundle-id $BUNDLE_ID --deck-ip DECK_IP"
 fi

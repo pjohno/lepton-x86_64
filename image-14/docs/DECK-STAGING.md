@@ -1,5 +1,7 @@
 # Steam Deck development staging (Ubuntu 26.04 AMD-only build)
 
+> **Internal details.** For the normal build and install steps, follow [BUILDING.md](../../BUILDING.md); this page documents what the scripts do underneath.
+
 **Status:** experimental. This covers fresh Android rootfs staging, isolated system-data baking, local packaging and optional transfer, rather than Steam registration or installation. The existing Steam Deck Lepton installation remains the known-good reference until a complete new build has passed runtime tests.
 
 **Single command:** `image-14/scripts/make-deck-bundle-x86_64.sh` runs every step
@@ -22,10 +24,10 @@ From the repository root after image compilation and rootfs packaging:
 ```bash
 source .build-env
 stage="$LEPTON_OUTPUT_DIR/deck-stage-CLEAN"
-bash image-14/scripts/deploy-compat-x86_64.sh --check --stage-dir "$stage"
-bash image-14/scripts/deploy-compat-x86_64.sh --execute --stage-dir "$stage"
-bash image-14/scripts/provision-deck-tools.sh --execute --stage-dir "$stage"
-bash image-14/scripts/provision-deck-tools.sh --check --stage-dir "$stage"
+bash image-14/scripts/internal/deploy-compat-x86_64.sh --check --stage-dir "$stage"
+bash image-14/scripts/internal/deploy-compat-x86_64.sh --execute --stage-dir "$stage"
+bash image-14/scripts/internal/provision-deck-tools.sh --execute --stage-dir "$stage"
+bash image-14/scripts/internal/provision-deck-tools.sh --check --stage-dir "$stage"
 ```
 
 These commands do not overwrite an existing stage. `--check` may be run on a stage that already contains matching Android files. If an earlier stage has already been assembled, do **not** rerun `--execute` against it; check it instead.
@@ -57,11 +59,11 @@ The wrapper sets `LD_LIBRARY_PATH` to the adjacent `tools/lib` folder before run
 Generate fresh system data for the new stage using the isolated runner:
 
 ```bash
-bash image-14/scripts/sysbake-isolated-x86_64.sh --check --stage-dir "$stage"
-bash image-14/scripts/sysbake-isolated-x86_64.sh --execute --stage-dir "$stage"
-bash image-14/scripts/deploy-compat-x86_64.sh --package-only --check \
+bash image-14/scripts/internal/sysbake-isolated-x86_64.sh --check --stage-dir "$stage"
+bash image-14/scripts/internal/sysbake-isolated-x86_64.sh --execute --stage-dir "$stage"
+bash image-14/scripts/internal/deploy-compat-x86_64.sh --package-only --check \
   --stage-dir "$stage" --bundle-dir "$HOME/lepton-deck-bundles" --bundle-id CLEAN
-bash image-14/scripts/deploy-compat-x86_64.sh --package-only --execute \
+bash image-14/scripts/internal/deploy-compat-x86_64.sh --package-only --execute \
   --stage-dir "$stage" --bundle-dir "$HOME/lepton-deck-bundles" --bundle-id CLEAN
 ```
 
@@ -73,7 +75,7 @@ preserves Android fake-UID attributes. The source stage is unchanged.
 To send an already verified bundle later, use the same deployment entrypoint:
 
 ```bash
-bash image-14/scripts/deploy-compat-x86_64.sh --transfer-only --check \
+bash image-14/scripts/internal/deploy-compat-x86_64.sh --transfer-only --check \
   --bundle-dir "$HOME/lepton-deck-bundles" --bundle-id CLEAN --deck-ip 192.0.2.1
 # Replace the example address; use --execute to actually transfer and verify.
 ```

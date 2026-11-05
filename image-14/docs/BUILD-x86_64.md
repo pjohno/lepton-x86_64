@@ -1,5 +1,7 @@
 # Fresh Android 14 x86_64 build entry point
 
+> **Internal details.** For the normal build and install steps, follow [BUILDING.md](../../BUILDING.md); this page documents what the scripts do underneath.
+
 `image-14/do_build_x86_64.sh` follows the same entry-point convention as
 Valve's `image-14/do_build.sh`. Valve's wrapper builds the host builder if
 needed, compiles Android images, and packages the rootfs. The x86_64 wrapper
@@ -83,7 +85,7 @@ vendor images remain native x86_64. Without these flags the native path is uncha
 
 To build a new bundle from already compiled images (no AOSP rebuild), use
 `image-14/scripts/make-deck-bundle-x86_64.sh`; see [INSTALL-STEAM-DECK.md](../../INSTALL-STEAM-DECK.md).
-Packaging uses `image-14/scripts/deploy-compat-x86_64.sh --package-only --execute`.
+Packaging uses `image-14/scripts/internal/deploy-compat-x86_64.sh --package-only --execute`.
 For existing stages, run that entrypoint directly; no full Android rebuild is
 required. See [Deck staging](DECK-STAGING.md) for check and transfer commands.
 Runtime APK and JNI tests live under `tests/runtime/` at the repository root.

@@ -72,7 +72,7 @@ class BuildIntegrationTests(unittest.TestCase):
                 write(repo / '.build-env', config)
                 for name in ('Containerfile.ubuntu26', 'Containerfile.deck-tools'):
                     write(repo / 'image-14/.buildscripts_x86_64' / name, 'fixture\n')
-                write(repo / 'image-14/scripts/provision-deck-tools.sh', '# fixture\n')
+                write(repo / 'image-14/scripts/internal/provision-deck-tools.sh', '# fixture\n')
                 for name in ('preflight-x86_64.sh', 'prepare-x86_64.sh', 'build-images-x86_64.sh'):
                     source = (ROOT / 'image-14/scripts' / name).read_text()
                     selection = next(line for line in source.splitlines() if line.startswith('BUILDER='))

@@ -8,78 +8,42 @@ Chrome/Trichrome from locally extracted Android 14 Google Play emulator images.
 natively when NDK is installed.
 
 No Google binaries, games, credentials or signed-in profiles are stored in Git.
-The scripts do not download Google components. Use your locally obtained raw
-ext4 `system.img`, `product.img` and `system_ext.img` from a matching API 34
-x86_64 Google Play image. The milestone used revision 14; Chrome from that image
-is version 113 and should be updated before using it for general browsing.
-Extraction preserves privileged partition placement and permission XML, unpacks
-Chrome/Trichrome, and extracts x86_64 native libraries. Payload and input image
-SHA256 hashes are recorded under `compat_tool/provenance/gapps/`.
+The scripts do not download Google components. Both GApps and the NDK
+translator come from one file you download yourself: the Android SDK system
+image *Google Play Intel x86_64 Atom System Image, API 34, revision 14*
+(`x86_64-34_r14.zip`). Chrome from that image is version 113 and should be
+updated before general browsing. Extraction preserves privileged partition
+placement and permission XML, unpacks Chrome/Trichrome, and extracts x86_64
+native libraries. Payload and input image SHA256 hashes are recorded under
+`compat_tool/provenance/gapps/`.
 
-## Fresh build through the existing pipeline
+## Building a GApps + NDK bundle
 
-Set `.build-env` to a **new, nonexistent** AOSP output directory, as for a normal
-clean build. Google logical images and the extracted NDK payload must already
-exist outside that new output directory. For example:
+1. Turn the zip into the two inputs and add the printed lines to `.build-env`:
 
-```bash
-bash image-14/do_build_x86_64.sh --check --bundle-id gapps-v1 \
-  --with-gapps --google-images /path/to/google-play-api34/logical-partitions \
-  --with-ndk --ndk-payload /path/to/ndk/payload \
-  --tool-id lepton_gapps_v1 --tool-name "Lepton Android 14 GApps v1" \
-  --sysbake-rendering amd
-```
+   ```bash
+   bash image-14/scripts/prepare-google-inputs.sh --zip /path/to/x86_64-34_r14.zip \
+       --output /path/to/lepton-inputs/google-play-api34-r14
+   ```
 
-Replace `--check` with `--execute` to prepare/patch/build Android, stage the
-optional payloads, provision portable host tools, generate clean offline sysbake,
-and package a Deck bundle. Omit both NDK arguments for an x86_64-only image.
-`LEPTON_GOOGLE_IMAGES` and `LEPTON_NDK_PAYLOAD` in ignored `.build-env` can supply
-the local payload paths. The wrapper retains its refusal to reuse an AOSP tree.
+2. Build Android as in [BUILDING.md](BUILDING.md), then make the bundle:
 
-The normal patch series now restores LocaleManager and CrossProfileApps services
-and uses Android-first VIEW routing, so fresh builds do not need a hand-patched
-services.jar. There has not yet been a complete fresh Android image build with
-this consolidated workflow: validation covers patch application, deployment,
-real Google extraction, clean sysbake, runtime tests and bundle assembly using
-the previously compiled rootfs plus the tested rebuilt framework.
+   ```bash
+   bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id gapps-ndk-20261104 \
+       --with-gapps --with-ndk
+   ```
 
-## Assemble from an existing compiled rootfs
-
-The deployment entry point supports the same optional payloads:
-
-```bash
-bash image-14/scripts/deploy-compat-x86_64.sh --execute \
-  --rootfs-source /path/to/repro-rootfs-auto/rootfs --stage-dir /path/to/new-stage \
-  --with-gapps --google-images /path/to/google-play-api34/logical-partitions \
-  --with-ndk --ndk-payload /path/to/ndk/payload
-```
-
-An older rootfs lacks the framework fixes. Rebuild it, or explicitly add
-`--services-jar /path/to/tested/services.jar`; the deployer materializes the
-replacement, removes stale services preoptimization artifacts, and records its
-hash. GApps preflight checks the DEX for the locale/cross-profile startup markers
-and the corrected VIEW property. This is a compatibility guard, not proof of
-arbitrary framework correctness. Existing stages and source rootfs are never
-modified. A rootfs already containing the translator can be staged without
-reinjecting it; omit `--with-ndk` in that case.
-
-Then provision and bake using the existing scripts. To reuse already verified
-portable tools offline, provision with `--from-stage /path/to/known-good-stage`
-instead of rebuilding them:
-
-```bash
-bash image-14/scripts/provision-deck-tools.sh --stage-dir /path/to/new-stage --execute
-bash image-14/scripts/sysbake-isolated-x86_64.sh --stage-dir /path/to/new-stage \
-  --rendering amd --execute
-bash image-14/scripts/deploy-compat-x86_64.sh --package-only --execute \
-  --stage-dir /path/to/new-stage --bundle-dir /path/to/bundles --bundle-id gapps-v1 \
-  --tool-id lepton_gapps_v1 --tool-name "Lepton Android 14 GApps v1"
-```
+Omit `--with-ndk` for an x86_64-only GApps bundle, or `--with-gapps` for ARM64
+translation without Google services. The patch series restores the
+LocaleManager and CrossProfileApps services and uses Android-first VIEW
+routing, so a freshly built rootfs needs no hand-patched services.jar. The GApps
+preflight refuses an older rootfs that lacks these fixes (rebuild it, or, for
+testing only, supply a tested `--services-jar FILE`).
 
 ## Install alongside another Deck bundle
 
 Transfer the archive, `.sha256` and `.install.sh` files together (for example
-with `deploy-compat-x86_64.sh --transfer-only`), then in Desktop Mode:
+with `transfer-deck-bundle.sh`, see [BUILDING.md](BUILDING.md#6-send-the-bundles-to-the-deck)), then in Desktop Mode:
 
 ```bash
 bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-gapps-v1.install.sh

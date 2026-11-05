@@ -3,7 +3,7 @@
 # Regress the Lepton 64-bit native-bridge ABI behaviour without Android/AOSP.
 set -Eeuo pipefail
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-injector="$repo/image-14/scripts/inject-ndk-translation.sh"
+injector="$repo/image-14/scripts/internal/inject-ndk-translation.sh"
 [[ -f "$injector" ]] || { echo "FAIL: missing injector" >&2; exit 1; }
 for command in rsync python3 sha256sum cmp; do command -v "$command" >/dev/null || exit 1; done
 scratch="$(mktemp -d)"

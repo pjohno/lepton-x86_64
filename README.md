@@ -33,85 +33,37 @@ Known limitations:
 | `compat_tool/tools/lepton-gamescope-bridge` | Experimental nested Gamescope launcher used on Steam Deck |
 | `image-14/` | Android 14 image build configuration, vendor projects, and scripts |
 | `image-14/patches/` | Reviewed source patches, including native evdev input-axis handling |
-| `image-14/scripts/preflight-x86_64.sh` | Checks host and workflow prerequisites (`fresh`, `existing`, or `full`) |
-| `image-14/scripts/prepare-x86_64.sh` | Prepares an isolated Android 14 source checkout |
-| `image-14/scripts/build-images-x86_64.sh` | Builds Android system/vendor images with the configured builder |
-| `image-14/scripts/package-repro-rootfs.sh` | Packages a separate test rootfs from locally built images |
-| `image-14/scripts/deploy-compat-x86_64.sh` | Stages a runtime; packages or transfers complete stages with `--package-only` / `--transfer-only` |
-| `image-14/scripts/make-deck-bundle-x86_64.sh` | One command from built images to an installable Steam Deck bundle |
+| `image-14/scripts/preflight-x86_64.sh` | Build step 1: checks host and workflow prerequisites (`fresh` or `existing`) |
+| `image-14/scripts/prepare-x86_64.sh` | Build step 2: downloads and patches the Android 14 sources (`--reset` re-patches an existing checkout) |
+| `image-14/scripts/build-images-x86_64.sh` | Build step 3: compiles system/vendor images and packages them as a rootfs |
+| `image-14/scripts/make-deck-bundle-x86_64.sh` | Build steps 4-5: rootfs to an installable Steam Deck bundle |
+| `image-14/scripts/transfer-deck-bundle.sh` | Sends a bundle to a Steam Deck over SSH (optionally installing it) |
+| `image-14/scripts/prepare-google-inputs.sh` | Turns a local Google Play emulator image zip into the optional GApps/NDK inputs |
+| `image-14/scripts/internal/` | Building blocks called by the scripts above (staging, packaging, transfer, sysbake, NDK extraction); not run directly |
 | `compat_tool/tools/lepton-install-bundle` | Deck-side installer, shipped next to each bundle |
 | `tests/runtime/` | Isolated local APK tests and JNI fixture builder |
 
 Some build components are Git submodules. Confirm that the URLs in `.gitmodules` are publicly accessible before attempting a fresh clone or reporting a reproducible clean build.
 
-## Building and deploying Android 14 x86_64
+## Building and installing
 
-The experimental developer workflow uses Fedora Linux, rootless Podman, an Ubuntu-based builder container, and a separately configured Android source/output directory. This is not a turnkey Android image downloader or consumer installer.
+**[BUILDING.md](BUILDING.md)** is the step-by-step guide: one-time setup, five
+commands from the Android sources to a base bundle and a GApps + NDK bundle, and
+sending bundles to a Steam Deck. **[INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md)**
+continues on the Deck: installing, the graphics check and adding games to Steam.
 
-Copy `.build-env.example` to `.build-env` and configure its local paths. The `.build-env` file is machine-specific and excluded from Git. Prepare the builder images described by the build scripts before invoking source preparation or image compilation.
+Only AMD GPUs are supported: the image contains AMD RADV/radeonsi drivers, and
+Lepton stops with an explicit message on other hosts unless
+`LEPTON_FORCE_SOFTWARE=true` (slow software rendering) is set.
 
-The x86_64-specific Ubuntu 26.04 and Steam Deck tool builder definitions are
-under `image-14/.buildscripts_x86_64/`. The original Valve-derived scripts remain
-under `image-14/.buildscripts/`.
+### Lepton's Android patches
 
-From the repository root:
-
-```bash
-# Check prerequisites and prepare a fresh, isolated AOSP checkout.
-bash image-14/scripts/preflight-x86_64.sh fresh
-bash image-14/scripts/prepare-x86_64.sh --execute
-
-# Check the prepared checkout and builder environment.
-bash image-14/scripts/preflight-x86_64.sh existing
-
-# Compile the Android 14 system and vendor images.
-bash image-14/scripts/build-images-x86_64.sh --check
-bash image-14/scripts/build-images-x86_64.sh --execute
-
-# Package the images as a standalone test rootfs.
-source .build-env
-bash image-14/scripts/package-repro-rootfs.sh "$LEPTON_OUTPUT_DIR"
-
-# Stage the rootfs and native x86_64 APK extractor under compat_tool.
-bash image-14/scripts/deploy-compat-x86_64.sh --check
-bash image-14/scripts/deploy-compat-x86_64.sh --execute
-```
-
-The image build uses the Android target `aosp_lepton_x86_64-ap2a-userdebug` and produces `system.img` and `vendor.img`. The packaging step converts the Android sparse images, extracts their filesystems, flattens APEX packages, and writes to `$LEPTON_OUTPUT_DIR/repro-rootfs-auto/rootfs`. It refuses to overwrite an existing packaged rootfs.
-
-The local deploy step copies the packaged rootfs into `compat_tool/images/rootfs` and builds the native x86_64 APK metadata extractor. It refuses to overwrite an existing destination and **does not install or replace Lepton in Steam**. Generated rootfs contents and the extractor executable are Git-ignored, but they can be included in a separate rsync transfer of the repository directory; ensure the rsync options do not exclude ignored/generated files. There is no need to transfer the full AOSP checkout to another test computer.
+Source preparation applies Valve's patches and then the x86_64 patches in
+`image-14/patches/`:
 
 The native controller range correction is held in `image-14/patches/0007-eventhub-preserve-evdev-axes.patch` and is applied during the source preparation workflow to the AOSP `frameworks/native` checkout. It preserves synthetic Wayland input ranges while restoring the evdev axis information of real controllers.
 
 Video playback (Android's software decoders, e.g. YouTube) relies on two patches applied the same way. `0004-minigbm-gbm-mesa-driver.patch` gives YV12 video buffers a real linear three-plane layout, so decoders can write frames. `0002-radv-android-yv12-hardware-buffers.patch` lets RADV import those buffers as an external YCbCr format, so SurfaceFlinger (Skia on ANGLE/Vulkan) can display them. Tested with H.264 on Fedora (RX 6700-class) and YouTube up to 1080p on a Steam Deck.
-
-ARM64 NDK translation is **opt-in**. To assemble a separate stage from a native
-rootfs and an already extracted local payload, use:
-
-```bash
-bash image-14/scripts/deploy-compat-x86_64.sh --check \
-  --stage-dir /path/to/new-ndk-stage --with-ndk --ndk-payload /path/to/payload
-# Replace --check with --execute after reviewing preflight output.
-```
-
-This builds the compatibility shim and injects the verified payload into a new
-rootfs copy. It does not download Google binaries. Provision utilities and create
-a fresh sysbake afterward. See [Fedora debugging and validation](FEDORA-DEBUGGING.md)
-for the complete workflow, local `apks/` directory, and test results.
-
-### Making a Steam Deck bundle and installing it
-
-Once the images are built, one command creates an installable bundle and a
-one-command installer for the Deck:
-
-```bash
-bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id my-deck-01
-```
-
-Follow **[INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md)** for transfer, installation,
-the graphics check, and adding games to Steam. Only AMD GPUs are supported: the
-image contains AMD RADV/radeonsi drivers, and Lepton stops with an explicit message
-on other hosts unless `LEPTON_FORCE_SOFTWARE=true` (slow software rendering) is set.
 
 **Do not point packaging or deployment scripts at an existing Steam Deck runtime, and do not distribute generated Android binaries without a separate license and security review.**
 

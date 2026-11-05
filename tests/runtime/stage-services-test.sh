@@ -31,7 +31,7 @@ BASELINE="$(realpath -e -- "$BASELINE")"
 [[ -f "$JAR" && -f "$BASELINE" && -d "$SOURCE/tools" ]] || fail 'Missing jar or staged host tools'
 cmp -s "$BASELINE" "$SOURCE/compat_tool/images/rootfs/system/framework/services.jar" || fail 'Source stage services.jar does not match experiment baseline'
 unzip -Z1 "$JAR" | grep -Fx 'classes.dex' >/dev/null || fail 'Experimental services.jar has no DEX'
-bash "$ROOT/image-14/scripts/deploy-compat-x86_64.sh" "$MODE" \
+bash "$ROOT/image-14/scripts/internal/deploy-compat-x86_64.sh" "$MODE" \
     --stage-dir "$STAGE" --rootfs-source "$SOURCE/compat_tool/images/rootfs"
 if [[ "$MODE" == --check ]]; then
     echo '[PASS] New framework stage can be created; preoptimized services artifacts will be removed'

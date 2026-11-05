@@ -3,7 +3,7 @@
 # Exercise the real deployment packaging entrypoint with a tiny synthetic stage.
 set -Eeuo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-deploy="$repo/image-14/scripts/deploy-compat-x86_64.sh"
+deploy="$repo/image-14/scripts/internal/deploy-compat-x86_64.sh"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 stage="$work/stage"; out="$work/bundles"

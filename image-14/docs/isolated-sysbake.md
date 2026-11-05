@@ -11,14 +11,14 @@ with Pixman; no logged-in graphical desktop is required.
 ```bash
 source .build-env
 stage="$LEPTON_OUTPUT_DIR/deck-stage-clean-ubuntu26"
-bash image-14/scripts/sysbake-isolated-x86_64.sh --check --stage-dir "$stage"
+bash image-14/scripts/internal/sysbake-isolated-x86_64.sh --check --stage-dir "$stage"
 ```
 
 After reviewing `--check`, use `--execute` in a **tmux session** so an SSH
 logout does not interrupt Android initialization:
 
 ```bash
-bash image-14/scripts/sysbake-isolated-x86_64.sh --execute --stage-dir "$stage"
+bash image-14/scripts/internal/sysbake-isolated-x86_64.sh --execute --stage-dir "$stage"
 ```
 
 The script does not use the ordinary Podman graphroot or runroot: it generates a

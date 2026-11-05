@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 set -Eeuo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 CONFIG="$ROOT/.build-env"
 LEGACY_DEST="$ROOT/compat_tool/images/rootfs"
 EXTRACTOR="$ROOT/compat_tool/liblepton/apk_extractor"
@@ -18,6 +18,7 @@ DECK_IP=''
 DECK_REPLACE=''
 TRANSFER_ONLY=false
 WITH_GAPPS=false
+WITH_WIDEVINE=false
 GOOGLE_IMAGES=''
 SERVICES_JAR=''
 TOOL_ID=''
@@ -27,9 +28,9 @@ fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 info() { printf '[INFO] %s\n' "$*"; }
 usage() {
     cat <<'HELP'
-Usage: bash image-14/scripts/deploy-compat-x86_64.sh [--check|--execute] [--stage-dir DIR] [--rootfs-source DIR] [--with-ndk --ndk-payload DIR] [--with-gapps --google-images DIR] [--services-jar FILE]
-       bash image-14/scripts/deploy-compat-x86_64.sh --package-only [--check|--execute] --stage-dir DIR --bundle-id ID [--bundle-dir DIR] [--tool-id ID] [--tool-name NAME] [--deck-ip IPv4]
-       bash image-14/scripts/deploy-compat-x86_64.sh --transfer-only [--check|--execute] --bundle-id ID --deck-ip IPv4 [--bundle-dir DIR]
+Usage: bash image-14/scripts/internal/deploy-compat-x86_64.sh [--check|--execute] [--stage-dir DIR] [--rootfs-source DIR] [--with-ndk --ndk-payload DIR] [--with-gapps --google-images DIR] [--with-widevine] [--services-jar FILE]
+       bash image-14/scripts/internal/deploy-compat-x86_64.sh --package-only [--check|--execute] --stage-dir DIR --bundle-id ID [--bundle-dir DIR] [--tool-id ID] [--tool-name NAME] [--deck-ip IPv4]
+       bash image-14/scripts/internal/deploy-compat-x86_64.sh --transfer-only [--check|--execute] --bundle-id ID --deck-ip IPv4 [--bundle-dir DIR]
 
 Default (legacy): stage Android rootfs under repository compat_tool/images/rootfs.
 --stage-dir DIR: assemble an isolated, complete compatibility-tool source stage
@@ -44,7 +45,10 @@ Default (legacy): stage Android rootfs under repository compat_tool/images/rootf
 --with-gapps: add local Google Play services, GSF, Play Store and matching
               Chrome/Trichrome. Requires --stage-dir and --google-images.
               No downloads; Google services stay opt-in.
---google-images DIR: extracted API 34 system.img, product.img, system_ext.img.
+--google-images DIR: extracted API 34 system.img, product.img, system_ext.img
+                     (and vendor.img for --with-widevine).
+--with-widevine: add Widevine L3 (software DRM) from the same local Google
+                 image's vendor.img. Opt-in; nothing is downloaded.
 --services-jar FILE: materialize a tested framework override in the new stage;
                      discard stale services DEX preoptimization files.
 --tool-id ID: unique Steam tool ID for side-by-side installation. GApps bundles
@@ -63,7 +67,7 @@ Default (legacy): stage Android rootfs under repository compat_tool/images/rootf
 Packaging/transfer --check validates inputs without writing or connecting remotely.
 
 Steam Deck host utilities and fresh sysbake require separate provisioning:
-  image-14/scripts/provision-deck-tools.sh --stage-dir DIR --execute
+  image-14/scripts/internal/provision-deck-tools.sh --stage-dir DIR --execute
 HELP
 }
 while (($#)); do
@@ -73,6 +77,7 @@ while (($#)); do
         --rootfs-source) (($# >= 2)) || fail '--rootfs-source requires a path'; ROOTFS_SOURCE="$2"; shift 2 ;;
         --with-ndk) WITH_NDK=true; shift ;;
         --with-gapps) WITH_GAPPS=true; shift ;;
+        --with-widevine) WITH_WIDEVINE=true; shift ;;
         --google-images) GOOGLE_IMAGES="${2:?}"; shift 2 ;;
         --services-jar) SERVICES_JAR="${2:?}"; shift 2 ;;
         --tool-id) TOOL_ID="${2:?}"; shift 2 ;;
@@ -92,7 +97,7 @@ done
 if [[ -f "$CONFIG" ]]; then source "$CONFIG";
 elif [[ "$PACKAGE_ONLY" == false ]]; then fail 'Missing .build-env'; fi
 if [[ "$PACKAGE_ONLY" == true ]]; then
-    [[ -z "$ROOTFS_SOURCE" && -z "$NDK_PAYLOAD" && "$WITH_NDK" == false && "$WITH_GAPPS" == false && -z "$GOOGLE_IMAGES" && -z "$SERVICES_JAR" ]] || fail 'Packaging cannot be combined with rootfs/NDK staging options'
+    [[ -z "$ROOTFS_SOURCE" && -z "$NDK_PAYLOAD" && "$WITH_NDK" == false && "$WITH_GAPPS" == false && "$WITH_WIDEVINE" == false && -z "$GOOGLE_IMAGES" && -z "$SERVICES_JAR" ]] || fail 'Packaging cannot be combined with rootfs/NDK staging options'
     [[ -n "$BUNDLE_ID" ]] || fail '--bundle-id is required for packaging/transfer'
     STAGE_DIR="${STAGE_DIR:-${LEPTON_DECK_STAGE_DIR:-}}"
     BUNDLE_DIR="${BUNDLE_DIR:-${LEPTON_DECK_BUNDLE_DIR:-$HOME/lepton-deck-bundles}}"
@@ -112,7 +117,13 @@ if [[ "$WITH_NDK" == true ]]; then
     [[ -n "$NDK_PAYLOAD" ]] || fail '--with-ndk requires --ndk-payload or LEPTON_NDK_PAYLOAD'
     NDK_PAYLOAD="$(realpath -e -- "$NDK_PAYLOAD")" || fail 'NDK payload not found'
 fi
-[[ "$WITH_GAPPS" == true || -z "$GOOGLE_IMAGES" ]] || fail '--google-images requires --with-gapps'
+[[ "$WITH_GAPPS" == true || "$WITH_WIDEVINE" == true || -z "$GOOGLE_IMAGES" ]] || fail '--google-images requires --with-gapps or --with-widevine'
+if [[ "$WITH_WIDEVINE" == true ]]; then
+    [[ -n "$STAGE_DIR" ]] || fail '--with-widevine requires --stage-dir'
+    GOOGLE_IMAGES="$(realpath -e -- "${GOOGLE_IMAGES:-${LEPTON_GOOGLE_IMAGES:-}}")" || fail 'Local Google logical images required for Widevine'
+    source "$ROOT/image-14/scripts/lib/google-services.sh"
+    widevine_check "$GOOGLE_IMAGES"
+fi
 if [[ "$WITH_GAPPS" == true ]]; then
     [[ -n "$STAGE_DIR" ]] || fail '--with-gapps requires --stage-dir'
     GOOGLE_IMAGES="$(realpath -e -- "${GOOGLE_IMAGES:-${LEPTON_GOOGLE_IMAGES:-}}")" || fail 'Local Google logical images required'
@@ -169,7 +180,7 @@ else
 fi
 
 if [[ "$WITH_NDK" == true ]]; then
-    bash "$ROOT/image-14/scripts/inject-ndk-translation.sh" --check \
+    bash "$ROOT/image-14/scripts/internal/inject-ndk-translation.sh" --check \
         --rootfs "$SRC" --payload "$NDK_PAYLOAD" --output "$STAGE_DIR"
 fi
 
@@ -214,7 +225,7 @@ if [[ -n "$STAGE_DIR" ]]; then
         --exclude='/sysbake' --exclude='/sysbake.xattrs' --exclude='/liblepton/apk_extractor/target/' --exclude=__pycache__/ \
         "$ROOT/compat_tool/" "$TEMP/compat_tool/"
     if [[ "$WITH_NDK" == true ]]; then
-        bash "$ROOT/image-14/scripts/inject-ndk-translation.sh" --execute \
+        bash "$ROOT/image-14/scripts/internal/inject-ndk-translation.sh" --execute \
             --rootfs "$SRC" --payload "$NDK_PAYLOAD" --output "$TEMP/ndk-injection"
         mv -- "$TEMP/ndk-injection/rootfs" "$TEMP/compat_tool/images/rootfs"
         mv -- "$TEMP/ndk-injection" "$TEMP/compat_tool/ndk-provenance"
@@ -234,6 +245,10 @@ if [[ -n "$STAGE_DIR" ]]; then
     fi
     if [[ "$WITH_GAPPS" == true ]]; then
         google_services_inject "$TEMP/compat_tool/images/rootfs" "$GOOGLE_IMAGES" true true "$TEMP/compat_tool/provenance/gapps"
+    fi
+    if [[ "$WITH_WIDEVINE" == true ]]; then
+        widevine_inject "$TEMP/compat_tool/images/rootfs" "$GOOGLE_IMAGES" "$TEMP/compat_tool/provenance/widevine"
+        info '[PASS] Widevine L3 added (vendor/apex/com.google.android.widevine)'
     fi
     [[ -x "$TEMP/compat_tool/images/rootfs/system/bin/sh" ]] || fail 'Staged Android shell missing'
     [[ -f "$TEMP/compat_tool/images/rootfs/vendor/lib64/hw/vulkan.radeon.so" ]] || fail 'Staged RADV driver missing'

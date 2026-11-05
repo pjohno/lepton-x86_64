@@ -5,7 +5,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+ROOT="$(cd -- "$SCRIPT_DIR/../../.." && pwd -P)"
 ADB_URL='https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip'
 ADB_SHA256='a902be8f45c6c62e76c9efaf6947a0fa747c9cabd89a2ac8e0d16ecb30b3ed01'
 ADB_VERSION='37.0.1-15733141'
@@ -19,7 +19,7 @@ FROM_STAGE=''
 
 usage() {
     cat <<'HELP'
-Usage: bash image-14/scripts/provision-deck-tools.sh --stage-dir DIR [--check|--execute] [--adb-zip PATH] [--from-stage DIR]
+Usage: bash image-14/scripts/internal/provision-deck-tools.sh --stage-dir DIR [--check|--execute] [--adb-zip PATH] [--from-stage DIR]
   --check: verify the four tools already staged; no changes or downloads.
   --execute: download verified Google ADB, compile inotify-tools 4.23.9.0 in a
              Debian 12 Podman builder, then install into an otherwise tool-free stage.
@@ -148,7 +148,7 @@ mkdir -p "$TEMP/output/tools"/{platform-tools,bin,native,lib,licenses}
 install -m 755 "$TEMP/platform-tools/adb" "$TEMP/output/tools/platform-tools/adb"
 install -m 755 "$bin" "$TEMP/output/tools/native/inotifywait"
 install -m 755 "$lib" "$TEMP/output/tools/lib/libinotifytools.so.0"
-install -m 755 "$ROOT/image-14/scripts/inotifywait-wrapper" "$TEMP/output/tools/bin/inotifywait"
+install -m 755 "$ROOT/image-14/scripts/internal/inotifywait-wrapper" "$TEMP/output/tools/bin/inotifywait"
 # Ship upstream license notices with the compiled distribution.
 find "$TEMP/inotify-tools" -maxdepth 1 -type f \
     \( -iname 'COPYING*' -o -iname 'LICENSE*' \) -exec cp -a -- {} "$TEMP/output/tools/licenses/" \;

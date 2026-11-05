@@ -34,7 +34,7 @@ IMAGES="$(realpath -e -- "$IMAGES")"
 [[ -d "$SOURCE/tools" ]] || fail 'Source stage host tools missing'
 source "$ROOT/image-14/scripts/lib/google-services.sh"
 google_services_check "$IMAGES" "$WITH_STORE" "$WITH_BROWSER"
-bash "$ROOT/image-14/scripts/deploy-compat-x86_64.sh" "$MODE" \
+bash "$ROOT/image-14/scripts/internal/deploy-compat-x86_64.sh" "$MODE" \
     --stage-dir "$STAGE" --rootfs-source "$SOURCE/compat_tool/images/rootfs"
 if [[ "$MODE" == --check ]]; then
     echo '[PASS] Google-services staging preflight; no files changed'

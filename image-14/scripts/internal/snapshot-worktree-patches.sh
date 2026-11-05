@@ -4,7 +4,7 @@
 # Install under image-14/scripts/ and run: bash scripts/snapshot-worktree-patches.sh
 set -Eeuo pipefail
 
-IMAGE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+IMAGE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 COMPAT_DIR="$(cd -- "$IMAGE_DIR/../compat_tool" && pwd -P)"
 AOSP_DIR="$(readlink -f -- "$IMAGE_DIR/aosp-output")"
 

@@ -9,7 +9,9 @@ ANDROID_ROOT="${ROOT_DIR}/output"
 # are reflected without needing to push changes up to the actual repositories.
 mkdir -p "${ANDROID_ROOT}/device/waydroid/waydroid"
 rsync -Pa --delete "${ROOT_DIR}/android_device_valve_lepton/" "${ANDROID_ROOT}/device/waydroid/waydroid"
-rsync -Pa --delete "${ROOT_DIR}/android_hardware_waydroid/" "${ANDROID_ROOT}/hardware/waydroid"
+# hardware/waydroid is also a repo project; never copy the submodule's .git
+# link over it (that breaks the project), and keep the project's own .git.
+rsync -Pa --delete --exclude=/.git "${ROOT_DIR}/android_hardware_waydroid/" "${ANDROID_ROOT}/hardware/waydroid"
 mkdir -p "${ANDROID_ROOT}/vendor/extra"
 rsync -Pa --delete "${ROOT_DIR}/android_vendor_valve/" "${ANDROID_ROOT}/vendor/extra"
 

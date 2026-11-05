@@ -29,7 +29,7 @@ class ServicesTests(unittest.TestCase):
         library.parent.mkdir(parents=True)
         shutil.copyfile(SCRIPT.parents[2] / "image-14/scripts/lib/google-services.sh", library)
         self.library = library
-        deploy = repo / "image-14/scripts/deploy-compat-x86_64.sh"
+        deploy = repo / "image-14/scripts/internal/deploy-compat-x86_64.sh"
         deploy.parent.mkdir(parents=True, exist_ok=True)
         deploy.write_text('''#!/bin/bash
 set -eu
@@ -137,8 +137,9 @@ cp -a "$source" "$stage/compat_tool/images/rootfs"
     def test_production_deployer_combines_gapps_and_framework_override_atomically(self):
         repo = self.helper.parents[2]
         actual = SCRIPT.parents[2]
-        deploy = repo / 'image-14/scripts/deploy-compat-x86_64.sh'
-        shutil.copyfile(actual / 'image-14/scripts/deploy-compat-x86_64.sh', deploy)
+        deploy = repo / 'image-14/scripts/internal/deploy-compat-x86_64.sh'
+        deploy.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(actual / 'image-14/scripts/internal/deploy-compat-x86_64.sh', deploy)
         runtime = repo / 'compat_tool/liblepton/ndk_auxv/runtime.sh'
         runtime.parent.mkdir(parents=True)
         shutil.copyfile(actual / 'compat_tool/liblepton/ndk_auxv/runtime.sh', runtime)

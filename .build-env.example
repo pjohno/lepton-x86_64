@@ -13,14 +13,12 @@ LEPTON_BUILD_JOBS=6
 LEPTON_MIN_FREE_GIB=200
 LEPTON_LOG_DIR="${HOME}/lepton-build-logs/clean14"
 
-# Steam Deck bundle packaging (local paths; never commit .build-env).
-LEPTON_DECK_STAGE_DIR="${HOME}/lepton-deck-stage"
+# Finished Steam Deck bundles (local paths; never commit .build-env).
 LEPTON_DECK_BUNDLE_DIR="${HOME}/lepton-deck-bundles"
 # Optional: LEPTON_DECK_BUNDLE_ID="dev-test"
 
-# Optional local payload for deploy-compat-x86_64.sh --with-ndk.
-# Extract it first; proprietary translator files are never downloaded by deploy.
-# LEPTON_NDK_PAYLOAD="${LEPTON_OUTPUT_DIR}/native-bridge-research/ndk-google-api34-r14-v2/payload"
-
-# Optional local Google Play API 34 logical ext4 images (no download).
-# LEPTON_GOOGLE_IMAGES="/path/to/google-play-api34/logical-partitions"
+# Optional Google inputs for --with-gapps and --with-ndk. Make both from the
+# Google Play API 34 x86_64 emulator image zip you downloaded yourself:
+#   bash image-14/scripts/prepare-google-inputs.sh --zip x86_64-34_r14.zip --output DIR
+# LEPTON_GOOGLE_IMAGES="DIR/logical-partitions"
+# LEPTON_NDK_PAYLOAD="DIR/ndk-translation/payload"

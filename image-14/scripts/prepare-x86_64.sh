@@ -5,7 +5,7 @@ set -Eeuo pipefail
 
 usage() {
   cat <<'HELP'
-Usage: prepare-x86_64.sh --check | --sync-only | --resume-sync | --vendor-only | --patch-only | --execute | --resume
+Usage: prepare-x86_64.sh --check | --sync-only | --resume-sync | --vendor-only | --patch-only | --execute | --resume | --reset
   --check    Read-only inspection; no downloads or filesystem changes.
   --sync-only    Create fresh checkout and sync Android sources only.
   --resume-sync  Resume source synchronization, without copying or patching.
@@ -13,12 +13,16 @@ Usage: prepare-x86_64.sh --check | --sync-only | --resume-sync | --vendor-only |
   --patch-only   Apply patches after vendored projects are verified.
   --execute      Create new checkout, sync, vendor sources, and apply patches.
   --resume       Resume an interrupted download/copy; never replay interrupted patches.
+  --reset        Existing synced checkout: discard every change to the Android
+                 sources (back to the pinned manifest; no download), remove
+                 installed build outputs (m installclean), then vendor and
+                 patch again. Use after editing patches or to rebuild cleanly.
 Configuration: repository-root .build-env (copy .build-env.example and customize).
 HELP
 }
 [[ $# == 1 ]] || { usage >&2; exit 2; }
 ACTION=$1
-case "$ACTION" in --check|--sync-only|--resume-sync|--vendor-only|--patch-only|--execute|--resume) ;; *) usage >&2; exit 2;; esac
+case "$ACTION" in --check|--sync-only|--resume-sync|--vendor-only|--patch-only|--execute|--resume|--reset) ;; *) usage >&2; exit 2;; esac
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 IMAGE="$ROOT/image-14"
@@ -126,6 +130,9 @@ STATE="$TARGET/.lepton-clean14-state"
 owner_content="$(git -C "$ROOT" rev-parse HEAD)"
 if [[ "$ACTION" == --execute || "$ACTION" == --sync-only ]]; then
   [[ ! -e "$TARGET" && ! -L "$TARGET" ]] || err 'Fresh target exists; use --resume only for a marked checkout'
+elif [[ "$ACTION" == --reset ]]; then
+  [[ -f "$MARKER" && -d "$STATE" ]] || err 'No checkout prepared by this workflow to reset'
+  [[ -f "$STATE/sync.done" ]] || err 'Source synchronization incomplete: use --resume first'
 elif [[ "$ACTION" == --resume || "$ACTION" == --resume-sync || "$ACTION" == --vendor-only || "$ACTION" == --patch-only ]]; then
   [[ -f "$MARKER" && -d "$STATE" ]] || err 'No owned checkout state to resume'
   [[ "$(cat "$MARKER")" == "$owner_content" ]] || err 'Checkout belongs to a different repository commit'
@@ -136,7 +143,7 @@ fi
 if [[ "$ACTION" == --check ]]; then
   if [[ -e "$TARGET" || -L "$TARGET" ]]; then
     if [[ -f "$MARKER" ]]; then
-      info '[INFO] Existing marked checkout; --execute is not allowed'
+      info '[INFO] Existing marked checkout; --execute is not allowed (use --reset to re-prepare it)'
     else
       info '[FAIL] Destination already exists and is not owned by this workflow'
       exit 1
@@ -207,6 +214,48 @@ run_in_builder() {
   fi
   return "$result"
 }
+
+if [[ "$ACTION" == --reset ]]; then
+  info "[$(date -u +%H:%M:%SZ)] [START] Reset: Android sources back to the pinned manifest"
+  rm -f -- "$STATE/vendor.done" "$STATE/patches.done" "$STATE/patches.started"
+  run_in_builder <<'INNER'
+set -Eeuo pipefail
+cd /workspace/output
+[[ -f .repo/manifest.xml && -f build/envsetup.sh ]] || { echo 'Missing synced AOSP checkout'; exit 1; }
+# Projects whose .git link was overwritten (older vendoring copied a
+# submodule's .git file over hardware/waydroid): check them out again from
+# the local .repo store, without any download.
+broken=()
+while read -r path; do
+  git -C "$path" rev-parse --git-dir >/dev/null 2>&1 || broken+=("$path")
+done < <(.repo/repo/repo list -p)
+if (( ${#broken[@]} )); then
+  echo "Repairing git checkouts: ${broken[*]}"
+  rm -rf -- "${broken[@]}"
+  .repo/repo/repo sync -q -l -d "${broken[@]}"
+fi
+# Every project: abandon interrupted patch series, return to the manifest
+# revision and delete untracked files (vendored copies, patch-added files).
+.repo/repo/repo forall -c '
+  git am --abort >/dev/null 2>&1 || true
+  git reset -q --hard "$REPO_LREV" || { echo "RESET FAILED: $REPO_PATH (revision $REPO_LREV)"; exit 1; }
+  git clean -q -fdx || { echo "CLEAN FAILED: $REPO_PATH"; exit 1; }
+'
+# Vendored Valve tree (not a repo project); recreated by the vendoring stage.
+rm -rf -- vendor/extra
+dirty=$(.repo/repo/repo forall -q -c 'test -z "$(git status --porcelain)" || echo "$REPO_PATH"')
+[[ -z "$dirty" ]] || { echo "Projects still modified after reset:"; echo "$dirty"; exit 1; }
+echo '[PASS] All Android projects match the pinned manifest'
+# Installed build outputs may hold files from the previous sources.
+set +u
+source build/envsetup.sh >/dev/null
+lunch aosp_lepton_x86_64-ap2a-userdebug >/dev/null
+m installclean
+echo '[PASS] Installed build outputs removed (intermediates kept for speed)'
+INNER
+  info "[$(date -u +%H:%M:%SZ)] [PASS] Reset complete; vendoring and patching again"
+  printf '%s\n' "$owner_content" > "$MARKER"
+fi
 
 # Detect whether repo synced completely before doing any vendored copies.
 if [[ ! -f "$STATE/sync.done" ]]; then
@@ -313,4 +362,4 @@ fi
 info '=== Preparation complete ==='
 info "Resolved manifest: $TARGET/.lepton-resolved-manifest.xml"
 info "Logs: $LOG_FILE"
-info 'No host glslang or Android images were built. No Steam Deck deployment occurred.'
+info 'No Android images were built and nothing was sent to a Steam Deck.'

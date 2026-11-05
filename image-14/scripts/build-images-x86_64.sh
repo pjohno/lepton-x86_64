@@ -4,7 +4,12 @@
 set -Eeuo pipefail
 
 usage() {
-  echo "Usage: $0 --check | --execute" >&2
+  cat >&2 <<'HELP'
+Usage: bash image-14/scripts/build-images-x86_64.sh --check | --execute
+Compiles system.img and vendor.img in the prepared checkout, then packages
+them as the rootfs that make-deck-bundle-x86_64.sh uses
+($LEPTON_OUTPUT_DIR/repro-rootfs-auto/rootfs, replaced on every build).
+HELP
 }
 
 [[ $# == 1 ]] || { usage; exit 2; }
@@ -76,7 +81,7 @@ LOG_DIR="$(realpath -m -- "$LEPTON_LOG_DIR")"
 
 STATE="$TARGET/.lepton-clean14-state"
 GLSLANG="$TARGET/out/host/glslang14/StandAlone/glslang"
-BOOTSTRAP="$ROOT/image-14/scripts/bootstrap-glslang14.sh"
+BOOTSTRAP="$ROOT/image-14/scripts/internal/bootstrap-glslang14.sh"
 BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder-glslang14:latest}"
 case "$BUILDER" in
   lepton-builder-glslang14:latest|lepton-builder-ubuntu26:latest) ;;
@@ -285,6 +290,19 @@ if (( result != 0 )); then
 fi
 
 info "[PASS] Android image build completed"
-info "Inspect generated artifacts under: $TARGET/out/target/product"
+
+# Bundles are made from the flattened rootfs of these images; replace any
+# rootfs packaged from an earlier build so the two never disagree.
+PACKAGED="$TARGET/repro-rootfs-auto/rootfs"
+info "[START] Packaging the Android rootfs for bundles: $PACKAGED"
+if [[ -e "$PACKAGED" || -L "$PACKAGED" ]]; then
+  info "[INFO] Removing the rootfs packaged from the previous build"
+  podman unshare rm -rf -- "$PACKAGED"
+fi
+bash "$ROOT/image-14/scripts/internal/package-repro-rootfs.sh" "$TARGET" ||
+  fail "Packaging the rootfs failed; log: $LOG"
+
+info "[PASS] Android images built and packaged"
+info "Next: bash image-14/scripts/make-deck-bundle-x86_64.sh --check --bundle-id ID"
 info "Log: $LOG"
 info "No Steam Deck deployment performed"

@@ -3,7 +3,7 @@
 # Bootstrap glslang 14 inside the isolated Lepton Android 14 checkout.
 set -Eeuo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 IMAGE="$ROOT/image-14"
 CONFIG="$ROOT/.build-env"
 

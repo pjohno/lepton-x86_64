@@ -11,7 +11,7 @@ cp -ra "${PROJECT_DIR}"/compat_tool/images/rootfs/* install-rootfs/images/rootfs
 # Lepton x86_64: ensure Binder devices exist before Android services start.
 # Leave other architectures unchanged.
 if grep -Eq '^ro.product.cpu.abi=x86_64$|^ro.product.cpu.abilist=x86_64([,]|$)'     install-rootfs/images/rootfs/system/build.prop; then
-    "${PROJECT_DIR}/image-14/scripts/patch-binderfs-init.sh"         install-rootfs/images/rootfs
+    "${PROJECT_DIR}/image-14/scripts/internal/patch-binderfs-init.sh"         install-rootfs/images/rootfs
 fi
 cp -ra "${PROJECT_DIR}"/compat_tool/images/NOTICE.txt install-rootfs/images
 cp -ra "${PROJECT_DIR}"/image-14/version.txt install-rootfs/images

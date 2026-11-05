@@ -23,7 +23,7 @@ committed to this repository.
 NDK deployment is **opt-in**. Native x86_64 is the default because the translator
 comes from a separately obtained Google image and game compatibility is still
 experimental. Extract a local payload using
-`image-14/scripts/extract-ndk-translation.sh`; see that script's `--help`.
+`image-14/scripts/internal/extract-ndk-translation.sh`; see that script's `--help`.
 
 Once images have been built and packaged, assemble a NEW NDK-enabled stage:
 
@@ -32,9 +32,9 @@ source .build-env
 PAYLOAD="$LEPTON_OUTPUT_DIR/native-bridge-research/ndk-google-api34-r14-v2/payload"
 STAGE="$LEPTON_OUTPUT_DIR/deck-stage-ndk"
 
-bash image-14/scripts/deploy-compat-x86_64.sh --check \
+bash image-14/scripts/internal/deploy-compat-x86_64.sh --check \
   --stage-dir "$STAGE" --with-ndk --ndk-payload "$PAYLOAD"
-bash image-14/scripts/deploy-compat-x86_64.sh --execute \
+bash image-14/scripts/internal/deploy-compat-x86_64.sh --execute \
   --stage-dir "$STAGE" --with-ndk --ndk-payload "$PAYLOAD"
 ```
 

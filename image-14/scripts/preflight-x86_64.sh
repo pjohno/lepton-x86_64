@@ -288,8 +288,8 @@ if [[ "$MODE" == full ]]; then
         pass "Packaging output rootfs is available"
     fi
 
-    if [[ -f "$ROOT/image-14/scripts/patch-binderfs-init.sh" &&
-          -f "$ROOT/image-14/scripts/package-repro-rootfs.sh" ]]; then
+    if [[ -f "$ROOT/image-14/scripts/internal/patch-binderfs-init.sh" &&
+          -f "$ROOT/image-14/scripts/internal/package-repro-rootfs.sh" ]]; then
         pass "Rootfs packaging and BinderFS scripts available"
     else
         fail "Rootfs packaging or BinderFS script missing"
@@ -303,7 +303,7 @@ for file in \
     image-14/.buildscripts/copy_vendored_projects.sh \
     image-14/android_vendor_valve/vendorsetup.sh \
     image-14/android_vendor_valve/patches/apply-patches.sh \
-    image-14/scripts/bootstrap-glslang14.sh \
+    image-14/scripts/internal/bootstrap-glslang14.sh \
     image-14/scripts/build-images-x86_64.sh; do
 
     if [[ -f "$ROOT/$file" ]]; then

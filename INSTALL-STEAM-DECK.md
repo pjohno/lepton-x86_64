@@ -1,47 +1,29 @@
-# Build a bundle and install it on a Steam Deck
+# Install Lepton on a Steam Deck
 
-This guide goes from a built Android 14 x86_64 image to an Android game running
-from Steam on a Steam Deck with AMD hardware graphics. It assumes you have
-already compiled the Android images (see [README](README.md#building-and-deploying-android-14-x86_64)
-or run `image-14/do_build_x86_64.sh` to do everything from source).
+This guide takes a finished bundle to an Android game running from Steam on a
+Steam Deck with AMD hardware graphics. Make the bundles first with
+**[BUILDING.md](BUILDING.md)**.
 
 Nothing here downloads Android images, Google apps or games for you. You provide
 your own APK files.
 
 ## What you need
 
-**Build computer**: x86_64 Linux (tested on Fedora), rootless Podman, and the
-compiled Android output configured in `.build-env`. The bundle step needs about
-5 GiB of free space in addition to the Android output (more with Google apps).
-Missing host commands are reported by `--check`.
-
 **Steam Deck**: SteamOS in Desktop Mode, signed in to Steam at least once, and
-about 3 GiB free in your home directory per install. Any
-other x86_64 Linux machine with an **AMD GPU** also works; other GPUs are not
-supported (the image only contains AMD RADV/radeonsi drivers).
+about 3 GiB free in your home directory per install. Any other x86_64 Linux
+machine with an **AMD GPU** also works; other GPUs are not supported (the
+image only contains AMD RADV/radeonsi drivers).
 
-## 1. Make the bundle (build computer)
+## 1. The bundle
 
-From the repository root, choose a new bundle ID (letters, digits, `.`, `-`, `_`):
-
-```bash
-bash image-14/scripts/make-deck-bundle-x86_64.sh --check   --bundle-id my-deck-01
-bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id my-deck-01
-```
-
-This stages the Android rootfs, provisions the Deck helper tools, bakes Android's
-first-boot data in a private Podman store, and writes three files to
-`LEPTON_DECK_BUNDLE_DIR` (default `~/lepton-deck-bundles`):
+A bundle is three files in `~/lepton-deck-bundles` on the build computer, for
+example for the bundle ID `base-20261104`:
 
 | File | Purpose |
 | --- | --- |
-| `lepton-x86_64-steamdeck-my-deck-01.tar.gz` | The bundle |
-| `lepton-x86_64-steamdeck-my-deck-01.tar.gz.sha256` | Checksums |
-| `lepton-x86_64-steamdeck-my-deck-01.install.sh` | One-command installer |
-
-Optional extras: `--with-gapps --google-images DIR` (Google Play services, see
-[GAPPS.md](GAPPS.md)) and `--with-ndk --ndk-payload DIR` (ARM64 app translation).
-Existing stages and bundles are never overwritten; use a new bundle ID instead.
+| `lepton-x86_64-steamdeck-base-20261104.tar.gz` | The bundle |
+| `lepton-x86_64-steamdeck-base-20261104.tar.gz.sha256` | Checksums |
+| `lepton-x86_64-steamdeck-base-20261104.install.sh` | One-command installer |
 
 ## 2. Copy it to the Deck
 
@@ -50,36 +32,35 @@ a password with `passwd`, and run `sudo systemctl enable --now sshd`. Find the
 Deck's IP address in Settings > Internet. Then on the build computer:
 
 ```bash
-bash image-14/scripts/deploy-compat-x86_64.sh --transfer-only --execute \
-    --bundle-id my-deck-01 --deck-ip 192.168.1.50
+bash image-14/scripts/transfer-deck-bundle.sh --bundle-id base-20261104 --deck-ip 192.168.1.50
 ```
 
 This copies all three files to `~/Downloads/lepton-deck-bundles/` on the Deck,
-verifies the checksum there, and puts an **Install Lepton my-deck-01** icon on the
-Deck's desktop. You can also add `--deck-ip` to step 1.
+verifies the checksum there, and puts an **Install Lepton base-20261104** icon
+on the Deck's desktop.
 
-**Updating an existing install over SSH.** Add `--deck-replace TOOL_ID` to
-the transfer command to install straight away, overwriting that install (its
-games keep working; no game from it may be running). Tool IDs are shown by
-`lepton-manage-installs --list` on the Deck.
+**Updating an existing install over SSH.** Add `--replace TOOL_ID` to install
+straight away, overwriting that install (its games keep working; no game from
+it may be running). Tool IDs are shown by `lepton-manage-installs --list` on
+the Deck.
 
 **By USB drive.** Copy the three files into one folder on the Deck.
 
 ## 3. Install (Steam Deck, Desktop Mode)
 
-Double-tap **Install Lepton my-deck-01** on the desktop. (After a USB copy,
+Double-tap **Install Lepton base-20261104** on the desktop. (After a USB copy,
 double-tap the `.install.sh` file in Dolphin instead.) A Konsole window shows
 progress. From a terminal, the same is:
 
 ```bash
-bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-my-deck-01.install.sh
+bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-base-20261104.install.sh
 ```
 
 The installer:
 
 1. verifies the checksum and that an AMD GPU is present;
 2. extracts to `~/.local/share/<install directory>` (it refuses to overwrite);
-3. registers the Steam compatibility tool **Lepton x86_64 (community) - my-deck-01**;
+3. registers the Steam compatibility tool **Lepton x86_64 (community) - base-20261104**;
 4. writes `~/.config/lepton-x86_64/<tool id>.env` and makes it the default;
 5. links `lepton-add-game`, `lepton-add-game-gui` and `lepton-run-apk` into `~/.local/bin`;
 6. adds **Lepton: Add Android game**, **Lepton: Check graphics** and **Lepton:
