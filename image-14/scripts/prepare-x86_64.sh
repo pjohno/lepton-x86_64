@@ -35,15 +35,17 @@ case "$BUILDER" in
   lepton-builder:latest|lepton-builder-ubuntu26:latest) ;;
   *) echo "ERROR: Unsupported source builder: $BUILDER" >&2; exit 1 ;;
 esac
-for variable in LEPTON_OUTPUT_DIR LEPTON_BUILD_TARGET LEPTON_BUILD_JOBS LEPTON_MIN_FREE_GIB LEPTON_LOG_DIR; do
+for variable in LEPTON_OUTPUT_DIR LEPTON_BUILD_TARGET LEPTON_BUILD_JOBS LEPTON_MIN_FREE_GIB; do
   [[ -n "${!variable:-}" ]] || { echo "ERROR: Missing config: $variable" >&2; exit 1; }
 done
 [[ $LEPTON_MIN_FREE_GIB =~ ^[0-9]+$ && $LEPTON_BUILD_JOBS =~ ^[1-9][0-9]*$ ]] || {
   echo 'ERROR: Invalid numeric configuration' >&2; exit 1;
 }
-TARGET=$(realpath -m -- "$LEPTON_OUTPUT_DIR")
+source "$IMAGE/scripts/lib/workspace.sh"
+lepton_workspace
+TARGET="$LEPTON_AOSP_DIR"
 PARENT=$(dirname -- "$TARGET")
-LOG_DIR=$(realpath -m -- "$LEPTON_LOG_DIR")
+LOG_DIR="$LEPTON_LOG_DIR"
 HOME_REAL=$(realpath -m -- "$HOME")
 ROOT_REAL=$(realpath -m -- "$ROOT")
 
@@ -57,7 +59,17 @@ under() { [[ "$1" == "$2" || "$1" == "$2/"* ]]; }
 ! under "$TARGET" "$ROOT_REAL" && ! under "$ROOT_REAL" "$TARGET" || err 'Output overlaps Git checkout'
 ! under "$TARGET" "$LOG_DIR" && ! under "$LOG_DIR" "$TARGET" || err 'Logs and output overlap'
 [[ "$LOG_DIR" != / && "$LOG_DIR" != "$HOME_REAL" ]] || err 'Unsafe log directory'
-[[ ! -L "$LEPTON_OUTPUT_DIR" ]] || err 'Output argument is a symlink'
+[[ ! -L "$LEPTON_OUTPUT_DIR" && ! -L "$TARGET" ]] || err 'Workspace or checkout path is a symlink'
+if [[ ! -e "$PARENT" ]]; then
+  if [[ "$ACTION" == --execute || "$ACTION" == --sync-only ]]; then
+    [[ -d "$(dirname -- "$PARENT")" ]] || err "Parent of the workspace does not exist: $(dirname -- "$PARENT")"
+    lepton_create_workspace "$PARENT" || err "Cannot create workspace: $PARENT"
+    info "Created workspace: $PARENT"
+  else
+    info "[INFO] Workspace will be created by --execute: $PARENT"
+    PARENT=$(dirname -- "$PARENT")
+  fi
+fi
 [[ -d "$PARENT" ]] || err "Output parent does not exist: $PARENT"
 [[ -w "$PARENT" ]] || err "Output parent not writable: $PARENT"
 

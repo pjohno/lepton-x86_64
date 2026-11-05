@@ -37,7 +37,7 @@ case "$BUILDER" in
 esac
 
 for key in LEPTON_OUTPUT_DIR LEPTON_BUILD_TARGET \
-           LEPTON_BUILD_JOBS LEPTON_MIN_FREE_GIB LEPTON_LOG_DIR; do
+           LEPTON_BUILD_JOBS LEPTON_MIN_FREE_GIB; do
     if [[ -z "${!key:-}" ]]; then
         fail "Missing configuration: $key"
     fi
@@ -51,13 +51,20 @@ if [[ ! "$LEPTON_BUILD_JOBS" =~ ^[1-9][0-9]*$ ||
     exit 1
 fi
 
-TARGET="$(realpath -m -- "$LEPTON_OUTPUT_DIR")"
+source "$ROOT/image-14/scripts/lib/workspace.sh"
+lepton_workspace
+TARGET="$LEPTON_AOSP_DIR"
 PARENT="$(dirname "$TARGET")"
-LOGS="$(realpath -m -- "$LEPTON_LOG_DIR")"
+LOGS="$LEPTON_LOG_DIR"
+# Space and permission checks use the nearest existing folder: the workspace
+# itself is created by prepare-x86_64.sh --execute.
+EXISTING="$PARENT"
+while [[ ! -d "$EXISTING" && "$EXISTING" != / ]]; do EXISTING="$(dirname "$EXISTING")"; done
 
 echo "=== Lepton Android 14 x86_64 Preflight ==="
 echo "Mode:        $MODE"
-echo "Destination: $TARGET"
+echo "Workspace:   $LEPTON_WORKSPACE"
+echo "Checkout:    $TARGET"
 echo "Build:       $LEPTON_BUILD_TARGET"
 echo "Builder:     $BUILDER"
 echo "Jobs:        $LEPTON_BUILD_JOBS"
@@ -94,8 +101,10 @@ esac
 if [[ "$MODE" == fresh ]]; then
     if [[ -e "$TARGET" || -L "$TARGET" ]]; then
         fail "Fresh destination already exists"
-    elif [[ ! -d "$PARENT" || ! -w "$PARENT" ]]; then
-        fail "Destination parent missing or unwritable"
+    elif [[ ! -w "$EXISTING" ]]; then
+        fail "Cannot create the checkout: $EXISTING is not writable"
+    elif [[ "$EXISTING" != "$PARENT" ]]; then
+        pass "Fresh destination available (prepare will create $PARENT)"
     else
         pass "Fresh destination available"
     fi
@@ -109,10 +118,10 @@ else
 fi
 
 # Disk and inode capacity.
-if [[ -d "$PARENT" ]]; then
-    free_kib="$(df -Pk "$PARENT" | awk 'END {print $4}')"
+if [[ -d "$EXISTING" ]]; then
+    free_kib="$(df -Pk "$EXISTING" | awk 'END {print $4}')"
     free_gib=$((free_kib / 1024 / 1024))
-    free_inodes="$(df -Pi "$PARENT" | awk 'END {print $4}')"
+    free_inodes="$(df -Pi "$EXISTING" | awk 'END {print $4}')"
 
     if (( free_gib >= LEPTON_MIN_FREE_GIB )); then
         pass "Disk: ${free_gib} GiB available"
@@ -126,7 +135,7 @@ if [[ -d "$PARENT" ]]; then
         fail "Insufficient free inodes: $free_inodes"
     fi
 
-    pass "Filesystem: $(findmnt -T "$PARENT" -no FSTYPE)"
+    pass "Filesystem: $(findmnt -T "$EXISTING" -no FSTYPE)"
 fi
 
 # Memory and CPU.
@@ -280,12 +289,10 @@ if [[ "$MODE" == full ]]; then
         fi
     done
 
-    stage="$TARGET/repro-rootfs-auto"
-    if [[ -e "$stage/rootfs" || -L "$stage/rootfs" ]]; then
-        warn "Packaging output already exists; packaging script refuses overwrite"
-        warnings=$((warnings + 1))
+    if [[ -e "$LEPTON_ROOTFS_DIR" ]]; then
+        info "Packaged rootfs exists; the next image build replaces it"
     else
-        pass "Packaging output rootfs is available"
+        pass "Packaged rootfs location is free: $LEPTON_ROOTFS_DIR"
     fi
 
     if [[ -f "$ROOT/image-14/scripts/internal/patch-binderfs-init.sh" &&
