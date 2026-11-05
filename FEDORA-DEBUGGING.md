@@ -29,8 +29,8 @@ Once images have been built and packaged, assemble a NEW NDK-enabled stage:
 
 ```bash
 source .build-env
-PAYLOAD="$LEPTON_OUTPUT_DIR/native-bridge-research/ndk-google-api34-r14-v2/payload"
-STAGE="$LEPTON_OUTPUT_DIR/deck-stage-ndk"
+PAYLOAD="$LEPTON_OUTPUT_DIR/google-inputs/ndk-translation/payload"
+STAGE="$LEPTON_OUTPUT_DIR/stages/ndk"
 
 bash image-14/scripts/internal/deploy-compat-x86_64.sh --check \
   --stage-dir "$STAGE" --with-ndk --ndk-payload "$PAYLOAD"
@@ -65,8 +65,8 @@ checkout's scripts against an older matching NDK stage:
 
 ```bash
 source .build-env
-STAGE="$LEPTON_OUTPUT_DIR/native-bridge-research/lepton-ndk-test-v2"
-bash compat_tool/liblepton/ndk_auxv/build.sh --aosp "$LEPTON_OUTPUT_DIR"
+STAGE="$LEPTON_OUTPUT_DIR/stages/ndk-test"
+bash compat_tool/liblepton/ndk_auxv/build.sh --aosp "$LEPTON_OUTPUT_DIR/aosp"
 
 bash tests/runtime/run-apk.sh --stage-dir "$STAGE" --runtime-dir compat_tool \
   --apk "$PWD/apks/AAAAXY-arm64.apk" --expect-abi arm64-v8a --app --check
@@ -110,7 +110,7 @@ App mode accepts `.apkm` as well as a single `.apk`. For example:
 ```bash
 source .build-env
 bash tests/runtime/run-apk.sh \
-  --stage-dir "$LEPTON_OUTPUT_DIR/native-bridge-research/lepton-ndk-test-v2" \
+  --stage-dir "$LEPTON_OUTPUT_DIR/stages/ndk-test" \
   --runtime-dir compat_tool --apk "$PWD/apks/Kingdom.apkm" \
   --expect-abi arm64-v8a --app --rendering amd --display desktop \
   --seconds 180 --execute
@@ -277,7 +277,7 @@ Reopen the retained non-GApps installation on Fedora:
 ```bash
 source .build-env
 bash tests/runtime/run-apk.sh \
-  --stage-dir "$LEPTON_OUTPUT_DIR/native-bridge-research/lepton-ndk-test-v2" \
+  --stage-dir "$LEPTON_OUTPUT_DIR/stages/ndk-test" \
   --runtime-dir compat_tool --apk "$PWD/apks/crossyroad.apkm" \
   --app --expect-abi arm64-v8a --profile crossyroad \
   --rendering amd --display desktop --seconds 900 --execute

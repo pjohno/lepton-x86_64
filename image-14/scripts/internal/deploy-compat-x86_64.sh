@@ -58,7 +58,7 @@ Default (legacy): stage Android rootfs under repository compat_tool/images/rootf
 --execute: refuse to overwrite existing rootfs/stage or Steam installation.
 --package-only: package an existing complete stage with fresh sysbake and tools;
                 does not rebuild images, generate sysbake or replace the stage.
---bundle-dir DIR: archive destination (default LEPTON_DECK_BUNDLE_DIR).
+--bundle-dir DIR: archive destination (default: the workspace's bundles/).
 --bundle-id ID: required archive identifier for packaging/transfer.
 --deck-ip IPv4: transfer the archive/checksum after packaging, only in --execute.
 --deck-replace TOOL_ID: after transfer, install on the Deck over SSH, overwriting
@@ -96,11 +96,16 @@ done
 # shellcheck source=/dev/null
 if [[ -f "$CONFIG" ]]; then source "$CONFIG";
 elif [[ "$PACKAGE_ONLY" == false ]]; then fail 'Missing .build-env'; fi
+if [[ -n "${LEPTON_OUTPUT_DIR:-}" ]]; then
+    source "$ROOT/image-14/scripts/lib/workspace.sh"
+    lepton_workspace
+fi
 if [[ "$PACKAGE_ONLY" == true ]]; then
     [[ -z "$ROOTFS_SOURCE" && -z "$NDK_PAYLOAD" && "$WITH_NDK" == false && "$WITH_GAPPS" == false && "$WITH_WIDEVINE" == false && -z "$GOOGLE_IMAGES" && -z "$SERVICES_JAR" ]] || fail 'Packaging cannot be combined with rootfs/NDK staging options'
     [[ -n "$BUNDLE_ID" ]] || fail '--bundle-id is required for packaging/transfer'
     STAGE_DIR="${STAGE_DIR:-${LEPTON_DECK_STAGE_DIR:-}}"
-    BUNDLE_DIR="${BUNDLE_DIR:-${LEPTON_DECK_BUNDLE_DIR:-$HOME/lepton-deck-bundles}}"
+    [[ -n "$BUNDLE_DIR" || -n "${LEPTON_DECK_BUNDLE_DIR:-}" ]] || fail 'Set LEPTON_OUTPUT_DIR in .build-env or pass --bundle-dir'
+    BUNDLE_DIR="${BUNDLE_DIR:-$LEPTON_DECK_BUNDLE_DIR}"
     source "$ROOT/image-14/scripts/lib/deck-bundle.sh"
     if [[ -n "$DECK_REPLACE" ]]; then
         [[ "$DECK_REPLACE" =~ ^[A-Za-z0-9_]{1,96}$ ]] || fail 'Invalid --deck-replace tool ID'
@@ -145,7 +150,7 @@ if [[ -n "$ROOTFS_SOURCE" ]]; then
     [[ -d "$ROOTFS_SOURCE" && ! -L "$ROOTFS_SOURCE" ]] || fail "Alternative rootfs must be a real directory: $ROOTFS_SOURCE"
     SRC="$(realpath -e -- "$ROOTFS_SOURCE")" || fail "Cannot resolve alternative rootfs: $ROOTFS_SOURCE"
 else
-    SRC="$(realpath -m -- "${LEPTON_OUTPUT_DIR:?}/repro-rootfs-auto/rootfs")"
+    SRC="$(realpath -m -- "${LEPTON_ROOTFS_DIR:?Set LEPTON_OUTPUT_DIR in .build-env}")"
 fi
 [[ -d "$SRC" && ! -L "$SRC" ]] || fail "Packaged Android rootfs missing: $SRC"
 [[ -x "$SRC/system/bin/sh" ]] || fail 'Android shell missing'
@@ -164,7 +169,7 @@ done
 source "$ROOT/compat_tool/liblepton/ndk_auxv/runtime.sh"
 BUILD_NDK_SHIM=false
 if [[ "$WITH_NDK" == true ]] || ndk_compat_supported "$SRC"; then
-    [[ -x "${LEPTON_OUTPUT_DIR}/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang" ]] || fail 'AOSP Clang required to build standard NDK compatibility shim'
+    [[ -x "${LEPTON_AOSP_DIR}/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang" ]] || fail 'AOSP Clang required to build standard NDK compatibility shim'
     BUILD_NDK_SHIM=true
 fi
 
@@ -205,7 +210,7 @@ fi
 
 info 'Building native x86_64 APK extractor'
 if [[ "$BUILD_NDK_SHIM" == true ]]; then
-    bash "$ROOT/compat_tool/liblepton/ndk_auxv/build.sh" --aosp "$LEPTON_OUTPUT_DIR"
+    bash "$ROOT/compat_tool/liblepton/ndk_auxv/build.sh" --aosp "$LEPTON_AOSP_DIR"
 fi
 make -C "$EXTRACTOR" install-native
 BIN="$EXTRACTOR/bin/apk-info-extractor"
@@ -216,6 +221,9 @@ if [[ -n "$STAGE_DIR" ]]; then
     parent="$(dirname -- "$STAGE_DIR")"
     [[ -d "$parent" ]] || fail "Stage parent directory missing: $parent"
     TEMP="$(mktemp -d "$parent/.lepton-deck-stage.XXXXXXXX")"
+    # Own group, no inherited setgid: a shared folder's setgid group cannot be
+    # mapped into rootless Podman and breaks the Android container's overlay.
+    chgrp "$(id -g)" "$TEMP" && chmod g-s "$TEMP"
     cleanup() { [[ -z "${TEMP:-}" ]] || rm -rf -- "$TEMP"; }
     trap cleanup EXIT
     touch "$TEMP/.find-ignore"

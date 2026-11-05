@@ -12,16 +12,17 @@ trap 'rm -rf -- "$TMP"' EXIT
 FAKE="$TMP/fake-repo"
 OUTPUT="$TMP/output"
 BIN="$TMP/bin"
-mkdir -p "$FAKE/image-14/scripts/internal" "$FAKE/compat_tool/liblepton/apk_extractor" \
-    "$OUTPUT/repro-rootfs-auto/rootfs" "$OUTPUT/native-bridge-research/test-rootfs" "$BIN"
+mkdir -p "$FAKE/image-14/scripts/internal" "$FAKE/image-14/scripts/lib" "$FAKE/compat_tool/liblepton/apk_extractor" \
+    "$OUTPUT/rootfs" "$OUTPUT/native-bridge-research/test-rootfs" "$BIN"
 cp "$DEPLOY" "$FAKE/image-14/scripts/internal/"
+cp "$REPO/image-14/scripts/lib/workspace.sh" "$FAKE/image-14/scripts/lib/"
 mkdir -p "$FAKE/compat_tool/liblepton/ndk_auxv"
 cp "$REPO/compat_tool/liblepton/ndk_auxv/runtime.sh" "$FAKE/compat_tool/liblepton/ndk_auxv/"
 : > "$FAKE/compat_tool/lepton"
 : > "$FAKE/compat_tool/liblepton/apk_extractor/Makefile"
 printf 'LEPTON_OUTPUT_DIR=%q\n' "$OUTPUT" > "$FAKE/.build-env"
 
-NORMAL="$OUTPUT/repro-rootfs-auto/rootfs"
+NORMAL="$OUTPUT/rootfs"
 BRIDGE="$OUTPUT/native-bridge-research/test-rootfs"
 for src in "$NORMAL" "$BRIDGE"; do
     mkdir -p "$src/system/bin" "$src/vendor/lib64/hw"
@@ -94,9 +95,9 @@ cmp "$NORMAL/system/build.prop" "$OUTPUT/standard-stage/compat_tool/images/rootf
 # Opt-in NDK deployment invokes the real injector, never downloads a payload,
 # and leaves the original native source untouched. Only the compiler is stubbed.
 cp "$REPO/image-14/scripts/internal/inject-ndk-translation.sh" "$FAKE/image-14/scripts/internal/"
-mkdir -p "$OUTPUT/prebuilts/clang/host/linux-x86/clang-r510928/bin"
-printf '#!/bin/sh\nexit 0\n' > "$OUTPUT/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang"
-chmod +x "$OUTPUT/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang"
+mkdir -p "$OUTPUT/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin"
+printf '#!/bin/sh\nexit 0\n' > "$OUTPUT/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang"
+chmod +x "$OUTPUT/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang"
 cat > "$FAKE/compat_tool/liblepton/ndk_auxv/build.sh" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail

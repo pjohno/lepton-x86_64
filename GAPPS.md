@@ -40,6 +40,21 @@ routing, so a freshly built rootfs needs no hand-patched services.jar. The GApps
 preflight refuses an older rootfs that lacks these fixes (rebuild it, or, for
 testing only, supply a tested `--services-jar FILE`).
 
+## Optional Widevine (protected video)
+
+Add `--with-widevine` to the bundle command to include Widevine, Android's DRM
+system for protected video. It comes from the same Google Play image
+(`vendor.img`, the `com.google.android.widevine` APEX), nothing is
+downloaded, and it is **L3 only**: software decryption, so services that offer
+HD only to hardware-backed (L1) devices limit playback to SD.
+
+Tested: Android reports Widevine L3 (CDM 18), and the Widevine test streams on
+the Shaka Player demo play in a browser (Firefox or Edge from the Play Store)
+on a Steam Deck, so provisioning, licences and decryption work. Individual
+services may still refuse Lepton for their own reasons, for example a root or
+device-integrity check, since Lepton is a debuggable build that cannot pass
+Google Play Integrity. Lepton does not work around such checks.
+
 ## Install alongside another Deck bundle
 
 Transfer the archive, `.sha256` and `.install.sh` files together (for example

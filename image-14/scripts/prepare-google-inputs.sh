@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # Turn a locally downloaded Android 14 (API 34) x86_64 Google Play emulator
-# system image zip into the two optional bundle inputs:
-#   OUTPUT/logical-partitions/   for --with-gapps  (LEPTON_GOOGLE_IMAGES)
-#   OUTPUT/ndk-translation/payload  for --with-ndk (LEPTON_NDK_PAYLOAD)
+# system image zip into the optional bundle inputs:
+#   OUTPUT/logical-partitions/      for --with-gapps and --with-widevine
+#   OUTPUT/ndk-translation/payload  for --with-ndk
 # Nothing is downloaded; the zip and its contents stay on this computer.
 set -Eeuo pipefail
 umask 022
@@ -13,16 +13,18 @@ EXPECTED_TRANSLATOR=a2086fbc807f697f9b91222065c9d9000ca9727748699c0d9b751319258c
 
 usage() {
     cat <<'HELP'
-Usage: bash image-14/scripts/prepare-google-inputs.sh --zip FILE --output DIR
+Usage: bash image-14/scripts/prepare-google-inputs.sh --zip FILE [--output DIR]
 
 FILE is the Android SDK system image "Google Play Intel x86_64 Atom System
 Image", API 34, revision 14 (x86_64-34_r14.zip from the google_apis_playstore
 channel), downloaded by you, e.g. with Android Studio's SDK Manager.
 
-DIR must not exist. Afterwards, add to the repository's .build-env:
+DIR defaults to the workspace's google-inputs/, where make-deck-bundle finds
+it automatically; it must not exist yet. For another DIR, add to .build-env:
   LEPTON_GOOGLE_IMAGES="DIR/logical-partitions"
   LEPTON_NDK_PAYLOAD="DIR/ndk-translation/payload"
-Needs about 10 GiB free while running (about 3 GiB afterwards).
+Needs about 10 GiB free while running (about 3 GiB afterwards). Keep the zip
+itself outside the workspace.
 HELP
 }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
@@ -38,7 +40,19 @@ while (($#)); do
         *) usage >&2; fail "Unknown argument: $1" ;;
     esac
 done
-[[ -n "$ZIP" && -n "$OUT" ]] || { usage >&2; fail 'Both --zip and --output are required'; }
+[[ -n "$ZIP" ]] || { usage >&2; fail '--zip is required'; }
+ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+DEFAULT_OUT=false
+if [[ -z "$OUT" ]]; then
+    # shellcheck source=/dev/null
+    [[ -f "$ROOT/.build-env" ]] && source "$ROOT/.build-env"
+    [[ -n "${LEPTON_OUTPUT_DIR:-}" ]] || fail 'Set LEPTON_OUTPUT_DIR in .build-env, or pass --output DIR'
+    source "$SCRIPT_DIR/lib/workspace.sh"
+    lepton_workspace
+    OUT="$LEPTON_GOOGLE_INPUTS_DIR"
+    DEFAULT_OUT=true
+    [[ -d "$LEPTON_WORKSPACE" ]] || lepton_create_workspace "$LEPTON_WORKSPACE" || fail "Cannot create workspace $LEPTON_WORKSPACE"
+fi
 for tool in unzip sfdisk dd lpunpack debugfs sha256sum python3; do
     command -v "$tool" >/dev/null 2>&1 || fail "Missing host tool: $tool (see the README host requirements)"
 done
@@ -95,4 +109,8 @@ Source SHA256: $(sha256sum "$ZIP" | cut -d' ' -f1)
 Translator SHA256: $actual
 EOF
 printf '[PASS] Google inputs ready in %s\n' "$OUT"
-printf 'Add to .build-env:\n  LEPTON_GOOGLE_IMAGES="%s/logical-partitions"\n  LEPTON_NDK_PAYLOAD="%s/ndk-translation/payload"\n' "$OUT" "$OUT"
+if [[ "$DEFAULT_OUT" == true ]]; then
+    printf 'make-deck-bundle-x86_64.sh finds them there; nothing to add to .build-env.\n'
+else
+    printf 'Add to .build-env:\n  LEPTON_GOOGLE_IMAGES="%s/logical-partitions"\n  LEPTON_NDK_PAYLOAD="%s/ndk-translation/payload"\n' "$OUT" "$OUT"
+fi

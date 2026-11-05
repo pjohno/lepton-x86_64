@@ -10,7 +10,7 @@ with Pixman; no logged-in graphical desktop is required.
 
 ```bash
 source .build-env
-stage="$LEPTON_OUTPUT_DIR/deck-stage-clean-ubuntu26"
+stage="$LEPTON_OUTPUT_DIR/stages/clean-ubuntu26"
 bash image-14/scripts/internal/sysbake-isolated-x86_64.sh --check --stage-dir "$stage"
 ```
 

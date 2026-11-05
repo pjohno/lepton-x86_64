@@ -30,8 +30,8 @@ Usage:
 GApps includes Play services, GSF, Play Store, Chrome and Trichrome, extracted
 only from local API 34 images. GApps and NDK remain independent opt-ins.
 
-Set LEPTON_OUTPUT_DIR in the repository's ignored .build-env to a NEW,
-NONEXISTENT Android source/output directory before running either command.
+Set LEPTON_OUTPUT_DIR (the workspace) in the repository's ignored .build-env;
+its aosp/ checkout must not exist yet before running either command.
 The other build scripts source the same .build-env; this wrapper does not
 silently override their settings or reuse an existing AOSP build.
 
@@ -87,7 +87,8 @@ done
 # shellcheck source=/dev/null
 source "$CONFIG"
 : "${LEPTON_OUTPUT_DIR:?Set LEPTON_OUTPUT_DIR in .build-env}"
-: "${LEPTON_LOG_DIR:?Set LEPTON_LOG_DIR in .build-env}"
+source "$IMAGE_DIR/scripts/lib/workspace.sh"
+lepton_workspace
 : "${LEPTON_BUILD_TARGET:?Set LEPTON_BUILD_TARGET in .build-env}"
 [[ "$WITH_NDK" == true || -z "$NDK_PAYLOAD" ]] || fail '--ndk-payload requires --with-ndk'
 DEPLOY_ARGS=()
@@ -124,9 +125,11 @@ export LEPTON_BUILD_CONTAINER="$BUILDER"
 [[ "$LEPTON_BUILD_TARGET" == 'aosp_lepton_x86_64-ap2a-userdebug' ]] ||
     fail 'Unexpected Android build target'
 
-TARGET="$(realpath -m -- "$LEPTON_OUTPUT_DIR")"
+TARGET="$LEPTON_AOSP_DIR"
 TARGET_PARENT="$(dirname -- "$TARGET")"
-LOG_DIR="$(realpath -m -- "$LEPTON_LOG_DIR")"
+LOG_DIR="$LEPTON_LOG_DIR"
+# prepare-x86_64.sh --execute creates the workspace if it does not exist yet.
+while [[ ! -d "$TARGET_PARENT" && "$TARGET_PARENT" != / ]]; do TARGET_PARENT="$(dirname -- "$TARGET_PARENT")"; done
 [[ "$TARGET" != / && "$TARGET" != "$HOME" && "$TARGET" != "$REPO" &&
    "$TARGET" != "$REPO/"* && "$REPO" != "$TARGET/"* ]] ||
     fail 'Unsafe Android source/output directory'
@@ -134,12 +137,11 @@ LOG_DIR="$(realpath -m -- "$LEPTON_LOG_DIR")"
    "$TARGET" != "$LOG_DIR/"* ]] || fail 'Logs and build output must be separate'
 [[ -d "$TARGET_PARENT" && -w "$TARGET_PARENT" ]] ||
     fail "Output parent does not exist or is not writable: $TARGET_PARENT"
-[[ ! -e "$LEPTON_OUTPUT_DIR" && ! -L "$LEPTON_OUTPUT_DIR" &&
-   ! -e "$TARGET" && ! -L "$TARGET" ]] ||
+[[ ! -e "$TARGET" && ! -L "$TARGET" ]] ||
     fail "Refusing to reuse an existing Android checkout: $TARGET"
 
-STAGE="$TARGET/deck-stage-$BUNDLE_ID"
-BUNDLE_DIR="$(realpath -m -- "${LEPTON_DECK_BUNDLE_DIR:-$TARGET/deck-bundles}")"
+STAGE="$LEPTON_STAGES_DIR/$BUNDLE_ID"
+BUNDLE_DIR="$LEPTON_DECK_BUNDLE_DIR"
 [[ "$BUNDLE_DIR" != / && "$BUNDLE_DIR" != "$HOME" &&
    "$BUNDLE_DIR" != "$REPO" && "$BUNDLE_DIR" != "$STAGE" &&
    "$BUNDLE_DIR" != "$STAGE/"* ]] || fail 'Unsafe bundle output directory'
@@ -213,11 +215,12 @@ for part in system vendor; do
         fail "Missing newly compiled Android image: $part.img"
 done
 
-# build-images-x86_64.sh also packaged the rootfs (repro-rootfs-auto/rootfs).
-[[ -f "$TARGET/repro-rootfs-auto/rootfs/system/build.prop" ]] ||
+# build-images-x86_64.sh also packaged the rootfs (workspace rootfs/).
+[[ -f "$LEPTON_ROOTFS_DIR/system/build.prop" ]] ||
     fail 'Missing packaged rootfs after the image build'
 
 step 'Create standalone compatibility-tool stage'
+mkdir -p -- "$LEPTON_STAGES_DIR" "$BUNDLE_DIR"
 bash "$IMAGE_DIR/scripts/internal/deploy-compat-x86_64.sh" --check --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
 bash "$IMAGE_DIR/scripts/internal/deploy-compat-x86_64.sh" --execute --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
 

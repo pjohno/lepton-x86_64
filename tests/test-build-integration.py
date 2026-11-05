@@ -65,7 +65,6 @@ class BuildIntegrationTests(unittest.TestCase):
                 write(wrapper, (ROOT / 'image-14/do_build_x86_64.sh').read_text()
                       .replace('/dev/fuse', '/dev/null'))
                 config = (f'LEPTON_OUTPUT_DIR={shlex.quote(str(Path(directory) / "output"))}\n'
-                          f'LEPTON_LOG_DIR={shlex.quote(str(Path(directory) / "logs"))}\n'
                           'LEPTON_BUILD_TARGET=aosp_lepton_x86_64-ap2a-userdebug\n')
                 if explicit:
                     config += 'LEPTON_BUILD_CONTAINER=lepton-builder-ubuntu26:latest\n'
@@ -73,6 +72,8 @@ class BuildIntegrationTests(unittest.TestCase):
                 for name in ('Containerfile.ubuntu26', 'Containerfile.deck-tools'):
                     write(repo / 'image-14/.buildscripts_x86_64' / name, 'fixture\n')
                 write(repo / 'image-14/scripts/internal/provision-deck-tools.sh', '# fixture\n')
+                write(repo / 'image-14/scripts/lib/workspace.sh',
+                      (ROOT / 'image-14/scripts/lib/workspace.sh').read_text())
                 for name in ('preflight-x86_64.sh', 'prepare-x86_64.sh', 'build-images-x86_64.sh'):
                     source = (ROOT / 'image-14/scripts' / name).read_text()
                     selection = next(line for line in source.splitlines() if line.startswith('BUILDER='))

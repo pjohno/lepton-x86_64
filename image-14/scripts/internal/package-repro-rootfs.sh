@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: MIT
 set -Eeuo pipefail
 
-if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 /path/to/aosp-checkout" >&2
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "Usage: $0 /path/to/aosp-checkout [/path/to/new/rootfs]" >&2
     exit 2
 fi
 
 aosp="$(readlink -f "$1")"
 product="$aosp/out/target/product/lepton_x86_64"
-stage="$aosp/repro-rootfs-auto"
-target="$stage/rootfs"
+target="$(readlink -m "${2:-$aosp/repro-rootfs-auto/rootfs}")"
+stage="$(dirname -- "$target")"
 
 [[ -d "$aosp/.repo" ]] || { echo "Not an AOSP checkout" >&2; exit 1; }
 [[ -f "$product/system.img" && -f "$product/vendor.img" ]] || {

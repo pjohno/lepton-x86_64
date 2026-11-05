@@ -16,7 +16,7 @@ image only contains AMD RADV/radeonsi drivers).
 
 ## 1. The bundle
 
-A bundle is three files in `~/lepton-deck-bundles` on the build computer, for
+A bundle is three files in the workspace's `bundles/` folder on the build computer, for
 example for the bundle ID `base-20261104`:
 
 | File | Purpose |

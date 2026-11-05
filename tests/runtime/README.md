@@ -90,7 +90,7 @@ First open setup without installing a game (run from a Wayland desktop):
 
 ```bash
 source .build-env
-stage="$LEPTON_OUTPUT_DIR/native-bridge-research/lepton-google-play-test-v2"
+stage="$LEPTON_OUTPUT_DIR/stages/gapps-test"
 bash tests/runtime/run-apk.sh --stage-dir "$stage" --runtime-dir compat_tool \
   --profile kingdom --setup-only --expect-abi arm64-v8a \
   --network-sysctls --rendering amd --display desktop --seconds 900 --execute
@@ -161,7 +161,7 @@ OAuth/Custom Tabs; Google binaries remain outside Git.
 
 ```bash
 source .build-env
-bash tests/runtime/build-jni-smoke.sh --aosp "$LEPTON_OUTPUT_DIR" \
+bash tests/runtime/build-jni-smoke.sh --aosp "$LEPTON_OUTPUT_DIR/aosp" \
   --abi x86_64 --media-smoke --output /tmp/lepton-media-smoke.apk
 bash tests/runtime/run-apk.sh --stage-dir "$stage" --runtime-dir compat_tool \
   --apk /tmp/lepton-media-smoke.apk --expect-abi x86_64 \

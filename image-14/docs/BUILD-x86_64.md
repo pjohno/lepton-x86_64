@@ -15,9 +15,9 @@ also assembles a Steam Deck-compatible stage, builds host tools, performs
 - Checked-out Lepton source, pinned initialized submodules, and a trusted
   repository-local `.build-env` based on `.build-env.example`.
 - The x86_64-specific Containerfiles in `image-14/.buildscripts_x86_64/`.
-- Configure `.build-env` with `LEPTON_OUTPUT_DIR` pointing to an **entirely
-  new, nonexistent directory** with sufficient storage. `LEPTON_LOG_DIR` must
-  be outside that output. Give each generated bundle a distinct ID.
+- Configure `.build-env` with `LEPTON_OUTPUT_DIR` pointing to the workspace
+  (see [BUILDING.md](../../BUILDING.md#the-workspace)); its `aosp/` checkout
+  must not exist yet. Give each generated bundle a distinct ID.
 
 From the repository root:
 
@@ -29,7 +29,7 @@ bash image-14/do_build_x86_64.sh --execute --bundle-id my-fresh-build-01
 The wrapper stops on failure and never resumes an existing AOSP checkout or
 uses an existing rootfs, stage, sysbake, or bundle. On failure, retain logs
 and review checkpoints. To retry an entirely clean build, choose another
-nonexistent `LEPTON_OUTPUT_DIR`; do not delete an existing source tree blindly.
+workspace, or use `prepare-x86_64.sh --reset` on the existing checkout.
 
 The workflow invokes, in sequence:
 

@@ -14,16 +14,16 @@ Valve-derived `.buildscripts/` machinery remains in its original location.
 
 ## Outputs and separation
 
-- AOSP checkout: `$LEPTON_OUTPUT_DIR` (configured in ignored `.build-env`).
-- Packaged Android rootfs: `$LEPTON_OUTPUT_DIR/repro-rootfs-auto/rootfs`.
-- New, isolated Steam Deck stage: `$LEPTON_OUTPUT_DIR/deck-stage-CLEAN` (choose a fresh, nonexistent path).
+- Workspace: `$LEPTON_OUTPUT_DIR` (configured in ignored `.build-env`); AOSP checkout in its `aosp/`.
+- Packaged Android rootfs: `$LEPTON_OUTPUT_DIR/rootfs`.
+- New, isolated Steam Deck stage: `$LEPTON_OUTPUT_DIR/stages/CLEAN` (choose a fresh, nonexistent path).
 - Bundle archive: choose an output directory outside both the repository and existing installed compatibility tool.
 
 From the repository root after image compilation and rootfs packaging:
 
 ```bash
 source .build-env
-stage="$LEPTON_OUTPUT_DIR/deck-stage-CLEAN"
+stage="$LEPTON_OUTPUT_DIR/stages/CLEAN"
 bash image-14/scripts/internal/deploy-compat-x86_64.sh --check --stage-dir "$stage"
 bash image-14/scripts/internal/deploy-compat-x86_64.sh --execute --stage-dir "$stage"
 bash image-14/scripts/internal/provision-deck-tools.sh --execute --stage-dir "$stage"
@@ -62,9 +62,9 @@ Generate fresh system data for the new stage using the isolated runner:
 bash image-14/scripts/internal/sysbake-isolated-x86_64.sh --check --stage-dir "$stage"
 bash image-14/scripts/internal/sysbake-isolated-x86_64.sh --execute --stage-dir "$stage"
 bash image-14/scripts/internal/deploy-compat-x86_64.sh --package-only --check \
-  --stage-dir "$stage" --bundle-dir "$HOME/lepton-deck-bundles" --bundle-id CLEAN
+  --stage-dir "$stage" --bundle-dir "$LEPTON_OUTPUT_DIR/bundles" --bundle-id CLEAN
 bash image-14/scripts/internal/deploy-compat-x86_64.sh --package-only --execute \
-  --stage-dir "$stage" --bundle-dir "$HOME/lepton-deck-bundles" --bundle-id CLEAN
+  --stage-dir "$stage" --bundle-dir "$LEPTON_OUTPUT_DIR/bundles" --bundle-id CLEAN
 ```
 
 Packaging refreshes host scripts from this checkout and retains the stage's
@@ -76,7 +76,7 @@ To send an already verified bundle later, use the same deployment entrypoint:
 
 ```bash
 bash image-14/scripts/internal/deploy-compat-x86_64.sh --transfer-only --check \
-  --bundle-dir "$HOME/lepton-deck-bundles" --bundle-id CLEAN --deck-ip 192.0.2.1
+  --bundle-dir "$LEPTON_OUTPUT_DIR/bundles" --bundle-id CLEAN --deck-ip 192.0.2.1
 # Replace the example address; use --execute to actually transfer and verify.
 ```
 

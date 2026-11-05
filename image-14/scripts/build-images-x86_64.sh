@@ -6,9 +6,9 @@ set -Eeuo pipefail
 usage() {
   cat >&2 <<'HELP'
 Usage: bash image-14/scripts/build-images-x86_64.sh --check | --execute
-Compiles system.img and vendor.img in the prepared checkout, then packages
-them as the rootfs that make-deck-bundle-x86_64.sh uses
-($LEPTON_OUTPUT_DIR/repro-rootfs-auto/rootfs, replaced on every build).
+Compiles system.img and vendor.img in the prepared checkout (workspace aosp/),
+copies them to the workspace's images/ and packages them as rootfs/, the
+input of make-deck-bundle-x86_64.sh. Both are replaced on every build.
 HELP
 }
 
@@ -30,7 +30,8 @@ CONFIG="$ROOT/.build-env"
 source "$CONFIG"
 
 : "${LEPTON_OUTPUT_DIR:?Missing LEPTON_OUTPUT_DIR}"
-: "${LEPTON_LOG_DIR:?Missing LEPTON_LOG_DIR}"
+source "$ROOT/image-14/scripts/lib/workspace.sh"
+lepton_workspace
 : "${LEPTON_BUILD_TARGET:?Missing LEPTON_BUILD_TARGET}"
 : "${LEPTON_BUILD_JOBS:?Missing LEPTON_BUILD_JOBS}"
 : "${LEPTON_MIN_FREE_GIB:?Missing LEPTON_MIN_FREE_GIB}"
@@ -59,11 +60,13 @@ fail() {
   exit 1
 }
 
-[[ ! -L "$LEPTON_OUTPUT_DIR" ]] ||
-  fail "Output path must not be a symlink"
+[[ ! -L "$LEPTON_OUTPUT_DIR" && ! -L "$LEPTON_AOSP_DIR" ]] ||
+  fail "Workspace and checkout paths must not be symlinks"
+[[ -d "$LEPTON_AOSP_DIR" ]] ||
+  fail "No Android checkout at $LEPTON_AOSP_DIR (run prepare-x86_64.sh first)"
 
-TARGET="$(realpath -e -- "$LEPTON_OUTPUT_DIR")"
-LOG_DIR="$(realpath -m -- "$LEPTON_LOG_DIR")"
+TARGET="$(realpath -e -- "$LEPTON_AOSP_DIR")"
+LOG_DIR="$LEPTON_LOG_DIR"
 
 [[ "$TARGET" != / &&
    "$TARGET" != "$HOME" &&
@@ -291,15 +294,23 @@ fi
 
 info "[PASS] Android image build completed"
 
-# Bundles are made from the flattened rootfs of these images; replace any
-# rootfs packaged from an earlier build so the two never disagree.
-PACKAGED="$TARGET/repro-rootfs-auto/rootfs"
-info "[START] Packaging the Android rootfs for bundles: $PACKAGED"
-if [[ -e "$PACKAGED" || -L "$PACKAGED" ]]; then
+# Bundles are made from these images' flattened rootfs; replace whatever an
+# earlier build left so images/, rootfs/ and aosp/out never disagree.
+PRODUCT="$TARGET/out/target/product/lepton_x86_64"
+info "[START] Copying images to $LEPTON_IMAGES_DIR"
+mkdir -p -- "$LEPTON_IMAGES_DIR"
+for part in system vendor; do
+  cp -f --sparse=always -- "$PRODUCT/$part.img" "$LEPTON_IMAGES_DIR/.$part.img.new"
+  mv -f -- "$LEPTON_IMAGES_DIR/.$part.img.new" "$LEPTON_IMAGES_DIR/$part.img"
+done
+( cd "$LEPTON_IMAGES_DIR" && sha256sum system.img vendor.img > SHA256SUMS )
+
+info "[START] Packaging the Android rootfs for bundles: $LEPTON_ROOTFS_DIR"
+if [[ -e "$LEPTON_ROOTFS_DIR" || -L "$LEPTON_ROOTFS_DIR" ]]; then
   info "[INFO] Removing the rootfs packaged from the previous build"
-  podman unshare rm -rf -- "$PACKAGED"
+  podman unshare rm -rf -- "$LEPTON_ROOTFS_DIR"
 fi
-bash "$ROOT/image-14/scripts/internal/package-repro-rootfs.sh" "$TARGET" ||
+bash "$ROOT/image-14/scripts/internal/package-repro-rootfs.sh" "$TARGET" "$LEPTON_ROOTFS_DIR" ||
   fail "Packaging the rootfs failed; log: $LOG"
 
 info "[PASS] Android images built and packaged"

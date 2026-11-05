@@ -8,6 +8,7 @@
 #   stages/<id>/   one per bundle
 #   bundles/       finished bundles (.tar.gz, .sha256, .install.sh)
 #   logs/          build logs
+#   google-inputs/ optional GApps/NDK/Widevine inputs from your Google zip
 # Each location can be overridden in .build-env (LEPTON_AOSP_DIR, ...).
 lepton_workspace() {
     : "${LEPTON_OUTPUT_DIR:?Set LEPTON_OUTPUT_DIR (the workspace folder) in .build-env}"
@@ -18,6 +19,14 @@ lepton_workspace() {
     LEPTON_ROOTFS_DIR="$(realpath -m -- "${LEPTON_ROOTFS_DIR:-$LEPTON_WORKSPACE/rootfs}")"
     LEPTON_STAGES_DIR="$(realpath -m -- "${LEPTON_STAGES_DIR:-$LEPTON_WORKSPACE/stages}")"
     LEPTON_DECK_BUNDLE_DIR="$(realpath -m -- "${LEPTON_DECK_BUNDLE_DIR:-$LEPTON_WORKSPACE/bundles}")"
+    # Optional Google inputs (prepare-google-inputs.sh writes them here).
+    LEPTON_GOOGLE_INPUTS_DIR="$(realpath -m -- "${LEPTON_GOOGLE_INPUTS_DIR:-$LEPTON_WORKSPACE/google-inputs}")"
+    if [[ -z "${LEPTON_GOOGLE_IMAGES:-}" && -d "$LEPTON_GOOGLE_INPUTS_DIR/logical-partitions" ]]; then
+        LEPTON_GOOGLE_IMAGES="$LEPTON_GOOGLE_INPUTS_DIR/logical-partitions"
+    fi
+    if [[ -z "${LEPTON_NDK_PAYLOAD:-}" && -d "$LEPTON_GOOGLE_INPUTS_DIR/ndk-translation/payload" ]]; then
+        LEPTON_NDK_PAYLOAD="$LEPTON_GOOGLE_INPUTS_DIR/ndk-translation/payload"
+    fi
 }
 
 # Create the workspace owned by the user's own group and without an inherited

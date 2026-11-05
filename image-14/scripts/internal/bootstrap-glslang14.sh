@@ -16,15 +16,18 @@ ACTION="$1"
 [[ -f "$CONFIG" ]] || { echo "Missing $CONFIG" >&2; exit 1; }
 source "$CONFIG"
 
-TARGET="$(realpath -m -- "${LEPTON_OUTPUT_DIR:?}")"
-LOG_DIR="$(realpath -m -- "${LEPTON_LOG_DIR:?}")"
+: "${LEPTON_OUTPUT_DIR:?}"
+source "$ROOT/image-14/scripts/lib/workspace.sh"
+lepton_workspace
+TARGET="$LEPTON_AOSP_DIR"
+LOG_DIR="$LEPTON_LOG_DIR"
 BUILDER="lepton-builder-glslang14:latest"
 GLSLANG="$TARGET/out/host/glslang14/StandAlone/glslang"
 
 info() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 fail() { info "[FAIL] $*"; exit 1; }
 
-[[ "$TARGET" != / && -d "$TARGET" && ! -L "$LEPTON_OUTPUT_DIR" ]] ||
+[[ "$TARGET" != / && -d "$TARGET" && ! -L "$TARGET" ]] ||
   fail "Unsafe or missing output directory"
 
 [[ "$TARGET" != "$ROOT" && "$TARGET" != "$HOME" ]] ||

@@ -18,8 +18,7 @@ Options:
   --replace TOOL_ID    Also install now over SSH, overwriting the Deck's
                        install TOOL_ID (its games keep working). Tool IDs are
                        listed by "lepton-manage-installs --list" on the Deck.
-  --bundle-dir DIR     Where the bundle is (default LEPTON_DECK_BUNDLE_DIR or
-                       ~/lepton-deck-bundles)
+  --bundle-dir DIR     Where the bundle is (default: the workspace's bundles/)
 
 Lepton never closes or starts Steam. Restart Steam after installing.
 HELP
@@ -44,10 +43,15 @@ if [[ "$MODE" == --check ]]; then
     ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
     # shellcheck source=/dev/null
     [[ ! -f "$ROOT/.build-env" ]] || source "$ROOT/.build-env"
-    id='' dir="${LEPTON_DECK_BUNDLE_DIR:-$HOME/lepton-deck-bundles}"
+    if [[ -n "${LEPTON_OUTPUT_DIR:-}" ]]; then
+        source "$SCRIPT_DIR/lib/workspace.sh"
+        lepton_workspace
+    fi
+    id='' dir="${LEPTON_DECK_BUNDLE_DIR:-}"
     for ((i = 0; i < ${#ARGS[@]}; i += 2)); do
         case "${ARGS[i]}" in --bundle-id) id="${ARGS[i+1]}" ;; --bundle-dir) dir="${ARGS[i+1]}" ;; esac
     done
+    [[ -n "$dir" ]] || fail 'Set LEPTON_OUTPUT_DIR in .build-env or pass --bundle-dir'
     archive="lepton-x86_64-steamdeck-$id.tar.gz"
     [[ -f "$dir/$archive" && -f "$dir/$archive.sha256" && -f "$dir/lepton-x86_64-steamdeck-$id.install.sh" ]] ||
         fail "Bundle $id not found in $dir (archive, .sha256 and .install.sh are needed)"

@@ -24,16 +24,17 @@ usage() {
     cat <<'HELP'
 Usage: bash image-14/scripts/make-deck-bundle-x86_64.sh --check|--execute --bundle-id ID [options]
 
-Builds a Steam Deck bundle from an existing packaged rootfs
-($LEPTON_OUTPUT_DIR/repro-rootfs-auto/rootfs, or --rootfs-source DIR).
+Builds a Steam Deck bundle from the workspace's packaged rootfs (rootfs/,
+made by build-images-x86_64.sh), or --rootfs-source DIR.
 Use image-14/do_build_x86_64.sh instead to also compile Android from source.
 
 Options:
-  --stage-dir DIR             New stage (default $LEPTON_OUTPUT_DIR/deck-stage-ID)
-  --bundle-dir DIR            Archive directory (default LEPTON_DECK_BUNDLE_DIR)
+  --stage-dir DIR             New stage (default: workspace stages/ID)
+  --bundle-dir DIR            Archive directory (default: workspace bundles/)
   --rootfs-source DIR         Alternative packaged Android 14 x86_64 rootfs
   --with-ndk [--ndk-payload DIR]          Add local ARM64 NDK translation
   --with-gapps [--google-images DIR]      Add local Google Play services
+                              (default inputs: workspace google-inputs/)
   --with-widevine              Add Widevine L3 DRM from the same Google image
   --services-jar FILE         Tested framework override (older rootfs + GApps)
   --tool-id ID / --tool-name NAME         Steam tool identity
@@ -78,9 +79,11 @@ done
 # shellcheck source=/dev/null
 source "$CONFIG"
 : "${LEPTON_OUTPUT_DIR:?Set LEPTON_OUTPUT_DIR in .build-env}"
+source "$SCRIPT_DIR/lib/workspace.sh"
+lepton_workspace
 
-STAGE="$(realpath -m -- "${STAGE:-$LEPTON_OUTPUT_DIR/deck-stage-$BUNDLE_ID}")"
-BUNDLE_DIR="$(realpath -m -- "${BUNDLE_DIR:-${LEPTON_DECK_BUNDLE_DIR:-$HOME/lepton-deck-bundles}}")"
+STAGE="$(realpath -m -- "${STAGE:-$LEPTON_STAGES_DIR/$BUNDLE_ID}")"
+BUNDLE_DIR="$(realpath -m -- "${BUNDLE_DIR:-$LEPTON_DECK_BUNDLE_DIR}")"
 ARCHIVE="$BUNDLE_DIR/lepton-x86_64-steamdeck-$BUNDLE_ID.tar.gz"
 [[ ! -e "$STAGE" && ! -L "$STAGE" ]] || fail "Stage already exists (choose another --bundle-id or --stage-dir): $STAGE"
 [[ ! -e "$ARCHIVE" && ! -L "$ARCHIVE" ]] || fail "Bundle already exists: $ARCHIVE"
@@ -103,6 +106,7 @@ if [[ "$MODE" == --check ]]; then
 fi
 
 step '1/4 Stage Android rootfs and launcher'
+mkdir -p -- "$(dirname -- "$STAGE")" "$BUNDLE_DIR"
 bash "$SCRIPT_DIR/internal/deploy-compat-x86_64.sh" --execute --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
 
 step '2/4 Provision Steam Deck tools (ADB, inotify-tools)'
@@ -120,5 +124,6 @@ bash "$SCRIPT_DIR/internal/deploy-compat-x86_64.sh" --package-only --execute --s
 
 printf '\n[PASS] Bundle ready: %s\n' "$ARCHIVE"
 if [[ -z "$DECK_IP" ]]; then
+    info "The stage is no longer needed: podman unshare rm -rf \"$STAGE\""
     info "Send it with: bash image-14/scripts/transfer-deck-bundle.sh --bundle-id $BUNDLE_ID --deck-ip DECK_IP"
 fi

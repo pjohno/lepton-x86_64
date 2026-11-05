@@ -7,15 +7,22 @@ translation). Installing a bundle on the Deck is covered in
 
 Nothing here downloads Google software or games: you supply those files.
 
-## The words used here
+## The workspace
 
-| Term               | Meaning                                                                                                                                            |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Checkout** | The Android 14 (AOSP) source tree and build output in `LEPTON_OUTPUT_DIR`.                                                                       |
-| **Images**   | `system.img` and `vendor.img`, compiled from the checkout.                                                                                     |
-| **Rootfs**   | The images unpacked into one folder (`repro-rootfs-auto/rootfs`), ready for bundling.                                                            |
-| **Stage**    | A working folder in which one bundle is assembled. Made and used by `make-deck-bundle`; you never edit it.                                       |
-| **Bundle**   | The finished `.tar.gz` plus its `.sha256` checksum and `.install.sh` installer, in `~/lepton-deck-bundles`. This is what goes to the Deck. |
+Everything the build makes goes into one folder, the **workspace**, set by
+`LEPTON_OUTPUT_DIR` in `.build-env`. Deleting that folder removes it all; the
+build never writes elsewhere in your home folder (except Podman's builder
+image).
+
+| Folder | What it holds |
+| --- | --- |
+| `aosp/` | The **checkout**: the Android 14 (AOSP) sources and their build output (`aosp/out/`). |
+| `images/` | `system.img` and `vendor.img` from the latest build, with checksums. |
+| `rootfs/` | The **rootfs**: those images unpacked into one folder, ready for bundling. |
+| `stages/<ID>/` | One **stage** per bundle: the working folder in which `make-deck-bundle` assembles it. You never edit it, and can delete it once the bundle exists. |
+| `bundles/` | Finished **bundles**: `.tar.gz`, `.sha256` checksum and `.install.sh` installer. This is what goes to the Deck. |
+| `logs/` | Logs of every step. |
+| `google-inputs/` | Optional GApps, NDK and Widevine inputs, made from your Google zip. |
 
 You only run the scripts in `image-14/scripts/` itself. The ones in
 `image-14/scripts/internal/` are building blocks those scripts call; you only
@@ -25,8 +32,8 @@ need them when debugging a failed step.
 
 - x86_64 Linux (tested on Fedora 44) with rootless Podman, and an AMD GPU if
   you also want to test locally.
-- About **350 GB** free for the checkout (sources about 265 GB, build output
-  about 70 GB) and a few GB for each bundle. `LEPTON_MIN_FREE_GIB` (default 200)
+- About **350 GB** free for the workspace (sources about 265 GB, build output
+  about 70 GB) plus a few GB for each bundle. `LEPTON_MIN_FREE_GIB` (default 200)
   is checked before each step.
 - 24 GB RAM works with `LEPTON_BUILD_JOBS=6`. The first build takes many hours;
   later builds are incremental.
@@ -44,10 +51,10 @@ podman build -t lepton-builder-ubuntu26:latest \
     -f image-14/.buildscripts_x86_64/Containerfile.ubuntu26 image-14/.buildscripts_x86_64
 ```
 
-In `.build-env`, set at least:
+In `.build-env`, set:
 
-- `LEPTON_OUTPUT_DIR`: where the Android checkout goes (a large, fast disk);
-- `LEPTON_LOG_DIR`: build logs (outside the checkout);
+- `LEPTON_OUTPUT_DIR`: the workspace folder, on a large, fast disk. It is
+  created by step 2 and must not be inside this repository;
 - `LEPTON_BUILD_JOBS`: parallel compile jobs (6 suits 24 GB of RAM).
 
 **Optional Google inputs (for the GApps + NDK bundle).** Download the Android
@@ -56,12 +63,12 @@ revision 14* (`x86_64-34_r14.zip`), for example with Android Studio's SDK
 Manager. Then:
 
 ```bash
-bash image-14/scripts/prepare-google-inputs.sh --zip /path/to/x86_64-34_r14.zip \
-    --output /path/to/lepton-inputs/google-play-api34-r14
+bash image-14/scripts/prepare-google-inputs.sh --zip /path/to/x86_64-34_r14.zip
 ```
 
-It prints two lines (`LEPTON_GOOGLE_IMAGES=...` and `LEPTON_NDK_PAYLOAD=...`).
-Add them to `.build-env`. See [GAPPS.md](GAPPS.md) for what this adds.
+This writes `google-inputs/` in the workspace, where the bundle step finds it.
+Keep the zip itself outside the workspace. See [GAPPS.md](GAPPS.md) for what
+this adds.
 
 ## The build: five commands
 
@@ -97,6 +104,9 @@ bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id gapps-ndk
     --with-gapps --with-ndk
 ```
 
+Step 5 also accepts `--with-widevine` (software Widevine L3 from the same
+Google image; see [GAPPS.md](GAPPS.md)).
+
 What each step does:
 
 1. **Preflight** checks host tools, disk space, the builder image and the
@@ -111,13 +121,12 @@ What each step does:
      editing patches, or whenever you want a build that is known to come only
      from this repository.
 3. **Build images** compiles `system.img` and `vendor.img` inside the builder
-   container. It then unpacks them to `repro-rootfs-auto/rootfs`, replacing the
-   rootfs from any earlier build.
+   container, copies them to `images/` and unpacks them to `rootfs/`,
+   replacing those from any earlier build.
 4. **and 5. Make bundle** each create a stage, add the Deck tools (ADB,
    inotify-tools), boot Android once to bake its first-boot data (private
-   Podman storage, no GPU needed), then write the bundle to
-   `~/lepton-deck-bundles`. Bundle IDs must be new each time (a date works
-   well). Each one becomes its own Steam compatibility tool, named
+   Podman storage, no GPU needed) in `stages/<ID>/`, then write the bundle to
+   `bundles/`. Bundle IDs must be new each time (a date works well). Each one becomes its own Steam compatibility tool, named
    **Lepton x86_64 (community) - *bundle ID***.
 
 Add `--check` instead of `--execute` to steps 2 to 5 to see what would happen
@@ -150,16 +159,25 @@ bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id base-YYYY
 
 ## When something fails
 
-- Every step prints the path of its log. Logs live in `LEPTON_LOG_DIR` and stay
-  after failures.
+- Every step prints the path of its log. Logs live in the workspace's `logs/`
+  and stay after failures.
 - A failed **build** can simply be run again; it continues where it stopped.
 - A failed **prepare** during patching refuses to continue automatically, so
   that a half-patched tree is never built. Run `prepare-x86_64.sh --reset` to
   start the patching from clean sources.
-- A failed **make-deck-bundle** leaves its stage behind. Delete the stage and
-  bundle it names, or simply use a new bundle ID. Stage folders contain files
-  owned by Podman's user namespace, so remove them with
-  `podman unshare rm -rf "$LEPTON_OUTPUT_DIR/deck-stage-ID"` (no sudo needed).
+- A failed **make-deck-bundle** leaves its stage behind. Delete it, or simply
+  use a new bundle ID.
+
+## Cleaning up
+
+Stages contain files owned by Podman's user namespace, so delete them (or the
+whole workspace) with `podman unshare`, not `sudo`:
+
+```bash
+source .build-env
+podman unshare rm -rf "$LEPTON_OUTPUT_DIR/stages/base-20261104"   # one stage
+podman unshare rm -rf "$LEPTON_OUTPUT_DIR"                         # everything
+```
 
 ## Advanced
 

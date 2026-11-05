@@ -5,11 +5,11 @@ set -Eeuo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
-mkdir -p "$work/repo/image-14" "$work/existing" "$work/payload/system/lib64"
+mkdir -p "$work/repo/image-14/scripts/lib" "$work/existing/aosp" "$work/payload/system/lib64"
 cp "$repo/image-14/do_build_x86_64.sh" "$work/repo/image-14/"
+cp "$repo/image-14/scripts/lib/workspace.sh" "$work/repo/image-14/scripts/lib/"
 {
     printf 'LEPTON_OUTPUT_DIR=%q\n' "$work/existing"
-    printf 'LEPTON_LOG_DIR=%q\n' "$work/logs"
     printf 'LEPTON_BUILD_TARGET=aosp_lepton_x86_64-ap2a-userdebug\n'
 } > "$work/repo/.build-env"
 printf 'fixture bridge' > "$work/payload/system/lib64/libndk_translation.so"

@@ -140,6 +140,7 @@ cp -a "$source" "$stage/compat_tool/images/rootfs"
         deploy = repo / 'image-14/scripts/internal/deploy-compat-x86_64.sh'
         deploy.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(actual / 'image-14/scripts/internal/deploy-compat-x86_64.sh', deploy)
+        shutil.copyfile(actual / 'image-14/scripts/lib/workspace.sh', repo / 'image-14/scripts/lib/workspace.sh')
         runtime = repo / 'compat_tool/liblepton/ndk_auxv/runtime.sh'
         runtime.parent.mkdir(parents=True)
         shutil.copyfile(actual / 'compat_tool/liblepton/ndk_auxv/runtime.sh', runtime)
