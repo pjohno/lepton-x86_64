@@ -61,8 +61,11 @@ OUT="$(realpath -m -- "$OUT")"
 [[ ! -e "$OUT" && ! -L "$OUT" ]] || fail "Output already exists: $OUT"
 [[ -d "$(dirname -- "$OUT")" ]] || fail "Output parent does not exist: $(dirname -- "$OUT")"
 
-unzip -l "$ZIP" x86_64/system.img x86_64/build.prop >/dev/null 2>&1 ||
-    fail 'Not an x86_64 emulator system image zip (x86_64/system.img missing)'
+for member in x86_64/system.img x86_64/build.prop; do
+    # One member per call: unzip -l succeeds if any listed name matches.
+    unzip -l "$ZIP" "$member" >/dev/null 2>&1 ||
+        fail "Not an x86_64 emulator system image zip ($member missing)"
+done
 props="$(unzip -p "$ZIP" x86_64/build.prop)"
 grep -qx 'ro.build.version.sdk=34' <<< "$props" || fail 'The image is not Android 14 (API 34)'
 grep -qx 'ro.build.flavor=sdk_gphone64_x86_64-user' <<< "$props" || fail 'Not an x86_64 Google emulator image'

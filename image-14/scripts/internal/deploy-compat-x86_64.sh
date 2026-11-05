@@ -4,7 +4,6 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 CONFIG="$ROOT/.build-env"
-LEGACY_DEST="$ROOT/compat_tool/images/rootfs"
 EXTRACTOR="$ROOT/compat_tool/liblepton/apk_extractor"
 MODE='--check'
 STAGE_DIR=''
@@ -32,12 +31,12 @@ Usage: bash image-14/scripts/internal/deploy-compat-x86_64.sh [--check|--execute
        bash image-14/scripts/internal/deploy-compat-x86_64.sh --package-only [--check|--execute] --stage-dir DIR --bundle-id ID [--bundle-dir DIR] [--tool-id ID] [--tool-name NAME] [--deck-ip IPv4]
        bash image-14/scripts/internal/deploy-compat-x86_64.sh --transfer-only [--check|--execute] --bundle-id ID --deck-ip IPv4 [--bundle-dir DIR]
 
-Default (legacy): stage Android rootfs under repository compat_tool/images/rootfs.
---stage-dir DIR: assemble an isolated, complete compatibility-tool source stage
-                 under DIR/compat_tool, including fresh rootfs and native APK
-                 extractor. DIR must NOT already exist for --execute.
+--stage-dir DIR: required. Assemble an isolated, complete compatibility-tool
+                 stage under DIR/compat_tool, including a fresh rootfs and the
+                 native APK extractor. DIR must NOT already exist for --execute
+                 and must be outside this repository.
 --rootfs-source DIR: stage an alternative Android 14 x86_64 rootfs (requires
-                    --stage-dir; does not affect the legacy destination).
+                    --stage-dir).
 --with-ndk: inject a local ARM64 NDK payload into a NEW stage and build the
             compatibility shim. Requires --stage-dir and a native source rootfs.
 --ndk-payload DIR: extracted payload directory (or LEPTON_NDK_PAYLOAD in .build-env).
@@ -115,9 +114,10 @@ if [[ "$PACKAGE_ONLY" == true ]]; then
     exit 0
 fi
 [[ -z "$BUNDLE_DIR" && -z "$BUNDLE_ID" && -z "$DECK_IP" && -z "$DECK_REPLACE" && -z "$TOOL_ID" && -z "$TOOL_NAME" ]] || fail 'Bundle options require --package-only or --transfer-only'
+[[ -n "$STAGE_DIR" ]] || fail '--stage-dir is required (make-deck-bundle-x86_64.sh sets it)'
 [[ "$WITH_NDK" == true || -z "$NDK_PAYLOAD" ]] || fail '--ndk-payload requires --with-ndk'
 if [[ "$WITH_NDK" == true ]]; then
-    [[ -n "$STAGE_DIR" ]] || fail '--with-ndk requires --stage-dir (existing deployments stay unchanged)'
+    [[ -n "$STAGE_DIR" ]] || fail '--with-ndk requires --stage-dir'
     NDK_PAYLOAD="${NDK_PAYLOAD:-${LEPTON_NDK_PAYLOAD:-}}"
     [[ -n "$NDK_PAYLOAD" ]] || fail '--with-ndk requires --ndk-payload or LEPTON_NDK_PAYLOAD'
     NDK_PAYLOAD="$(realpath -e -- "$NDK_PAYLOAD")" || fail 'NDK payload not found'
@@ -146,7 +146,7 @@ with zipfile.ZipFile(sys.argv[1]) as jar:
 PYJAR
 fi
 if [[ -n "$ROOTFS_SOURCE" ]]; then
-    [[ -n "$STAGE_DIR" ]] || fail '--rootfs-source requires --stage-dir (legacy deployment is unchanged)'
+    [[ -n "$STAGE_DIR" ]] || fail '--rootfs-source requires --stage-dir'
     [[ -d "$ROOTFS_SOURCE" && ! -L "$ROOTFS_SOURCE" ]] || fail "Alternative rootfs must be a real directory: $ROOTFS_SOURCE"
     SRC="$(realpath -e -- "$ROOTFS_SOURCE")" || fail "Cannot resolve alternative rootfs: $ROOTFS_SOURCE"
 else
@@ -173,16 +173,12 @@ if [[ "$WITH_NDK" == true ]] || ndk_compat_supported "$SRC"; then
     BUILD_NDK_SHIM=true
 fi
 
-if [[ -n "$STAGE_DIR" ]]; then
-    STAGE_DIR="$(realpath -m -- "$STAGE_DIR")"
-    [[ "$STAGE_DIR" != / && "$STAGE_DIR" != "$ROOT" ]] || fail 'Unsafe stage destination'
-    [[ "$STAGE_DIR" != "$ROOT/"* && "$STAGE_DIR" != "$SRC" && "$STAGE_DIR" != "$SRC/"* ]] || fail 'Stage must not be inside repository or rootfs'
-    [[ "$SRC" != "$STAGE_DIR/"* ]] || fail 'Rootfs source must not be inside destination stage'
-    [[ -z "$GOOGLE_IMAGES" || "$GOOGLE_IMAGES" != "$STAGE_DIR/"* ]] || fail 'Google images cannot be inside stage'
-    DEST="$STAGE_DIR/compat_tool/images/rootfs"
-else
-    DEST="$LEGACY_DEST"
-fi
+STAGE_DIR="$(realpath -m -- "$STAGE_DIR")"
+[[ "$STAGE_DIR" != / && "$STAGE_DIR" != "$ROOT" ]] || fail 'Unsafe stage destination'
+[[ "$STAGE_DIR" != "$ROOT/"* && "$STAGE_DIR" != "$SRC" && "$STAGE_DIR" != "$SRC/"* ]] || fail 'Stage must not be inside repository or rootfs'
+[[ "$SRC" != "$STAGE_DIR/"* ]] || fail 'Rootfs source must not be inside destination stage'
+[[ -z "$GOOGLE_IMAGES" || "$GOOGLE_IMAGES" != "$STAGE_DIR/"* ]] || fail 'Google images cannot be inside stage'
+DEST="$STAGE_DIR/compat_tool/images/rootfs"
 
 if [[ "$WITH_NDK" == true ]]; then
     bash "$ROOT/image-14/scripts/internal/inject-ndk-translation.sh" --check \
@@ -204,7 +200,7 @@ if [[ "$MODE" == --check ]]; then
     info '[PASS] Local deployment prerequisites satisfied'
     exit 0
 fi
-if [[ -n "$STAGE_DIR" && ( -e "$STAGE_DIR" || -L "$STAGE_DIR" ) ]]; then
+if [[ -e "$STAGE_DIR" || -L "$STAGE_DIR" ]]; then
     fail "Stage already exists; refusing to overwrite: $STAGE_DIR"
 fi
 
@@ -216,71 +212,52 @@ make -C "$EXTRACTOR" install-native
 BIN="$EXTRACTOR/bin/apk-info-extractor"
 [[ -x "$BIN" ]] || fail 'Native APK extractor build failed'
 
-if [[ -n "$STAGE_DIR" ]]; then
-    # Stage everything atomically in a temporary sibling on the same filesystem.
-    parent="$(dirname -- "$STAGE_DIR")"
-    [[ -d "$parent" ]] || fail "Stage parent directory missing: $parent"
-    TEMP="$(mktemp -d "$parent/.lepton-deck-stage.XXXXXXXX")"
-    # Own group, no inherited setgid: a shared folder's setgid group cannot be
-    # mapped into rootless Podman and breaks the Android container's overlay.
-    chgrp "$(id -g)" "$TEMP" && chmod g-s "$TEMP"
-    cleanup() { [[ -z "${TEMP:-}" ]] || rm -rf -- "$TEMP"; }
-    trap cleanup EXIT
-    touch "$TEMP/.find-ignore"
-    mkdir -p "$TEMP/compat_tool/images"
-    # Never dereference existing compat_tool/images/rootfs symlinks.
-    rsync -a --no-owner --no-group --exclude='/images/rootfs' \
-        --exclude='/sysbake' --exclude='/sysbake.xattrs' --exclude='/liblepton/apk_extractor/target/' --exclude=__pycache__/ \
-        "$ROOT/compat_tool/" "$TEMP/compat_tool/"
-    if [[ "$WITH_NDK" == true ]]; then
-        bash "$ROOT/image-14/scripts/internal/inject-ndk-translation.sh" --execute \
-            --rootfs "$SRC" --payload "$NDK_PAYLOAD" --output "$TEMP/ndk-injection"
-        mv -- "$TEMP/ndk-injection/rootfs" "$TEMP/compat_tool/images/rootfs"
-        mv -- "$TEMP/ndk-injection" "$TEMP/compat_tool/ndk-provenance"
-    else
-        mkdir "$TEMP/compat_tool/images/rootfs"
-        rsync -a --no-owner --no-group "$SRC/" "$TEMP/compat_tool/images/rootfs/"
-    fi
-    if [[ -n "$SERVICES_JAR" ]]; then
-        framework="$TEMP/compat_tool/images/rootfs/system/framework"
-        install -m 644 "$SERVICES_JAR" "$framework/services.jar"
-        for abi in x86 x86_64 arm arm64; do
-            for suffix in odex vdex art; do rm -f -- "$framework/oat/$abi/services.$suffix"; done
-        done
-        rm -f -- "$framework/services.jar.prof" "$framework/services.jar.bprof"
-        mkdir -p "$TEMP/compat_tool/provenance/framework"
-        sha256sum "$SERVICES_JAR" > "$TEMP/compat_tool/provenance/framework/services-override.sha256"
-    fi
-    if [[ "$WITH_GAPPS" == true ]]; then
-        google_services_inject "$TEMP/compat_tool/images/rootfs" "$GOOGLE_IMAGES" true true "$TEMP/compat_tool/provenance/gapps"
-    fi
-    if [[ "$WITH_WIDEVINE" == true ]]; then
-        widevine_inject "$TEMP/compat_tool/images/rootfs" "$GOOGLE_IMAGES" "$TEMP/compat_tool/provenance/widevine"
-        info '[PASS] Widevine L3 added (vendor/apex/com.google.android.widevine)'
-    fi
-    [[ -x "$TEMP/compat_tool/images/rootfs/system/bin/sh" ]] || fail 'Staged Android shell missing'
-    [[ -f "$TEMP/compat_tool/images/rootfs/vendor/lib64/hw/vulkan.radeon.so" ]] || fail 'Staged RADV driver missing'
-    [[ -x "$TEMP/compat_tool/liblepton/apk_extractor/bin/apk-info-extractor" ]] || fail 'Staged native extractor missing'
-    [[ ! -e "$STAGE_DIR" && ! -L "$STAGE_DIR" ]] || fail 'Stage appeared during copying; refusing overwrite'
-    mv -T -- "$TEMP" "$STAGE_DIR"
-    TEMP=''
-    info "[PASS] New isolated stage: $STAGE_DIR"
-    info '[INFO] Next: provision Deck tools; generate fresh sysbake in an isolated environment'
-    exit 0
-fi
-
-# Original local development path: still refuses to replace a prior rootfs.
-info 'Staging Android rootfs in repository compatibility-tool directory'
-IMAGE_DIR="$ROOT/compat_tool/images"
-mkdir -p "$IMAGE_DIR"
-TEMP="$(mktemp -d "$IMAGE_DIR/.rootfs-stage.XXXXXXXX")"
+# Stage everything atomically in a temporary sibling on the same filesystem.
+parent="$(dirname -- "$STAGE_DIR")"
+[[ -d "$parent" ]] || fail "Stage parent directory missing: $parent"
+TEMP="$(mktemp -d "$parent/.lepton-deck-stage.XXXXXXXX")"
+# Own group, no inherited setgid: a shared folder's setgid group cannot be
+# mapped into rootless Podman and breaks the Android container's overlay.
+chgrp "$(id -g)" "$TEMP" && chmod g-s "$TEMP"
 cleanup() { [[ -z "${TEMP:-}" ]] || rm -rf -- "$TEMP"; }
 trap cleanup EXIT
-rsync -a --no-owner --no-group "$SRC/" "$TEMP/"
-[[ -f "$TEMP/system/build.prop" && -x "$TEMP/system/bin/sh" ]] || fail 'Staged rootfs verification failed'
-[[ ! -e "$DEST" && ! -L "$DEST" ]] || fail 'Destination appeared during staging; refusing overwrite'
-mv -T -- "$TEMP" "$DEST"
+touch "$TEMP/.find-ignore"
+mkdir -p "$TEMP/compat_tool/images"
+# Never dereference existing compat_tool/images/rootfs symlinks.
+rsync -a --no-owner --no-group --exclude='/images/rootfs' \
+    --exclude='/sysbake' --exclude='/sysbake.xattrs' --exclude='/liblepton/apk_extractor/target/' --exclude=__pycache__/ \
+    "$ROOT/compat_tool/" "$TEMP/compat_tool/"
+if [[ "$WITH_NDK" == true ]]; then
+    bash "$ROOT/image-14/scripts/internal/inject-ndk-translation.sh" --execute \
+        --rootfs "$SRC" --payload "$NDK_PAYLOAD" --output "$TEMP/ndk-injection"
+    mv -- "$TEMP/ndk-injection/rootfs" "$TEMP/compat_tool/images/rootfs"
+    mv -- "$TEMP/ndk-injection" "$TEMP/compat_tool/ndk-provenance"
+else
+    mkdir "$TEMP/compat_tool/images/rootfs"
+    rsync -a --no-owner --no-group "$SRC/" "$TEMP/compat_tool/images/rootfs/"
+fi
+if [[ -n "$SERVICES_JAR" ]]; then
+    framework="$TEMP/compat_tool/images/rootfs/system/framework"
+    install -m 644 "$SERVICES_JAR" "$framework/services.jar"
+    for abi in x86 x86_64 arm arm64; do
+        for suffix in odex vdex art; do rm -f -- "$framework/oat/$abi/services.$suffix"; done
+    done
+    rm -f -- "$framework/services.jar.prof" "$framework/services.jar.bprof"
+    mkdir -p "$TEMP/compat_tool/provenance/framework"
+    sha256sum "$SERVICES_JAR" > "$TEMP/compat_tool/provenance/framework/services-override.sha256"
+fi
+if [[ "$WITH_GAPPS" == true ]]; then
+    google_services_inject "$TEMP/compat_tool/images/rootfs" "$GOOGLE_IMAGES" true true "$TEMP/compat_tool/provenance/gapps"
+fi
+if [[ "$WITH_WIDEVINE" == true ]]; then
+    widevine_inject "$TEMP/compat_tool/images/rootfs" "$GOOGLE_IMAGES" "$TEMP/compat_tool/provenance/widevine"
+    info '[PASS] Widevine L3 added (vendor/apex/com.google.android.widevine)'
+fi
+[[ -x "$TEMP/compat_tool/images/rootfs/system/bin/sh" ]] || fail 'Staged Android shell missing'
+[[ -f "$TEMP/compat_tool/images/rootfs/vendor/lib64/hw/vulkan.radeon.so" ]] || fail 'Staged RADV driver missing'
+[[ -x "$TEMP/compat_tool/liblepton/apk_extractor/bin/apk-info-extractor" ]] || fail 'Staged native extractor missing'
+[[ ! -e "$STAGE_DIR" && ! -L "$STAGE_DIR" ]] || fail 'Stage appeared during copying; refusing overwrite'
+mv -T -- "$TEMP" "$STAGE_DIR"
 TEMP=''
-info '[PASS] Local x86_64 compatibility tool staged'
-info "[PASS] Rootfs: $DEST"
-info "[PASS] APK extractor: $BIN"
+info "[PASS] New isolated stage: $STAGE_DIR"
+info '[INFO] Next: provision Deck tools; generate fresh sysbake in an isolated environment'

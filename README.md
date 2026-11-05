@@ -81,15 +81,15 @@ When testing Lepton on Fedora, SteamOS, or a second x86_64 Linux computer:
 - Ensure the required Wayland, audio, BinderFS, and graphics resources are accessible to the test user. On a Fedora Wayland desktop, `GAMESCOPE_WAYLAND_DISPLAY=wayland-0` may be necessary. Lepton maps this variable to its expected Wayland socket during setup.
 - When running tests over SSH, use the account with the existing Steam setup and desktop runtime resources. An SSH login alone does not create a Wayland or audio session.
 
-The experimental x86_64 tests are ordered from filesystem setup to Android initialization and graphics checks. Tests `0100` through `0600` read `compat_tool/images/rootfs`. Tests `0700` and `0800` are designed for a **separate** rootfs provided through `LEPTON_TEST_ROOTFS` and refuse to use the default rootfs path. Test failures at Podman container creation are not proof that Android itself failed to boot.
-
-Start with the least invasive test from the repository root:
+To check a build on this computer, boot a stage and run an APK with
+`tests/runtime/run-apk.sh` (see [tests/runtime/README.md](tests/runtime/README.md)).
+The offline regression suite, which needs no Android build, Deck or network, is:
 
 ```bash
-GAMESCOPE_WAYLAND_DISPLAY=wayland-0 bash compat_tool/test-0100.sh
+bash image-14/tests/run-workflow-tests.sh
 ```
 
-Once host prerequisites and configuration are satisfied, continue in test-number order. `test-0200.sh` verifies container lifecycle without starting Android `/init`, while later tests exercise Android initialization and the graphics stack. Do not run `.ci_scripts/run-tests.sh` directly on a normal Fedora desktop: the CI harness includes system-wide changes and a forced Podman reset.
+Do not run `.ci_scripts/run-tests.sh` directly on a normal Fedora desktop: the CI harness includes system-wide changes and a forced Podman reset.
 
 ## Optional Google services
 

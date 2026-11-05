@@ -67,8 +67,14 @@ run --check --rootfs-source "$BRIDGE" --stage-dir "$OUTPUT/bridge-stage" > "$TMP
 grep -Fq "Source: $BRIDGE" "$TMP/bridge.log"
 [[ ! -e "$OUTPUT/bridge-stage" ]]
 
-# Safety: no alternate source in legacy mode, no symlink rootfs, no nesting.
+# Safety: a stage folder is always required (nothing is ever staged inside the
+# repository), no symlink rootfs, no nesting.
+expect_fail --check
+grep -Fq -- '--stage-dir is required' "$TMP/failure.log"
+expect_fail --execute
+[[ ! -e "$FAKE/compat_tool/images" ]]
 expect_fail --check --rootfs-source "$BRIDGE"
+expect_fail --check --stage-dir "$FAKE/inside-repo"
 ln -s "$BRIDGE" "$OUTPUT/bridge-symlink"
 expect_fail --check --rootfs-source "$OUTPUT/bridge-symlink" --stage-dir "$OUTPUT/bridge-stage"
 expect_fail --check --rootfs-source "$BRIDGE" --stage-dir "$BRIDGE/nested-stage"

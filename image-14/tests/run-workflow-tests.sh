@@ -3,7 +3,7 @@
 # Local regression suite: synthetic stages, no Android build/boot or network.
 set -Eeuo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-for test_name in test-build-pipeline-cli test-deploy-compat-rootfs-source test-deploy-packaging test-inject-ndk-translation-odm; do
+for test_name in test-build-pipeline-cli test-deploy-compat-rootfs-source test-deploy-packaging test-inject-ndk-translation-odm test-workspace-and-inputs; do
     bash "$repo/image-14/tests/$test_name.sh"
 done
 bash "$repo/compat_tool/liblepton/ndk_auxv/test.sh"
@@ -26,8 +26,9 @@ bash "$repo/tests/runtime/test-network-sysctls.sh"
 bash "$repo/tests/runtime/test-runtime-properties.sh"
 python3 -B "$repo/tests/runtime/test-profile-lifecycle.py"
 for script in "$repo/image-14/do_build_x86_64.sh" \
-              "$repo/image-14/scripts/internal/deploy-compat-x86_64.sh" \
-              "$repo/image-14/scripts/lib/deck-bundle.sh" \
+              "$repo/image-14/scripts/"*.sh \
+              "$repo/image-14/scripts/internal/"*.sh \
+              "$repo/image-14/scripts/lib/"*.sh \
               "$repo/tests/runtime/"*.sh; do
     bash -n "$script"
 done
