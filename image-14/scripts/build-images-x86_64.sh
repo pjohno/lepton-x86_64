@@ -247,6 +247,9 @@ trap 'interrupt_build SIGTERM 143' TERM
 ) &
 HEARTBEAT_PID=$!
 
+# BUILD_USERNAME/BUILD_HOSTNAME: Android records them in ro.build.user,
+# ro.build.host and the build description; fixed values keep the builder's
+# login name out of the images and make builds comparable across machines.
 podman run --rm -i --cidfile "$CID_FILE" \
   --network=host \
   --userns=keep-id \
@@ -254,6 +257,8 @@ podman run --rm -i --cidfile "$CID_FILE" \
   --security-opt=label=disable \
   --hostname=lepton-build \
   -e TERM=xterm \
+  -e BUILD_USERNAME=lepton \
+  -e BUILD_HOSTNAME=lepton-build \
   -e LEPTON_BUILD_TARGET="$LEPTON_BUILD_TARGET" \
   -e LEPTON_BUILD_JOBS="$LEPTON_BUILD_JOBS" \
   -v "$ROOT/image-14:/workspace:ro" \
