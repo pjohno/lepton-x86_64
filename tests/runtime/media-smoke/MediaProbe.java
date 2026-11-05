@@ -5,6 +5,7 @@ import android.content.res.AssetFileDescriptor;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
+import android.media.MediaDrm;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaPlayer;
@@ -16,6 +17,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.UUID;
 
 /** Offline, original test assets; no Google account or network required. */
 public final class MediaProbe {
@@ -32,6 +34,7 @@ public final class MediaProbe {
                     }
                 }
                 Log.i(TAG, "LEPTON_MEDIA_DECODERS count=" + count);
+                reportDrm();
                 // Audio first: games' SoundPool/MediaPlayer/WebView audio needs
                 // these decoders even when video output is unavailable.
                 int audio = decode(activity, "probe.ogg", "audio/vorbis");
@@ -81,6 +84,26 @@ public final class MediaProbe {
                 });
             }
         }, "LeptonMediaProbe").start();
+    }
+
+    // Informational: which DRM schemes Android offers (Widevine only when a
+    // bundle was made with --with-widevine). Never fails the probe.
+    private static final UUID WIDEVINE = new UUID(0xEDEF8BA979D64ACEL, 0xA3C827DCD51D21EDL);
+    private static void reportDrm() {
+        try {
+            if (!MediaDrm.isCryptoSchemeSupported(WIDEVINE)) {
+                Log.i(TAG, "LEPTON_MEDIA_DRM widevine=absent");
+                return;
+            }
+            try (MediaDrm drm = new MediaDrm(WIDEVINE)) {
+                Log.i(TAG, "LEPTON_MEDIA_DRM widevine=present securityLevel=" +
+                    drm.getPropertyString("securityLevel") + " version=" +
+                    drm.getPropertyString(MediaDrm.PROPERTY_VERSION) + " systemId=" +
+                    drm.getPropertyString("systemId"));
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "LEPTON_MEDIA_DRM widevine=error " + error);
+        }
     }
 
     // Plays the generated tone through MediaPlayer (decoder + AudioTrack), the

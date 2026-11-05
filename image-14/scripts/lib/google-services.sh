@@ -126,3 +126,44 @@ fi
 (cd "$IMAGES" && sha256sum system.img product.img system_ext.img) > "$provenance/SOURCE-IMAGES.sha256"
 printf 'Android API: 34\nPlay Store included: %s\nBrowser included: %s\n' "$WITH_STORE" "$WITH_BROWSER" > "$provenance/COMPONENTS.txt"
 )
+
+# Widevine L3 (software DRM) from the same local Google Play image: its vendor
+# APEX, installed flattened like Lepton's other vendor APEXes. Opt-in only.
+WIDEVINE_APEX=/apex/com.google.android.widevine.nonupdatable.apex
+widevine_check() (
+    set -Eeuo pipefail
+    local images="$1"
+    for tool in debugfs unzip; do command -v "$tool" >/dev/null || { echo "Missing $tool" >&2; exit 1; }; done
+    [[ -f "$images/vendor.img" ]] || { echo "Missing vendor.img in $images" >&2; exit 1; }
+    debugfs -R "stat $WIDEVINE_APEX" "$images/vendor.img" 2>/dev/null | grep -q 'Type: regular' ||
+        { echo "No Widevine in this Google image (vendor.img:$WIDEVINE_APEX)" >&2; exit 1; }
+)
+widevine_inject() (
+    set -Eeuo pipefail
+    local ROOTFS="$1" IMAGES="$2" provenance="$3"
+    local name=com.google.android.widevine
+    local dest="$ROOTFS/vendor/apex/$name" work
+    fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
+    [[ ! -e "$dest" && ! -L "$dest" ]] || fail "Refusing to overwrite vendor/apex/$name"
+    work="$(mktemp -d)"
+    trap 'rm -rf -- "$work"' EXIT
+    debugfs -R "dump $WIDEVINE_APEX $work/widevine.apex" "$IMAGES/vendor.img" >/dev/null 2>&1
+    unzip -q "$work/widevine.apex" apex_payload.img -d "$work"
+    mkdir "$work/payload"
+    debugfs -R "rdump / $work/payload" "$work/apex_payload.img" >/dev/null 2>&1
+    rm -rf -- "$work/payload/lost+found"
+    for file in apex_manifest.pb bin/hw/android.hardware.drm-service.widevine \
+                etc/$name.rc etc/vintf/$name.xml lib64/libcrypto.so; do
+        [[ -s "$work/payload/$file" ]] || fail "Widevine APEX lacks $file"
+    done
+    grep -qa "$name" "$work/payload/apex_manifest.pb" || fail 'Unexpected Widevine APEX name'
+    find "$work/payload" -type d -exec chmod 0755 {} +
+    find "$work/payload" -type f -exec chmod 0644 {} +
+    chmod 0755 "$work/payload/bin/hw/android.hardware.drm-service.widevine"
+    mkdir -p "$ROOTFS/vendor/apex"
+    mv -- "$work/payload" "$dest"
+    mkdir -p "$provenance"
+    (cd "$ROOTFS" && find "vendor/apex/$name" -type f -print0 | sort -z | xargs -0 sha256sum) > "$provenance/SHA256SUMS"
+    (cd "$IMAGES" && sha256sum vendor.img) > "$provenance/SOURCE-IMAGES.sha256"
+    printf 'Widevine security level: L3 (software)\nSource: vendor.img:%s\n' "$WIDEVINE_APEX" > "$provenance/COMPONENTS.txt"
+)
