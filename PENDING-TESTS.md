@@ -85,6 +85,8 @@ so that installing it also tests item 1.
      `ro.build.host=lepton-build`. No `Steam-Frame`, and no login name.
    - Any game's data starts fresh on the new bundle, including a Google
      sign-in. This happens with any new build.
+   - While the bundle is made, sysbake must no longer leave the terminal
+     broken. Before this branch it needed `reset` afterwards.
 6. **Build recovery on a real build.** On a finished build, run:
    ```
    bash image-14/scripts/build-images-x86_64.sh --repair
