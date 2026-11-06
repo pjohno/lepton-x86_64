@@ -15,6 +15,8 @@ Each item is one commit:
   "unfinished build" marker.
 - **Local install and host check:** `install-local.sh` and `lepton-host-check`.
 - **Double-click reinstall:** double-clicking an installed bundle offers "Reinstall".
+- **Neutral device brand:** the x86_64 image reports `Linux-PC` instead of
+  `Steam-Frame` (needs an image rebuild; see build machine item 0).
 - **Stronger tests:** "must not" checks that can now fail, and no real dialogs
   during tests.
 
@@ -66,6 +68,23 @@ so that installing it also tests item 1.
 
 ### On the build machine
 
+0. **Brand change (`PRODUCT_BRAND := Linux-PC`).** Rebuild the images, reusing
+   `out/`. Do not reset and do not delete `out/`. First copy the changed file
+   into the Android checkout, because `prepare-x86_64.sh` copied the device
+   files there only once:
+   ```
+   cp image-14/android_device_valve_lepton/lepton_x86_64/aosp_lepton_x86_64.mk \
+      <workspace>/aosp/device/waydroid/waydroid/lepton_x86_64/
+   bash image-14/scripts/build-images-x86_64.sh --execute
+   ```
+   Then make the bundles from the new images and check:
+   ```
+   tar -xzOf <bundle>.tar.gz ./compat_tool/images/rootfs/system/build.prop | grep -E 'fingerprint|brand|build\.(user|host)='
+   ```
+   - Expected: `Linux-PC/…` with `ro.build.user=lepton` and
+     `ro.build.host=lepton-build`. No `Steam-Frame`, and no login name.
+   - Any game's data starts fresh on the new bundle, including a Google
+     sign-in. This happens with any new build.
 6. **Build recovery on a real build.** On a finished build, run:
    ```
    bash image-14/scripts/build-images-x86_64.sh --repair
