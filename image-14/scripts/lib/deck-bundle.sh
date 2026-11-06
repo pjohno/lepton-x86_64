@@ -303,6 +303,8 @@ install -m 755 "$repo/compat_tool/tools/lepton-in-terminal" \
     "$tmp/payload/compat_tool/tools/lepton-in-terminal"
 install -m 755 "$repo/compat_tool/tools/lepton-manage-installs" \
     "$tmp/payload/compat_tool/tools/lepton-manage-installs"
+install -m 755 "$repo/compat_tool/tools/lepton-host-check" \
+    "$tmp/payload/compat_tool/tools/lepton-host-check"
 install -m 755 "$repo/compat_tool/tools/lepton-google-game-gui" \
     "$tmp/payload/compat_tool/tools/lepton-google-game-gui"
 # Self-contained tool: Steam starts lepton-x86_64-entry, which supplies this

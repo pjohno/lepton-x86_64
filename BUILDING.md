@@ -167,6 +167,37 @@ Each puts an **Install Lepton *ID*** icon on the Deck's desktop; continue with
 To update an existing install in place instead (its games keep working), add
 `--replace TOOL_ID`; `lepton-manage-installs --list` on the Deck shows the IDs.
 
+## Or install on this computer
+
+A bundle can also be installed on the build computer itself, with the same
+installer a Deck uses: it registers the Steam compatibility tool and adds
+**Lepton: Add Android game** to the application menu.
+
+```bash
+bash image-14/scripts/install-local.sh --check --bundle-id base-20261104
+bash image-14/scripts/install-local.sh --execute --bundle-id base-20261104
+```
+
+It first checks this computer (`compat_tool/tools/lepton-host-check`, which
+only reads and never installs anything) and stops if something is missing:
+
+- **Podman** (rootless), **Gamescope**, **setfattr** (package `attr`),
+  **Python 3**, and **zenity** or **kdialog**;
+- **Android Binder (BinderFS)** support in the kernel. Lepton never loads
+  kernel modules; check with `grep binder /proc/filesystems`;
+- the **native Steam** package, started once. Flatpak Steam cannot start
+  Lepton's containers and is not supported.
+
+Graphics: an **AMD GPU** is required; the Android image only contains AMD
+drivers. Software rendering on other GPUs (for example Intel) does not work
+yet: `--allow-non-amd` installs anyway, for testing only. Desktops: KDE Plasma on Wayland is tested (it is what the
+Deck's Desktop Mode uses). Other desktops, such as GNOME, are **untested**:
+the check warns but allows them.
+
+If the bundle does not exist yet but its stage does, the stage is packaged
+first. Installing again needs `--replace` (or `--into TOOL_ID`), as on the
+Deck. Restart Steam afterwards to see the new tool.
+
 ## Rebuilding later
 
 After pulling new commits or changing patches:

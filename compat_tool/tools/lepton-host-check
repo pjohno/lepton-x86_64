@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Check that this computer can run Lepton x86_64 games from Steam. Read-only:
+# it never installs packages, loads kernel modules or changes settings.
+#   lepton-host-check            report; exit 1 if anything required is missing
+# Used by the bundle installer and install-local.sh; also useful on its own.
+set -Euo pipefail
+
+# Test hooks: alternative /proc/filesystems, /sys/class/drm and os-release.
+FILESYSTEMS="${LEPTON_HOST_FILESYSTEMS:-/proc/filesystems}"
+DRM="${LEPTON_SYSFS_DRM:-/sys/class/drm}"
+OS_RELEASE="${LEPTON_HOST_OS_RELEASE:-/etc/os-release}"
+
+missing=0
+pass() { printf '[PASS] %s\n' "$*"; }
+warn() { printf '[WARN] %s\n' "$*"; }
+need() { printf '[FAIL] %s\n' "$*"; missing=$((missing + 1)); }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+[[ "$(uname -m)" == x86_64 ]] && pass 'x86_64 computer' || need "x86_64 computer required (this is $(uname -m))"
+os_id=''
+[[ ! -r "$OS_RELEASE" ]] || os_id="$(awk -F= '$1 == "ID" {gsub(/"/, "", $2); print $2; exit}' "$OS_RELEASE")"
+
+# Android runs in a rootless Podman container and needs Binder from the kernel.
+if have podman; then
+    pass 'Podman'
+    if ! grep -qs "^$(id -un):" /etc/subuid; then
+        warn "No /etc/subuid entry for $(id -un): rootless Podman may not start containers"
+    fi
+else
+    need 'Podman is not installed (package "podman")'
+fi
+if grep -qw binder "$FILESYSTEMS" 2>/dev/null; then
+    pass 'Android Binder (BinderFS) kernel support'
+else
+    need 'Android Binder (BinderFS) kernel support is not available. It comes from the
+       kernel (binder_linux, rust_binder or built in); Lepton never loads kernel modules.'
+fi
+
+# Steam launches each game inside a nested Gamescope (lepton-gamescope-bridge).
+have gamescope && pass 'Gamescope' || need 'Gamescope is not installed (package "gamescope")'
+have setfattr && pass 'setfattr (extended attributes)' || need 'setfattr is not installed (package "attr")'
+have python3 && pass 'Python 3' || need 'Python 3 is not installed (python3)'
+if have zenity || have kdialog; then
+    pass 'Dialogs (zenity or kdialog)'
+else
+    need 'Neither zenity nor kdialog is installed: the Lepton menu entries need one of them'
+fi
+
+# Steam: the native package/installer (~/.local/share/Steam). Flatpak Steam
+# cannot start Podman containers on the host.
+if [[ -d "$HOME/.local/share/Steam" ]]; then
+    pass "Steam ($HOME/.local/share/Steam)"
+elif [[ -d "$HOME/.var/app/com.valvesoftware.Steam" ]]; then
+    need 'Only Flatpak Steam was found; Lepton needs the native Steam package'
+else
+    need 'Steam not found: install Steam and start it once'
+fi
+
+# Graphics: the Android image only contains AMD drivers.
+amd=false
+for vendor_file in "$DRM"/renderD*/device/vendor; do
+    [[ -r "$vendor_file" && "$(<"$vendor_file")" == 0x1002 ]] && amd=true
+done
+if [[ "$amd" == true ]]; then
+    pass 'AMD GPU (hardware graphics)'
+else
+    warn 'No AMD GPU: hardware graphics are not available (AMD drivers only); see --allow-non-amd'
+fi
+
+# Desktop: KDE Plasma (Wayland) and SteamOS are tested. Elsewhere Steam game
+# windows use the Gaming Mode path through XWayland, which is untested.
+desktop="${XDG_CURRENT_DESKTOP:-}"
+if [[ "$os_id" == steamos ]]; then
+    pass 'SteamOS'
+elif [[ -n "$desktop" ]]; then
+    if [[ "${XDG_SESSION_TYPE:-}" == wayland && "${desktop,,}" =~ (kde|plasma) ]]; then
+        pass "Desktop: $desktop (Wayland)"
+    else
+        warn "Desktop: $desktop (${XDG_SESSION_TYPE:-unknown session}) is untested; KDE Plasma on Wayland is tested"
+        # Without these the bridge still runs: 1280x800, and an untagged window.
+        have xdpyinfo || warn 'xdpyinfo is not installed: game windows use 1280x800 (package "xdpyinfo")'
+        have xprop || warn 'xprop is not installed: Steam may not track the game window (package "xprop")'
+    fi
+fi
+
+if ((missing)); then
+    printf '[FAIL] %d requirement(s) missing; nothing was changed\n' "$missing"
+    exit 1
+fi
+printf '[PASS] This computer meets the requirements to run Lepton x86_64\n'

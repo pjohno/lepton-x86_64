@@ -3,7 +3,7 @@
 # Local regression suite: synthetic stages, no Android build/boot or network.
 set -Eeuo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-for test_name in test-build-pipeline-cli test-deploy-compat-rootfs-source test-deploy-packaging test-installer-adb test-inject-ndk-translation-odm test-workspace-and-inputs; do
+for test_name in test-build-pipeline-cli test-deploy-compat-rootfs-source test-deploy-packaging test-installer-adb test-install-local test-inject-ndk-translation-odm test-workspace-and-inputs; do
     bash "$repo/image-14/tests/$test_name.sh"
 done
 bash "$repo/image-14/tests/test-build-recovery.sh"
@@ -13,6 +13,7 @@ python3 -B "$repo/tests/test-add-game-tool-selection.py"
 bash "$repo/tests/test-add-game-gui.sh"
 bash "$repo/tests/test-manage-installs-gui.sh"
 bash "$repo/tests/test-tool-entry.sh"
+bash "$repo/tests/test-host-check.sh"
 bash "$repo/tests/test-deck-clean-slate.sh"
 bash "$repo/tests/test-steamlaunch-install-route.sh"
 bash "$repo/tests/test-keep-app-data.sh"

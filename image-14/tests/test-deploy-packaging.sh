@@ -6,6 +6,9 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 deploy="$repo/image-14/scripts/internal/deploy-compat-x86_64.sh"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
+# Installs below use a synthetic home; this host's Podman/Binder/Steam are
+# irrelevant (test-host-check.sh covers the check; one case below runs it).
+export LEPTON_SKIP_HOST_CHECK=1
 stage="$work/stage"; out="$work/bundles"
 mkdir -p "$stage/compat_tool/liblepton" "$stage/compat_tool/tools" \
     "$stage/compat_tool/sysbake/system" "$stage/compat_tool/images/rootfs/system/etc/init/hw" \
@@ -295,6 +298,20 @@ env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$g_home" python3 "$g_home/.local/b
 ! compgen -G "$g_home/.local/share/applications/lepton-x86_64-google-*" > /dev/null
 ! compgen -G "$g_home/Desktop/lepton-x86_64-google-*" > /dev/null
 reject --package-only --check --stage-dir "$stage" --bundle-dir "$out" --bundle-id invalid-tool --tool-id ../bad
+# The installer runs the bundled host check first: a computer without Binder
+# is refused before anything is installed (or downloaded).
+grep -qx './compat_tool/tools/lepton-host-check' "$work/contents"
+h_home="$work/host-check-home"; mkdir -p "$h_home/.local/share/Steam"
+printf 'nodev\tproc\n' > "$work/no-binder"
+: > "$FAKE_CURL_LOG"
+if env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u LEPTON_SKIP_HOST_CHECK LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 \
+        LEPTON_HOST_FILESYSTEMS="$work/no-binder" HOME="$h_home" bash "$pinned" --allow-non-amd > "$work/host-check.log" 2>&1; then
+    echo 'FAIL: installed without Binder'; exit 1
+fi
+grep -q 'Android Binder (BinderFS) kernel support is not available' "$work/host-check.log"
+grep -q 'nothing was changed' "$work/host-check.log"
+[[ ! -e "$h_home/.local/share/lepton_x86_64_fixture" && ! -e "$h_home/.config" && ! -s "$FAKE_CURL_LOG" ]]
+! compgen -G "$h_home/.local/share/.lepton-*" > /dev/null
 cp "$stage/tools/platform-tools/adb" "$stage/tools/bin/adb"
 reject --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id stray-adb
 grep -q 'would redistribute Google Platform-Tools' "$work/rejected.log"

@@ -38,9 +38,11 @@ Known limitations:
 | `image-14/scripts/build-images-x86_64.sh` | Build step 3: compiles system/vendor images and packages them as a rootfs |
 | `image-14/scripts/make-deck-bundle-x86_64.sh` | Build steps 4-5: rootfs to an installable Steam Deck bundle |
 | `image-14/scripts/transfer-deck-bundle.sh` | Sends a bundle to a Steam Deck over SSH (optionally installing it) |
+| `image-14/scripts/install-local.sh` | Installs a bundle on the build computer itself (checks its requirements first) |
 | `image-14/scripts/prepare-google-inputs.sh` | Turns a local Google Play emulator image zip into the optional GApps/NDK inputs |
 | `image-14/scripts/internal/` | Building blocks called by the scripts above (staging, packaging, transfer, sysbake, NDK extraction); not run directly |
 | `compat_tool/tools/lepton-install-bundle` | Deck-side installer, shipped next to each bundle |
+| `compat_tool/tools/lepton-host-check` | Read-only check that a computer can run Lepton games (run by the installer) |
 | `tests/runtime/` | Isolated local APK tests and JNI fixture builder |
 
 Some build components are Git submodules. Confirm that the URLs in `.gitmodules` are publicly accessible before attempting a fresh clone or reporting a reproducible clean build.

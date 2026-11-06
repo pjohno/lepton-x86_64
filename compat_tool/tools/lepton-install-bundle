@@ -188,6 +188,14 @@ BUNDLE_ID="${meta[3]}"; HAS_GAPPS="${meta[4]}"; HAS_NDK="${meta[5]}"
 MANAGE="$TEMP/compat_tool/tools/lepton-manage-installs"
 [[ -f "$MANAGE" ]] || fail 'Bundle lacks lepton-manage-installs'
 manage() { python3 "$MANAGE" "$@"; }
+# What games need at launch (Podman, Binder, Gamescope, Steam...), checked
+# before anything is installed. Older bundles do not have the check.
+HOST_CHECK="$TEMP/compat_tool/tools/lepton-host-check"
+if [[ -f "$HOST_CHECK" && "${LEPTON_SKIP_HOST_CHECK:-}" != 1 ]]; then
+    info 'Checking that this computer can run Lepton games'
+    bash "$HOST_CHECK" ||
+        fail 'This computer is missing what Lepton needs (see above); nothing was changed. LEPTON_SKIP_HOST_CHECK=1 installs anyway.'
+fi
 # Started from a desktop icon: offer "new or replace" (tap-only).
 INTERACTIVE=false
 if [[ "$PAUSE" == true && "$MODE" == execute && -z "${LEPTON_NO_DIALOGS:-}" &&
