@@ -283,12 +283,13 @@ def dialog(ui, kind, text, extra=()):
     return subprocess.run(args + list(extra), stderr=subprocess.DEVNULL).returncode == 0
 
 
-def choose(ui, prompt, rows, radio=False):
-    """rows: [(tag, label, checked)]; returns the selected tags (None = cancelled)."""
+def choose(ui, prompt, rows, header, radio=False):
+    """rows: [(tag, label, checked)]; header: the label column's title (zenity).
+    Returns the selected tags (None = cancelled)."""
     if ui == "zenity":
         args = ["zenity", "--list", "--radiolist" if radio else "--checklist", "--title=" + TITLE,
                 "--text=" + prompt, "--width=760", "--height=420", "--column=",
-                "--column=ID", "--column=Install", "--print-column=2", "--separator=\n", "--hide-column=2"]
+                "--column=ID", "--column=" + header, "--print-column=2", "--separator=\n", "--hide-column=2"]
         for tag, label, checked in rows:
             args += ["TRUE" if checked else "FALSE", tag, label]
     else:
@@ -322,7 +323,8 @@ def gui_remove(exclude, prompt, quiet_if_empty):
         if not quiet_if_empty:
             dialog(ui, "info", "No other Lepton installs or backups were found.")
         return 0
-    picked = choose(ui, prompt, [(e["id"], describe(e), False) for e in candidates])
+    picked = choose(ui, prompt, [(e["id"], describe(e), False) for e in candidates],
+                    "Select bundle to remove")
     if not picked:
         return 0
     names = "\n".join("  - " + lookup(candidates, p)["name"] for p in picked)
@@ -356,7 +358,7 @@ def gui_choose_target(new_id, new_name):
         rows = [("new", "Install as a new tool: " + new_name + " (keep the others)", True)]
     rows += [(e["id"], "Replace " + describe(e) + " (its Steam shortcuts keep working)", False)
              for e in others]
-    picked = choose(ui, "How should " + new_name + " be installed?", rows, radio=True)
+    picked = choose(ui, "How should " + new_name + " be installed?", rows, "Choose one", radio=True)
     if not picked:
         return 1
     print(picked[0])
