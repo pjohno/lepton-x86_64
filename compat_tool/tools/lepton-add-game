@@ -167,12 +167,9 @@ def shortcut_entry(slot, appid, name, apk, options, start_dir=None):
     return content
 
 
-def find_mapping_block(text):
-    """Find CompatToolMapping's braces, ignoring braces inside quoted values."""
-    matches = list(re.finditer(r'"CompatToolMapping"\s*\{', text, re.I))
-    if len(matches) != 1:
-        fail("Expected one CompatToolMapping block in Steam config.vdf")
-    start = text.find("{", matches[0].start())
+def block_end(text, start):
+    """Index of the brace closing the block opened at text[start]; quoted
+    values may contain braces."""
     depth = 0
     quoted = False
     escape = False
@@ -189,8 +186,71 @@ def find_mapping_block(text):
         elif c == "}":
             depth -= 1
             if depth == 0:
-                return start, i
-    fail("Unterminated CompatToolMapping block")
+                return i
+    return None
+
+
+# Where Steam keeps CompatToolMapping in config/config.vdf.
+STEAM_SECTION = ("installconfigstore", "software", "valve", "steam")
+
+
+def find_section(text, path):
+    """Index of the "{" opening the nested section path (case-insensitive)."""
+    keys = []
+    pending = None
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == '"':
+            end = i + 1
+            while end < len(text) and text[end] != '"':
+                end += 2 if text[end] == "\\" else 1
+            value = text[i + 1:end]
+            # A string after a key is that key's value; otherwise it is a key.
+            pending = None if pending is not None else value
+            i = end + 1
+            continue
+        if c == "{":
+            keys.append((pending or "").lower())
+            pending = None
+            if tuple(keys) == path:
+                return i
+        elif c == "}":
+            if keys: keys.pop()
+            pending = None
+        i += 1
+    return None
+
+
+def find_mapping_block(text):
+    """Find CompatToolMapping's braces, ignoring braces inside quoted values."""
+    matches = list(re.finditer(r'"CompatToolMapping"\s*\{', text, re.I))
+    if len(matches) != 1:
+        fail("Expected one CompatToolMapping block in Steam config.vdf")
+    start = text.find("{", matches[0].start())
+    end = block_end(text, start)
+    if end is None:
+        fail("Unterminated CompatToolMapping block")
+    return start, end
+
+
+def with_mapping_block(text):
+    """Steam only writes CompatToolMapping once some game has a compatibility
+    tool (always on a Steam Deck, often not on a desktop): add an empty one
+    where Steam keeps it."""
+    if re.search(r'"CompatToolMapping"\s*\{', text, re.I):
+        return text, False
+    start = find_section(text, STEAM_SECTION)
+    end = None if start is None else block_end(text, start)
+    if end is None:
+        fail("Steam config.vdf has no Software/Valve/Steam section; start Steam once, "
+             "exit it, then try again")
+    indent = "\t" * len(STEAM_SECTION)
+    block = indent + '"CompatToolMapping"\n' + indent + "{\n" + indent + "}\n"
+    line = text.rfind("\n", 0, end) + 1
+    if text[line:end].strip():
+        return text[:end] + "\n" + block + text[end:], True
+    return text[:line] + block + text[line:], True
 
 
 def atomic_replace(path, payload):
@@ -367,7 +427,9 @@ def main():
             notes.append("Reusing the saved game data of an earlier shortcut with this name "
                          "(" + str(data_dir) + "); use a different name to start fresh.")
         original_config = config.read_bytes()
-        decoded = original_config.decode("utf-8")
+        decoded, created = with_mapping_block(original_config.decode("utf-8"))
+        if created:
+            notes.append("Added Steam's compatibility-tool list (first game with a compatibility tool).")
         start, end = find_mapping_block(decoded)
         if re.search(r'"\s*' + str(appid) + r'\s*"\s*\{', decoded[start:end]):
             # No shortcut has this AppID (checked above), so this mapping was

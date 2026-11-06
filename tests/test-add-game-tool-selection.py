@@ -22,7 +22,10 @@ class ToolSelectionTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         loader = importlib.machinery.SourceFileLoader('lepton_add_game_test', str(SCRIPT))
         self.module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-        loader.exec_module(self.module)
+        # Never read this computer's own Lepton installs (~/.config/lepton-x86_64).
+        with patch.dict('os.environ', {'HOME': str(self.root / 'home'),
+                                       'XDG_CONFIG_HOME': str(self.root / 'home/.config')}):
+            loader.exec_module(self.module)
         self.module.STEAM = self.root / 'Steam'
         self.module.INSTALL = self.root / 'standard'
         self.alt = self.root / 'ndk'
@@ -228,6 +231,35 @@ class ToolSelectionTests(unittest.TestCase):
         self.config.write_text('"CompatToolMapping"\n{\n"' + str(self.appid()) + '"\n{\n"x"\n{\n}\n}\n}\n')
         with self.assertRaisesRegex(ValueError, 'unexpected mapping'):
             self.run_main()
+        self.assertFalse((self.user / 'shortcuts.vdf').exists())
+
+    def test_missing_mapping_block_is_created_in_steam_section(self):
+        # A desktop Steam that has never used a compatibility tool has no
+        # CompatToolMapping yet (a Steam Deck always has one).
+        self.config.write_text(
+            '"InstallConfigStore"\n{\n\t"Software"\n\t{\n\t\t"Valve"\n\t\t{\n\t\t\t"Steam"\n\t\t\t{\n'
+            '\t\t\t\t"Note"\t\t"a { brace } in a value"\n\t\t\t\t"Accounts"\n\t\t\t\t{\n\t\t\t\t}\n'
+            '\t\t\t}\n\t\t}\n\t}\n\t"streaming"\n\t{\n\t}\n}\n')
+        self.assertIn('Added Steam', self.run_main_output('--dry-run'))
+        self.run_main()
+        text = self.config.read_text()
+        start = self.module.find_section(text, self.module.STEAM_SECTION + ('compattoolmapping',))
+        self.assertIsNotNone(start)
+        self.assertIn('"' + str(self.appid()) + '"', text[start:self.module.block_end(text, start)])
+        self.assertIn('"streaming"\n\t{\n\t}\n}\n', text)
+        second = self.root / 'second.apk'
+        second.touch()
+        self.apk = second
+        self.run_main()  # the next game uses the same block
+        self.assertEqual(text.count('CompatToolMapping'), 1)
+        self.assertEqual(self.config.read_text().count('CompatToolMapping'), 1)
+
+    def test_config_without_steam_section_is_not_changed(self):
+        self.config.write_text('"InstallConfigStore"\n{\n\t"streaming"\n\t{\n\t}\n}\n')
+        original = self.config.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'no Software/Valve/Steam section'):
+            self.run_main()
+        self.assertEqual(self.config.read_bytes(), original)
         self.assertFalse((self.user / 'shortcuts.vdf').exists())
 
     def test_invalid_tool_id_is_rejected(self):
