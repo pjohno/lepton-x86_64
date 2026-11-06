@@ -230,10 +230,14 @@ bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id base-YYYY
   bash image-14/scripts/build-images-x86_64.sh --execute
   ```
 
-  `--repair` only deletes compiled files (objects, libraries, jars, APKs)
-  that are not valid, and lists them in `logs/`. If the build still fails the
-  same way afterwards, delete `aosp/out/` for a full rebuild (no new
-  download; several hours).
+  Use `--repair` only when `--execute` will not complete. It deletes every
+  compiled file (objects, libraries, jars, APKs) that does not look like a
+  valid one, and lists them in `logs/`. It errs on the side of caution: on a
+  healthy build it also deletes a few dozen good files that Android writes in
+  another format (text or JSON with a `.o` or `.a` name). Those are simply
+  rebuilt by the next `--execute`, which takes minutes, not hours. If the
+  build still fails the same way afterwards, delete `aosp/out/` for a full
+  rebuild (no new download; several hours).
 - A failed **prepare** during patching refuses to continue automatically, so
   that a half-patched tree is never built. Run `prepare-x86_64.sh --reset` to
   start the patching from clean sources.

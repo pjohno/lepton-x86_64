@@ -90,8 +90,14 @@ so that installing it also tests item 1.
 6. **Build recovery on a real build.** On a finished build, run:
    ```
    bash image-14/scripts/build-images-x86_64.sh --repair
+   bash image-14/scripts/build-images-x86_64.sh --execute
    ```
-   - It must report **0** damaged files.
+   - `--repair` reports about 27 files on a healthy build. These are false
+     positives, kept on purpose: Android's text/JSON outputs named `.o`/`.a`
+     (minijail, seccomp, cronet, `asm_defines`, AIDL metadata). Deleting a
+     good file only costs a short rebuild; missing a damaged one fails the
+     build much later. (Tested 2026-11-06: 27 files, rebuilt fine.)
+   - The following `--execute` completes, rebuilding only those.
    - `--check` must then not warn about an unfinished build.
 
 ### On the desktop with an AMD GPU (Intel CPU)

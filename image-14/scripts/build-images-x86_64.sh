@@ -12,8 +12,10 @@ input of make-deck-bundle-x86_64.sh. Both are replaced on every build.
 
 A stopped or failed build continues where it stopped when run again. If a
 build was cut off (power cut, crash), --execute first deletes the files that
-build left damaged. --repair does the same for the whole output folder, e.g.
-when a build fails with "neither ET_REL nor LLVM bitcode" or "file truncated".
+build left damaged. --repair does the same for the whole output folder; use it
+only when --execute will not complete, e.g. it keeps failing with "neither
+ET_REL nor LLVM bitcode" or "file truncated". It errs on the side of caution
+and also deletes some good files, which the next --execute rebuilds quickly.
 HELP
 }
 
