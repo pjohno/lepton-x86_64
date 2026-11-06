@@ -6,6 +6,7 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 for test_name in test-build-pipeline-cli test-deploy-compat-rootfs-source test-deploy-packaging test-installer-adb test-inject-ndk-translation-odm test-workspace-and-inputs; do
     bash "$repo/image-14/tests/$test_name.sh"
 done
+bash "$repo/image-14/tests/test-build-recovery.sh"
 bash "$repo/compat_tool/liblepton/ndk_auxv/test.sh"
 python3 -B "$repo/tests/test-build-integration.py"
 python3 -B "$repo/tests/test-add-game-tool-selection.py"

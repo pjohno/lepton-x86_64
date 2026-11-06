@@ -182,7 +182,27 @@ bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id base-YYYY
 
 - Every step prints the path of its log. Logs live in the workspace's `logs/`
   and stay after failures.
-- A failed **build** can simply be run again; it continues where it stopped.
+- A failed or stopped **build** can simply be run again; it continues where
+  it stopped.
+- **Power cut, crash or forced shutdown during a build.** Avoid these if you
+  can: the build is long and writes a great many files, and files written in
+  the last seconds before the power went may be empty or garbage even though
+  the build had recorded them as finished. Just run the build again: it
+  notices that the previous run did not finish ("The previous image build did
+  not finish"), deletes the damaged files it finds and rebuilds only those.
+  If a build still fails with errors such as `neither ET_REL nor LLVM
+  bitcode`, `file format not recognized` or `file truncated` (the build then
+  prints a hint), check the whole output and continue:
+
+  ```bash
+  bash image-14/scripts/build-images-x86_64.sh --repair
+  bash image-14/scripts/build-images-x86_64.sh --execute
+  ```
+
+  `--repair` only deletes compiled files (objects, libraries, jars, APKs)
+  that are not valid, and lists them in `logs/`. If the build still fails the
+  same way afterwards, delete `aosp/out/` for a full rebuild (no new
+  download; several hours).
 - A failed **prepare** during patching refuses to continue automatically, so
   that a half-patched tree is never built. Run `prepare-x86_64.sh --reset` to
   start the patching from clean sources.
