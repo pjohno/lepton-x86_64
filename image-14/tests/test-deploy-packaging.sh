@@ -260,6 +260,26 @@ grep -q 'zenity --list --checklist' "$work/gui-install.log"
 [[ ! -e "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_fixture.vdf" ]]
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_dev.env ]]
 grep -q 'Press Enter to close' "$work/gui-install.out"
+# Double-clicking the installer of a bundle that is already installed offers
+# "Reinstall" (preselected) and replaces it in place; other installs stay.
+deck > "$work/fixture-again.log"
+touch "$dest/stale-marker"
+cat > "$work/gui-bin/zenity" <<'SH'
+#!/bin/bash
+echo "zenity $*" >> "$UI_LOG"
+case "$1" in
+  --list) if [[ " $* " == *" --radiolist "* ]]; then echo lepton_x86_64_fixture; fi ;;
+  --question) exit 0 ;;
+esac
+SH
+env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u LEPTON_NO_DIALOGS LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_DIALOG=zenity \
+    WAYLAND_DISPLAY=test-display UI_LOG="$work/gui-reinstall.log" PATH="$work/gui-bin:$PATH" HOME="$deck_home" \
+    bash "$pinned" --allow-non-amd --pause < /dev/null > "$work/gui-reinstall.out" 2>&1 ||
+    { cat "$work/gui-reinstall.out"; echo 'FAIL: double-click reinstall'; exit 1; }
+grep -q 'Reinstall Lepton x86_64 (community) - fixture over the existing copy' "$work/gui-reinstall.log"
+not grep -q 'Install as a new tool' "$work/gui-reinstall.log"
+[[ -x "$dest/compat_tool/lepton" && ! -e "$dest/stale-marker" && -f "$legacy/BUNDLE.json" ]]
+not compgen -G "$dest.previous-*" > /dev/null
 mkdir -p "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore"
 printf 'synthetic' > "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk"
 mkdir -p "$stage/compat_tool/images/rootfs/system/framework"

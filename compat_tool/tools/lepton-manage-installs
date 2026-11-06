@@ -339,15 +339,23 @@ def gui_remove(exclude, prompt, quiet_if_empty):
 
 
 def gui_choose_target(new_id, new_name):
-    """Ask whether to install as a new tool or overwrite an existing install."""
-    installs = [e for e in discover() if e["kind"] == "install" and e["id"] != new_id]
+    """Ask whether to install as a new tool, reinstall this one, or overwrite
+    another install. Prints "new" or the tool ID to overwrite."""
+    installs = [e for e in discover() if e["kind"] == "install"]
+    same = [e for e in installs if e["id"] == new_id]
+    others = [e for e in installs if e["id"] != new_id]
     if not installs:
         print("new")
         return 0
     ui = dialog_tool()
-    rows = [("new", "Install as a new tool: " + new_name + " (keep the others)", True)]
+    if same:
+        # Double-clicking the installer of an installed bundle: reinstall it.
+        rows = [(new_id, "Reinstall " + new_name + " over the existing copy "
+                 "(its Steam shortcuts and game data are kept)", True)]
+    else:
+        rows = [("new", "Install as a new tool: " + new_name + " (keep the others)", True)]
     rows += [(e["id"], "Replace " + describe(e) + " (its Steam shortcuts keep working)", False)
-             for e in installs]
+             for e in others]
     picked = choose(ui, "How should " + new_name + " be installed?", rows, radio=True)
     if not picked:
         return 1

@@ -79,7 +79,10 @@ The installer:
 
 When started from the desktop icon and other Lepton installs exist, the
 installer first asks whether to **install as a new tool** or **replace** one of
-them, and afterwards offers a tick-list of older installs to remove. Steam does
+them, and afterwards offers a tick-list of older installs to remove. If this
+bundle is already installed, the first choice is **reinstall** it over the
+existing copy instead (to undo local changes; its Steam shortcuts and game data
+are kept). Steam does
 not need to be closed for installing, replacing or removing (only for adding
 games); restart Steam afterwards so it shows the new tool.
 

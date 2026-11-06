@@ -84,10 +84,22 @@ grep -q 'Removed: Lepton B' "$work/ui.log.--info"
 # Nothing else left: --quiet-if-empty shows no dialog at all.
 reset; PICK=x manage --gui --exclude lepton_a --quiet-if-empty
 [[ ! -e "$work/ui.log" ]]
-# Only the install being (re)installed exists: "new" without any dialog.
+# The bundle being installed is already installed (double-clicked again):
+# "Reinstall" is offered and preselected, never "new"; cancel changes nothing.
 reset
-[[ "$(PICK=x manage --gui-choose-target --new-id lepton_a --new-name A)" == new ]]
+[[ "$(PICK=lepton_a manage --gui-choose-target --new-id lepton_a --new-name A)" == lepton_a ]]
+grep -Fqx 'Reinstall A over the existing copy (its Steam shortcuts and game data are kept)' "$work/ui.log.list"
+grep -A1 -x -- '--hide-column=2' "$work/ui.log.list" | grep -qx TRUE
+not() { if "$@"; then echo "FAIL: unexpectedly succeeded: $*" >&2; exit 1; fi; }
+not grep -Fq 'Install as a new tool' "$work/ui.log.list"
+if PICK=__cancel__ manage --gui-choose-target --new-id lepton_a --new-name A > /dev/null; then echo 'FAIL: cancel accepted'; exit 1; fi
+# No installs at all: "new" without any dialog.
+mv "$home/.config/lepton-x86_64" "$work/config-aside"; mv "$home/.local/share/Steam/compatibilitytools.d" "$work/vdf-aside"
+mkdir -p "$home/.local/share/Steam/compatibilitytools.d"; reset
+[[ "$(PICK=x manage --gui-choose-target --new-id lepton_z --new-name Z)" == new ]]
 [[ ! -e "$work/ui.log" ]]
+rm -rf "$home/.local/share/Steam/compatibilitytools.d"
+mv "$work/config-aside" "$home/.config/lepton-x86_64"; mv "$work/vdf-aside" "$home/.local/share/Steam/compatibilitytools.d"
 
 # kdialog: quoted checklist output; removing the last install clears links.
 make_install lepton_b 'Lepton B'
