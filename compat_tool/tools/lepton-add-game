@@ -20,6 +20,7 @@ LEGACY_TOOL = "lepton_x86_64_dev"
 LEGACY_INSTALL = Path.home() / ".local/share/lepton-x86_64-dev"
 STEAM = Path.home() / ".local/share/Steam"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "lepton-x86_64"
+GOOGLE_SERVICES_APK = "compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk"
 
 
 def read_env(path):
@@ -309,7 +310,11 @@ def main():
             str(INSTALL / "tests/runtime/run-apk.sh") in value.get("LaunchOptions", "")
             and ("--profile " + args.runtime_profile + " ") in value.get("LaunchOptions", "")
         ):
-            fail("A shortcut for this APK/profile already exists: " + value.get("AppName", str(apk)))
+            # Steam can take a while to save a deleted shortcut (in practice
+            # sometimes only after a restart of the Deck).
+            fail("A shortcut for this APK/profile already exists: " + value.get("AppName", str(apk))
+                 + "\nIf you have deleted it in Steam, Steam may not have saved that yet: "
+                 "restart the Steam Deck and try again (or copy the file to another folder).")
     slot = 0
     while str(slot) in entries:
         slot += 1
@@ -347,12 +352,35 @@ def main():
         new_shortcuts = b"\x00shortcuts\x00" + new_shortcuts + b"\x08"
 
     new_config = None
+    notes = []
     if not args.runtime_profile:
+        # Steam keeps a deleted shortcut's game data (compatdata/<AppID>), and
+        # the same APK path + name gives the same AppID, so a re-added game
+        # continues with that data.
+        data_dir = STEAM / "steamapps/compatdata" / str(appid)
+        if data_dir.is_dir():
+            if ((data_dir / "lepton-google-game").is_file()
+                    and not (INSTALL / GOOGLE_SERVICES_APK).is_file()):
+                fail("A deleted shortcut with this name saved this game as a Google game, "
+                     "but " + TOOL + " has no Google services. Add it with a Lepton GApps "
+                     "tool, or use a different name to start with fresh game data.")
+            notes.append("Reusing the saved game data of an earlier shortcut with this name "
+                         "(" + str(data_dir) + "); use a different name to start fresh.")
         original_config = config.read_bytes()
         decoded = original_config.decode("utf-8")
         start, end = find_mapping_block(decoded)
         if re.search(r'"\s*' + str(appid) + r'\s*"\s*\{', decoded[start:end]):
-            fail("Steam config already has a mapping for this AppID; refusing to overwrite")
+            # No shortcut has this AppID (checked above), so this mapping was
+            # left behind when the shortcut was deleted in Steam: replace it.
+            leftover = re.search(r'"\s*' + str(appid) + r'\s*"\s*\{[^{}]*\}', decoded[start:end])
+            if not leftover:
+                fail("Steam config has an unexpected mapping for this AppID; refusing to overwrite")
+            previous = re.search(r'"name"\s*"([^"]*)"', leftover.group(0))
+            notes.append("Replacing the compatibility tool left by a deleted shortcut ("
+                         + (previous.group(1) if previous and previous.group(1) else "none")
+                         + ") with " + TOOL + ".")
+            decoded = decoded[:start + leftover.start()] + decoded[start + leftover.end():]
+            start, end = find_mapping_block(decoded)
         new_mapping = (
             '\n\t\t\t\t\t\t"' + str(appid) + '"\n'
             '\t\t\t\t\t\t{\n'
@@ -366,6 +394,8 @@ def main():
         print("PASS: shortcut is valid; no Steam files modified" if args.runtime_profile else "PASS: shortcut and compatibility mapping are valid; no Steam files modified")
         print("Proposed shortcut:", name, "| Steam AppID:", appid)
         print("Hotplug:", "enabled (experimental)" if args.hotplug else "off")
+        for note in notes:
+            print("Note:", note)
         return
     # Each replacement is atomic. If the second write fails, restore the
     # first file, including the original absence of shortcuts.vdf.
@@ -384,6 +414,8 @@ def main():
     print("Steam AppID:", appid)
     print("Saved runtime profile:" if args.runtime_profile else "Compatibility tool:", args.runtime_profile or TOOL)
     print("Hotplug:", "enabled (experimental)" if args.hotplug else "off (safe startup mounts)")
+    for note in notes:
+        print("Note:", note)
     print("It is now safe to start Steam again; the game is under Non-Steam games.")
     print("Steam Input native touchscreen layout must be enabled manually.")
 
