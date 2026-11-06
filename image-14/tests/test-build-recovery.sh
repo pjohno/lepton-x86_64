@@ -5,6 +5,7 @@
 # damaged files point to --repair. Fake checkout and fake podman: no Android
 # build, container or network.
 set -Eeuo pipefail
+not() { if "$@"; then echo "FAIL: unexpectedly succeeded: $*" >&2; exit 1; fi; }
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 work="$(mktemp -d)"
 cleanup() { [[ -z "${build_pid:-}" ]] || kill -9 "$build_pid" 2>/dev/null || true; rm -rf -- "$work"; }
@@ -92,12 +93,12 @@ grep -q 'marker present during build' "$work/trace"
 [[ ! -e "$state/build.running" ]] || fail 'marker kept after the build ended by itself'
 report="$(compgen -G "$ws/logs/images-*-damaged-files.txt")"
 [[ $(wc -l < "$report") == 5 ]] && grep -q '/inquiry.o$' "$report"
-! grep -q '\[HINT\]' "$work/out.log" || fail 'hint for an unrelated failure'
+not grep -q '\[HINT\]' "$work/out.log" || fail 'hint for an unrelated failure'
 
 # A failure that looks like damaged files suggests --repair.
 FAKE_BUILD=damaged build --execute && fail 'fake build should fail'
 grep -q 'HINT.*build-images-x86_64.sh --repair' "$work/out.log"
-! grep -q 'Checking files written by the unfinished build' "$work/out.log"  # no marker this time
+not grep -q 'Checking files written by the unfinished build' "$work/out.log"  # no marker this time
 
 # --repair checks the whole output, including damage older than any marker.
 build --repair || fail 'repair failed'

@@ -3,6 +3,7 @@
 # lepton-x86_64-entry: built-in ADB/PATH/flatscreen defaults, bridge only for
 # game launches, and never a second bridge. Uses a fake install tree.
 set -Eeuo pipefail
+not() { if "$@"; then echo "FAIL: unexpectedly succeeded: $*" >&2; exit 1; fi; }
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
@@ -49,7 +50,7 @@ grep -qx 'BRIDGE=1' "$work/log"
 
 # Other verbs never start a bridge.
 run "$entry" getcompatpath /x
-! grep -qx bridge "$work/log"
+not grep -qx bridge "$work/log"
 grep -qx 'lepton getcompatpath /x' "$work/log"
 
 # Explicit settings win over the built-in defaults.

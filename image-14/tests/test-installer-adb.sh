@@ -5,6 +5,7 @@
 # Optional: LEPTON_REAL_ADB_ZIP=/path/platform-tools_r37.0.1-linux.zip also
 # installs the real Google ZIP against the shipped (unmodified) pin.
 set -Eeuo pipefail
+not() { if "$@"; then echo "FAIL: unexpectedly succeeded: $*" >&2; exit 1; fi; }
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 template="$repo/compat_tool/tools/lepton-install-bundle"
 source "$repo/image-14/tests/lib/fake-google-adb.sh"
@@ -99,19 +100,19 @@ grep -qx 'Version: 37.0.1-15733141' "$dest/tools/platform-tools/SOURCE.txt"
 [[ "$(LC_ALL=C ls "$dest/tools/platform-tools")" == $'SOURCE.txt\nadb' ]]
 [[ -z "$(find "$dest" -name '*.zip' -o -name fastboot)" ]]
 [[ -f "$vdf" && -x "$dest/compat_tool/lepton" ]]
-! compgen -G "$data/.lepton-*" > /dev/null
+not compgen -G "$data/.lepton-*" > /dev/null
 
 # A failed download while replacing leaves the existing install untouched.
 echo keep > "$dest/marker"
 FAKE_FAIL=1 deck "$pinned" --replace > "$work/replace-fail.log" 2>&1 && fail 'replace with failed download accepted'
 grep -q 'Nothing was installed or changed' "$work/replace-fail.log" || { cat "$work/replace-fail.log"; fail 'replace failure message'; }
 [[ "$(cat "$dest/marker")" == keep && -x "$adb" && -f "$vdf" ]]
-! compgen -G "$dest.previous-*" > /dev/null
-! compgen -G "$data/.lepton-*" > /dev/null
+not compgen -G "$dest.previous-*" > /dev/null
+not compgen -G "$data/.lepton-*" > /dev/null
 # A good download replaces it as before.
 deck "$pinned" --replace > "$work/replace.log"
 [[ ! -e "$dest/marker" && -x "$adb" ]]
-! compgen -G "$dest.previous-*" > /dev/null
+not compgen -G "$dest.previous-*" > /dev/null
 
 # Offline: a local copy of the ZIP, same checks, no download attempted.
 rm -f "$work/curl.log"
