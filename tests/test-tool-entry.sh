@@ -31,7 +31,12 @@ echo "old-bridge" >> "$LOG"
 SH
 chmod +x "$root/compat_tool/lepton" "$root/compat_tool/tools/lepton-gamescope-bridge" "$root/tools/platform-tools/adb" "$work/old/lepton-gamescope-bridge"
 entry="$root/compat_tool/lepton-x86_64-entry"
-run() { rm -f "$work/log"; env -u LEPTON_ADB -u APP_WANTS_FLATSCREEN -u LEPTON_BRIDGE_ACTIVE -u LEPTON_NO_BRIDGE LOG="$work/log" "$@"; }
+# Never reach the real desktop: no display, and a fake zenity first on PATH.
+mkdir -p "$work/bin"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$DIALOG_LOG"\n' > "$work/bin/zenity"
+chmod +x "$work/bin/zenity"
+run() { rm -f "$work/log"; env -u LEPTON_ADB -u APP_WANTS_FLATSCREEN -u LEPTON_BRIDGE_ACTIVE -u LEPTON_NO_BRIDGE \
+    -u DISPLAY -u WAYLAND_DISPLAY PATH="$work/bin:$PATH" DIALOG_LOG="$work/dialog.log" LOG="$work/log" "$@"; }
 
 # Game launch: bridge first, then Valve's lepton with the original arguments.
 run "$entry" waitforexitandrun -- /games/My\ Game.apk
@@ -69,10 +74,13 @@ grep -qx "ADB=$root/tools/platform-tools/adb" "$work/log"
 # A game marked as needing Google services refuses a tool without them, before
 # anything starts; with Google services it launches normally.
 mkdir -p "$work/compat/1"; touch "$work/compat/1/lepton-google-game"
-if run env STEAM_COMPAT_DATA_PATH="$work/compat/1" LEPTON_NO_BRIDGE=true "$entry" waitforexitandrun -- a.apk 2> "$work/google.err"; then
+# The player sees the reason in a dialog (the fake zenity records it).
+if run env STEAM_COMPAT_DATA_PATH="$work/compat/1" LEPTON_NO_BRIDGE=true WAYLAND_DISPLAY=test-display \
+        "$entry" waitforexitandrun -- a.apk 2> "$work/google.err"; then
     echo 'FAIL: Google game started without Google services'; exit 1
 fi
 grep -q 'needs Google services' "$work/google.err"
+grep -q -- '--error --title=Lepton' "$work/dialog.log" && grep -q 'needs Google services' "$work/dialog.log"
 [[ ! -e "$work/log" ]]
 gms="$root/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore"
 mkdir -p "$gms" && touch "$gms/PrebuiltGmsCore.apk"
