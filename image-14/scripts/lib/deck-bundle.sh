@@ -185,7 +185,6 @@ for path in \
     compat_tool/images/rootfs/system/etc/init/hw/init.rc \
     compat_tool/images/rootfs/vendor/lib64/hw/vulkan.radeon.so \
     compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure \
-    tools/platform-tools/adb \
     tools/bin/inotifywait; do
     [[ -e "$stage/$path" ]] || { echo "ERROR: missing staging asset: $path" >&2; exit 1; }
 done
@@ -241,7 +240,21 @@ mkdir -p -- "$tmp/payload"
     exit 1
 }
 rsync -a --no-owner --no-group --exclude='/liblepton/apk_extractor/target/' --exclude=__pycache__/ -- "$stage/compat_tool/" "$tmp/payload/compat_tool/"
-rsync -a --no-owner --no-group -- "$stage/tools/" "$tmp/payload/tools/"
+# Google's adb may be in the stage for local testing, but is never
+# redistributed: the Deck installer downloads and verifies it from Google.
+rsync -a --no-owner --no-group --exclude='/platform-tools/' \
+    --exclude='/licenses/google-platform-tools-NOTICE.txt' -- "$stage/tools/" "$tmp/payload/tools/"
+if [[ -f "$tmp/payload/tools/PROVENANCE.txt" ]]; then
+    # Replace the stage's ADB lines with a statement of where it comes from.
+    awk '!/^Google /' "$tmp/payload/tools/PROVENANCE.txt" > "$tmp/PROVENANCE.filtered"
+    cat "$tmp/PROVENANCE.filtered" > "$tmp/payload/tools/PROVENANCE.txt"
+fi
+{
+    printf 'Google Android Platform-Tools adb: NOT included in this archive.\n'
+    printf 'The installer downloads it from Google on the installing machine and\n'
+    printf 'accepts it only with the pinned SHA256 and version; see ADB_URL,\n'
+    printf 'ADB_SHA256 and ADB_VERSION in compat_tool/tools/lepton-install-bundle.\n'
+} >> "$tmp/payload/tools/PROVENANCE.txt"
 
 # Refresh all tested shell fixes without touching the staged materialized
 # Android rootfs (the Fedora checkout holds only an external rootfs symlink).
@@ -342,6 +355,13 @@ Install (Desktop Mode): double-tap the "Install Lepton {bundle}" desktop icon
 (or the .install.sh file in Dolphin), or in Konsole:
   bash ~/Downloads/lepton-deck-bundles/{installer}
 
+The installer needs an internet connection: Google's Android Debug Bridge
+(adb) is not included in this bundle. The installer downloads the official
+Android Platform-Tools ZIP directly from Google (dl.google.com), installs only
+adb (pinned SHA256 and version) plus Google's NOTICE.txt, and changes nothing
+if that download or check fails. Offline: --adb-zip FILE with a copy of the
+same official ZIP.
+
 The installer verifies the checksum, extracts to ~/.local/share/{directory},
 registers the Steam compatibility tool "{name}", and writes
 ~/.config/lepton-x86_64/{tool}.env. It never overwrites an existing install
@@ -352,7 +372,7 @@ Steam does not need to be closed to install or remove; restart it afterwards.
 
 Then use the new desktop/menu entries (no typing needed):
   "Lepton: Check graphics"      confirms AMD RADV graphics
-  "Lepton: Add Android game"    picks an APK; asks you to exit Steam, then
+  "Lepton: Add Android game"    picks an APK/APKM; asks you to exit Steam, then
                                 says when it is safe to start Steam again
 Terminal equivalents:
   ~/.local/bin/lepton-run-apk --gpu-check --execute
@@ -402,7 +422,14 @@ done
 printf 'Creating compressed archive...\n'
 ( cd "$tmp/payload" && tar --warning=no-file-ignored -cf - . ) | gzip -1 > "$tmp/bundle.tar.gz"
 gzip -t "$tmp/bundle.tar.gz"
-tar -tzf "$tmp/bundle.tar.gz" | grep -Fx './compat_tool/images/rootfs/system/etc/init/hw/init.rc' >/dev/null
+tar -tzf "$tmp/bundle.tar.gz" > "$tmp/contents"
+grep -Fx './compat_tool/images/rootfs/system/etc/init/hw/init.rc' "$tmp/contents" >/dev/null
+# Release guard: no host adb (only the Android image may carry its own files).
+if grep -E '(^|/)adb$|^\./tools/platform-tools(/|$)|google-platform-tools-NOTICE' "$tmp/contents" |
+        grep -Ev '^\./compat_tool/(images|sysbake)/' >&2; then
+    echo 'ERROR: archive would redistribute Google Platform-Tools (listed above)' >&2
+    exit 1
+fi
 mv -- "$tmp/bundle.tar.gz" "$archive"
 write_installer "$installer"
 ( cd "$outdir" && sha256sum "$(basename -- "$archive")" "$(basename -- "$installer")" ) > "$checksum"

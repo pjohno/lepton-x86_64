@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT
 # Produce tested Steam Deck host tools without committing third-party binaries.
 # Run only after constructing a fresh, isolated stage. No Steam installation is changed.
+# Google's adb is staged for local (Fedora) testing only: packaging excludes it
+# from release archives and the Deck installer (compat_tool/tools/lepton-install-bundle)
+# downloads the same pinned version from Google. Keep both pins identical.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -26,6 +29,7 @@ Usage: bash image-14/scripts/internal/provision-deck-tools.sh --stage-dir DIR [-
   --from-stage: reuse verified portable tools from another stage (offline).
   --adb-zip: use a cached official Google platform-tools Linux ZIP (offline ADB).
 
+The staged adb is for local testing only; release archives never include it.
 The versioned Google download is accepted ONLY if its adb matches the pinned
 SHA256 and version. An updated version requires an explicit reviewed pin.
 The inotify-tools Git tag must resolve to the recorded upstream commit prefix.
@@ -166,7 +170,7 @@ for path in "${paths[@]}"; do
 done
 cp -n -- "$TEMP/output/tools/licenses/"* "$STAGE/tools/licenses/"
 cat > "$STAGE/tools/PROVENANCE.txt" <<META
-Google Android Platform-Tools: $ADB_VERSION
+Google Android Platform-Tools: $ADB_VERSION (stage-only; excluded from release archives)
 Google download URL (mutable): $ADB_URL
 ADB binary SHA256: $ADB_SHA256
 Inotify-tools: $INOTIFY_VERSION

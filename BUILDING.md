@@ -5,7 +5,9 @@ and, optionally, a **GApps + NDK** bundle (Google Play services and ARM64 app
 translation). Installing a bundle on the Deck is covered in
 [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md).
 
-Nothing here downloads Google software or games: you supply those files.
+Nothing here downloads Google apps or games: you supply those files. The one
+exception is Google's Android Debug Bridge (`adb`), see
+[Google ADB](#google-adb-is-not-in-the-bundle) below.
 
 ## The workspace
 
@@ -123,14 +125,33 @@ What each step does:
 3. **Build images** compiles `system.img` and `vendor.img` inside the builder
    container, copies them to `images/` and unpacks them to `rootfs/`,
    replacing those from any earlier build.
-4. **and 5. Make bundle** each create a stage, add the Deck tools (ADB,
-   inotify-tools), boot Android once to bake its first-boot data (private
+4. **and 5. Make bundle** each create a stage, add the Deck tools
+   (inotify-tools, plus ADB for local testing only), boot Android once to bake its first-boot data (private
    Podman storage, no GPU needed) in `stages/<ID>/`, then write the bundle to
    `bundles/`. Bundle IDs must be new each time (a date works well). Each one becomes its own Steam compatibility tool, named
    **Lepton x86_64 (community) - *bundle ID***.
 
 Add `--check` instead of `--execute` to steps 2 to 5 to see what would happen
 without changing anything.
+
+### Google ADB is not in the bundle
+
+Lepton uses Google's `adb` from Android Platform-Tools 37.0.1
+(`37.0.1-15733141`) to install games into Android. The bundles do **not**
+contain it, and this project does not redistribute it:
+
+- On the build computer, making a stage downloads the official
+  [`platform-tools_r37.0.1-linux.zip`](https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip)
+  (or uses `--adb-zip FILE`) and puts the verified `adb` in
+  `stages/<ID>/tools/platform-tools/` for local testing only.
+- Packaging leaves `tools/platform-tools/` and Google's notice out of the
+  archive, and refuses to write an archive that contains a host `adb`.
+- On the Deck, the installer downloads the same ZIP directly from Google,
+  extracts only `adb` and `NOTICE.txt`, and accepts `adb` only if its SHA256 is
+  `a902be8f45c6c62e76c9efaf6947a0fa747c9cabd89a2ac8e0d16ecb30b3ed01` and it
+  reports version `37.0.1-15733141`. The pin is in
+  `compat_tool/tools/lepton-install-bundle` and must match
+  `image-14/scripts/internal/provision-deck-tools.sh` (a test checks this).
 
 ## 6. Send the bundles to the Deck
 

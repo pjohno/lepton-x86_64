@@ -168,6 +168,8 @@ This is a community modification of [Valve's public Lepton project](https://gitl
 
 Source patches against upstream components retain the copyright and license requirements applicable to the code they modify. Building or distributing Android binaries would require a separate corresponding-source, third-party notice and license-compliance review. No Android binaries are included here.
 
+Google's Android Platform-Tools `adb` is **not** included in this repository or in the Steam Deck bundles. The bundle installer downloads the official, versioned Platform-Tools ZIP directly from Google on the user's machine and verifies the pinned `adb` (see [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md#google-adb)).
+
 ## Contributing
 
 Issues and patches reproducing problems on x86_64 Linux are welcome. Please include host hardware and OS, a precise launch configuration, relevant command output, and whether the problem reproduces without local modifications. Do not upload proprietary game files, Android images, Steam depot binaries, credentials, or personal logs.

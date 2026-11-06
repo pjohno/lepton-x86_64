@@ -7,6 +7,12 @@ Steam Deck with AMD hardware graphics. Make the bundles first with
 Nothing here downloads Android images, Google apps or games for you. You provide
 your own APK files.
 
+**Installing needs an internet connection.** Google's Android Debug Bridge
+(`adb`), which Lepton uses to install games into Android, is not part of the
+bundle. The installer downloads Google's official Android Platform-Tools
+37.0.1 directly from `dl.google.com` on the Deck and keeps only `adb` and
+Google's `NOTICE.txt` (see [Google ADB](#google-adb)).
+
 ## What you need
 
 **Steam Deck**: SteamOS in Desktop Mode, signed in to Steam at least once, and
@@ -41,7 +47,8 @@ on the Deck's desktop.
 
 **Updating an existing install over SSH.** Add `--replace TOOL_ID` to install
 straight away, overwriting that install (its games keep working; no game from
-it may be running). Tool IDs are shown by `lepton-manage-installs --list` on
+it may be running). The Deck needs internet access for this, because the
+installer downloads Google's `adb`. Tool IDs are shown by `lepton-manage-installs --list` on
 the Deck.
 
 **By USB drive.** Copy the three files into one folder on the Deck.
@@ -59,11 +66,13 @@ bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-base-20261104.insta
 The installer:
 
 1. verifies the checksum and that an AMD GPU is present;
-2. extracts to `~/.local/share/<install directory>` (it refuses to overwrite);
-3. registers the Steam compatibility tool **Lepton x86_64 (community) - base-20261104**;
-4. writes `~/.config/lepton-x86_64/<tool id>.env` and makes it the default;
-5. links `lepton-add-game`, `lepton-add-game-gui` and `lepton-run-apk` into `~/.local/bin`;
-6. adds **Lepton: Add Android game**, **Lepton: Check graphics** and **Lepton:
+2. downloads Google's `adb` and checks its SHA256 and version (see below);
+3. moves everything to `~/.local/share/<install directory>` (it refuses to
+   overwrite unless asked to replace);
+4. registers the Steam compatibility tool **Lepton x86_64 (community) - base-20261104**;
+5. writes `~/.config/lepton-x86_64/<tool id>.env` and makes it the default;
+6. links `lepton-add-game`, `lepton-add-game-gui` and `lepton-run-apk` into `~/.local/bin`;
+7. adds **Lepton: Add Android game**, **Lepton: Check graphics** and **Lepton:
    Remove installs** to the desktop and the application menu (Games); GApps
    bundles also add **Lepton: Add Google game** and **Lepton: Google sign-in**
    (see [GAPPS.md](GAPPS.md)).
@@ -73,6 +82,29 @@ installer first asks whether to **install as a new tool** or **replace** one of
 them, and afterwards offers a tick-list of older installs to remove. Steam does
 not need to be closed for installing, replacing or removing (only for adding
 games); restart Steam afterwards so it shows the new tool.
+
+### Google ADB
+
+The installer downloads
+`https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip`
+over HTTPS, extracts only `platform-tools/adb` and `platform-tools/NOTICE.txt`,
+and accepts `adb` only if its SHA256 is
+`a902be8f45c6c62e76c9efaf6947a0fa747c9cabd89a2ac8e0d16ecb30b3ed01` and
+`adb version` reports `37.0.1-15733141`. It is installed as
+`tools/platform-tools/adb` in the install directory, with Google's notice in
+`tools/licenses/google-platform-tools-NOTICE.txt` and the download details in
+`tools/platform-tools/SOURCE.txt`. This all happens before the new copy is
+moved into place: if the download or a check fails, the installer stops and
+nothing (including an install you are replacing) is changed. Run it again
+once the Deck is online. No `sudo` is needed.
+
+**Without internet on the Deck**, download that same ZIP elsewhere, copy it to
+the Deck and pass it in; it is checked in exactly the same way:
+
+```bash
+bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-base-20261104.install.sh \
+    --adb-zip ~/Downloads/platform-tools_r37.0.1-linux.zip
+```
 
 Terminal options: `--check` verifies without installing; `--into TOOL_ID`
 replaces an existing install; `--replace` replaces this bundle's own earlier
@@ -92,8 +124,10 @@ graphics line names `RADV VANGOGH`.
 Steam must be closed while a shortcut is added, and its on-screen keyboard
 closes with it, so the add-game window needs only taps:
 
-1. Double-tap **Lepton: Add Android game**, pick the APK and confirm the name
-   (this is checked while Steam is still running).
+1. Double-tap **Lepton: Add Android game**, pick the `.apk` or split-APK
+   bundle (`.apkm`) and confirm the name (this is checked while Steam is still
+   running). On a base bundle an `.apkm` must include x86_64 code (no ARM64
+   translation) and must not need Google services.
 2. When asked, **exit Steam yourself**: Steam menu (top left) > Exit, or
    right-click the Steam taskbar icon > Exit. Wait until both have gone, then
    tap **Steam is closed**.
@@ -102,6 +136,14 @@ closes with it, so the add-game window needs only taps:
 
 Lepton never closes or starts Steam itself. If Steam is still running at step 2,
 nothing is changed; close Steam and try again.
+
+**Adding back a game whose shortcut you deleted.** Steam can take a while to
+save a deleted shortcut; until it does, adding the same file again reports
+"A shortcut for this APK/profile already exists". If that happens, restart
+the Steam Deck (exiting Steam is not always enough) and add it again, or copy
+the file to another folder first. A re-added game uses the current Lepton
+tool automatically, and, if you keep the same name, continues with its saved
+game data; choose a different name to start fresh.
 
 From a terminal, with Steam exited: `~/.local/bin/lepton-add-game ~/Downloads/my-game.apk`
 (add `--dry-run` to check first, which also works while Steam runs, and

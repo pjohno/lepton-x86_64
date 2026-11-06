@@ -37,11 +37,14 @@ The workflow invokes, in sequence:
 2. `build-images-x86_64.sh --execute` (system/vendor images).
 3. `package-repro-rootfs.sh` (flattened Android rootfs).
 4. `deploy-compat-x86_64.sh --stage-dir ... --execute`.
-5. `provision-deck-tools.sh --execute` (pinned ADB and built inotify-tools).
+5. `provision-deck-tools.sh --execute` (built inotify-tools, and pinned Google
+   ADB in the stage for local testing only; it is excluded from the archive and
+   the Deck installer downloads it from Google).
 6. `sysbake-isolated-x86_64.sh --execute` (fresh Android boot using
    SwiftShader software rendering, private Podman storage and an isolated
    headless Weston session).
-7. `deploy-compat-x86_64.sh --package-only` with local checksum and archive checks.
+7. `deploy-compat-x86_64.sh --package-only` with local checksum and archive
+   checks (including that no Google `adb` is in the archive).
 
 ### Sysbake graphics backend
 
