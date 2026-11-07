@@ -5,7 +5,9 @@ and, optionally, a **GApps + NDK** bundle (Google Play services and ARM64 app
 translation). Installing a bundle on the Deck is covered in
 [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md).
 
-Nothing here downloads Google software or games: you supply those files.
+Nothing here downloads Google apps or games: you supply those files. The one
+exception is Google's Android Debug Bridge (`adb`), see
+[Google ADB](#google-adb-is-not-in-the-bundle) below.
 
 ## The workspace
 
@@ -123,14 +125,33 @@ What each step does:
 3. **Build images** compiles `system.img` and `vendor.img` inside the builder
    container, copies them to `images/` and unpacks them to `rootfs/`,
    replacing those from any earlier build.
-4. **and 5. Make bundle** each create a stage, add the Deck tools (ADB,
-   inotify-tools), boot Android once to bake its first-boot data (private
+4. **and 5. Make bundle** each create a stage, add the Deck tools
+   (inotify-tools, plus ADB for local testing only), boot Android once to bake its first-boot data (private
    Podman storage, no GPU needed) in `stages/<ID>/`, then write the bundle to
    `bundles/`. Bundle IDs must be new each time (a date works well). Each one becomes its own Steam compatibility tool, named
    **Lepton x86_64 (community) - *bundle ID***.
 
 Add `--check` instead of `--execute` to steps 2 to 5 to see what would happen
 without changing anything.
+
+### Google ADB is not in the bundle
+
+Lepton uses Google's `adb` from Android Platform-Tools 37.0.1
+(`37.0.1-15733141`) to install games into Android. The bundles do **not**
+contain it, and this project does not redistribute it:
+
+- On the build computer, making a stage downloads the official
+  [`platform-tools_r37.0.1-linux.zip`](https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip)
+  (or uses `--adb-zip FILE`) and puts the verified `adb` in
+  `stages/<ID>/tools/platform-tools/` for local testing only.
+- Packaging leaves `tools/platform-tools/` and Google's notice out of the
+  archive, and refuses to write an archive that contains a host `adb`.
+- On the Deck, the installer downloads the same ZIP directly from Google,
+  extracts only `adb` and `NOTICE.txt`, and accepts `adb` only if its SHA256 is
+  `a902be8f45c6c62e76c9efaf6947a0fa747c9cabd89a2ac8e0d16ecb30b3ed01` and it
+  reports version `37.0.1-15733141`. The pin is in
+  `compat_tool/tools/lepton-install-bundle` and must match
+  `image-14/scripts/internal/provision-deck-tools.sh` (a test checks this).
 
 ## 6. Send the bundles to the Deck
 
@@ -145,6 +166,41 @@ Each puts an **Install Lepton *ID*** icon on the Deck's desktop; continue with
 [INSTALL-STEAM-DECK.md, step 3](INSTALL-STEAM-DECK.md#3-install-steam-deck-desktop-mode).
 To update an existing install in place instead (its games keep working), add
 `--replace TOOL_ID`; `lepton-manage-installs --list` on the Deck shows the IDs.
+
+## Or install on this computer (experimental)
+
+A bundle can also be installed on the build computer itself, with the same
+installer a Deck uses: it registers the Steam compatibility tool and adds
+**Lepton: Add Android game** to the application menu.
+
+**Lepton targets the Steam Deck.** On a desktop PC games start and draw
+correctly, but **mouse and keyboard do not reach the game yet**, so this is
+for testing only. See README.md, "Desktop PCs".
+
+```bash
+bash image-14/scripts/install-local.sh --check --bundle-id base-20261104
+bash image-14/scripts/install-local.sh --execute --bundle-id base-20261104
+```
+
+It first checks this computer (`compat_tool/tools/lepton-host-check`, which
+only reads and never installs anything) and stops if something is missing:
+
+- **Podman** (rootless), **Gamescope**, **setfattr** (package `attr`),
+  **Python 3**, and **zenity** or **kdialog**;
+- **Android Binder (BinderFS)** support in the kernel. Lepton never loads
+  kernel modules; check with `grep binder /proc/filesystems`;
+- the **native Steam** package, started once. Flatpak Steam cannot start
+  Lepton's containers and is not supported.
+
+Graphics: an **AMD GPU** is required; the Android image only contains AMD
+drivers. Software rendering on other GPUs (for example Intel) does not work
+yet: `--allow-non-amd` installs anyway, for testing only. Desktops: KDE Plasma on Wayland is tested (it is what the
+Deck's Desktop Mode uses). Other desktops, such as GNOME, are **untested**:
+the check warns but allows them.
+
+If the bundle does not exist yet but its stage does, the stage is packaged
+first. Installing again needs `--replace` (or `--into TOOL_ID`), as on the
+Deck. Restart Steam afterwards to see the new tool.
 
 ## Rebuilding later
 
@@ -161,7 +217,31 @@ bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id base-YYYY
 
 - Every step prints the path of its log. Logs live in the workspace's `logs/`
   and stay after failures.
-- A failed **build** can simply be run again; it continues where it stopped.
+- A failed or stopped **build** can simply be run again; it continues where
+  it stopped.
+- **Power cut, crash or forced shutdown during a build.** Avoid these if you
+  can: the build is long and writes a great many files, and files written in
+  the last seconds before the power went may be empty or garbage even though
+  the build had recorded them as finished. Just run the build again: it
+  notices that the previous run did not finish ("The previous image build did
+  not finish"), deletes the damaged files it finds and rebuilds only those.
+  If a build still fails with errors such as `neither ET_REL nor LLVM
+  bitcode`, `file format not recognized` or `file truncated` (the build then
+  prints a hint), check the whole output and continue:
+
+  ```bash
+  bash image-14/scripts/build-images-x86_64.sh --repair
+  bash image-14/scripts/build-images-x86_64.sh --execute
+  ```
+
+  Use `--repair` only when `--execute` will not complete. It deletes every
+  compiled file (objects, libraries, jars, APKs) that does not look like a
+  valid one, and lists them in `logs/`. It errs on the side of caution: on a
+  healthy build it also deletes a few dozen good files that Android writes in
+  another format (text or JSON with a `.o` or `.a` name). Those are simply
+  rebuilt by the next `--execute`, which takes minutes, not hours. If the
+  build still fails the same way afterwards, delete `aosp/out/` for a full
+  rebuild (no new download; several hours).
 - A failed **prepare** during patching refuses to continue automatically, so
   that a half-patched tree is never built. Run `prepare-x86_64.sh --reset` to
   start the patching from clean sources.

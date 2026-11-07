@@ -5,16 +5,23 @@ set -Eeuo pipefail
 
 usage() {
   cat >&2 <<'HELP'
-Usage: bash image-14/scripts/build-images-x86_64.sh --check | --execute
+Usage: bash image-14/scripts/build-images-x86_64.sh --check | --execute | --repair
 Compiles system.img and vendor.img in the prepared checkout (workspace aosp/),
 copies them to the workspace's images/ and packages them as rootfs/, the
 input of make-deck-bundle-x86_64.sh. Both are replaced on every build.
+
+A stopped or failed build continues where it stopped when run again. If a
+build was cut off (power cut, crash), --execute first deletes the files that
+build left damaged. --repair does the same for the whole output folder; use it
+only when --execute will not complete, e.g. it keeps failing with "neither
+ET_REL nor LLVM bitcode" or "file truncated". It errs on the side of caution
+and also deletes some good files, which the next --execute rebuilds quickly.
 HELP
 }
 
 [[ $# == 1 ]] || { usage; exit 2; }
 ACTION="$1"
-[[ "$ACTION" == "--check" || "$ACTION" == "--execute" ]] || {
+[[ "$ACTION" == "--check" || "$ACTION" == "--execute" || "$ACTION" == "--repair" ]] || {
   usage
   exit 2
 }
@@ -83,6 +90,9 @@ LOG_DIR="$LEPTON_LOG_DIR"
   fail "Unsafe log directory"
 
 STATE="$TARGET/.lepton-clean14-state"
+# Present while the compiler runs; left behind only if a build was cut off.
+RUNNING="$STATE/build.running"
+CHECK_OUTPUTS="$ROOT/image-14/scripts/internal/check-build-outputs.py"
 GLSLANG="$TARGET/out/host/glslang14/StandAlone/glslang"
 BOOTSTRAP="$ROOT/image-14/scripts/internal/bootstrap-glslang14.sh"
 BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder-glslang14:latest}"
@@ -125,6 +135,27 @@ info "Parallel jobs: $LEPTON_BUILD_JOBS"
 info "Available storage: $free_gib GiB"
 info "Builder: $BUILDER"
 
+if [[ "$ACTION" == "--repair" ]]; then
+  [[ -d "$TARGET/out" ]] || { info "[PASS] No build output yet; nothing to repair"; exit 0; }
+  info "[START] Checking every compiled file in $TARGET/out for damage (a few minutes)"
+  mkdir -p -- "$LOG_DIR"
+  python3 "$CHECK_OUTPUTS" "$TARGET/out" --delete \
+    --report "$LOG_DIR/damaged-build-files-$(date -u +%Y%m%dT%H%M%SZ).txt" ||
+    fail "Could not check the build output"
+  rm -f -- "$RUNNING"
+  info "[PASS] Repair finished. Continue with: bash image-14/scripts/build-images-x86_64.sh --execute"
+  exit 0
+fi
+
+if [[ -f "$RUNNING" ]]; then
+  info "[WARN] The previous image build did not finish (power cut, crash or forced stop)"
+  if [[ "$ACTION" == "--execute" ]]; then
+    info "[INFO] Its damaged files will be found and rebuilt first"
+  else
+    info "[INFO] --execute will first find and rebuild the files it left damaged"
+  fi
+fi
+
 (( free_gib >= LEPTON_MIN_FREE_GIB )) ||
   fail "Insufficient free space"
 
@@ -161,6 +192,17 @@ exec > >(tee -a -- "$LOG") 2>&1
 
 info "Persistent log: $LOG"
 info "[START] Android 14 x86_64 systemimage + vendorimage"
+
+# A build cut off by a power cut or crash can leave files recorded as done
+# whose contents never reached the disk; ninja would reuse them and fail
+# much later. Delete the damaged ones so ninja rebuilds them.
+if [[ -f "$RUNNING" && -d "$TARGET/out" ]]; then
+  info "[START] Checking files written by the unfinished build for damage"
+  python3 "$CHECK_OUTPUTS" "$TARGET/out" --since-file "$RUNNING" --delete \
+    --report "${LOG%.log}-damaged-files.txt" ||
+    fail "Could not check the unfinished build's files"
+fi
+printf 'Started %s; log %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LOG" > "$RUNNING"
 
 # Run Podman as a managed child so interrupt traps execute promptly.
 STARTED=$SECONDS
@@ -292,8 +334,17 @@ result=0
 wait "$PODMAN_PID" || result=$?
 
 trap - INT TERM
+# The build ended by itself, so its files were written normally.
+rm -f -- "$RUNNING"
 
 if (( result != 0 )); then
+  # Typical errors from build files damaged by an earlier power cut or crash.
+  if grep -Eq 'neither ET_REL nor LLVM bitcode|file format not recognized|file truncated|unexpected end of file|is not an object|not a valid ELF|error in opening zip|zip END header not found|archive has no index' "$LOG"; then
+    info "[HINT] These errors usually mean build files were damaged, e.g. by a power cut or"
+    info "[HINT] crash during an earlier build. Repair, then continue (no full rebuild):"
+    info "[HINT]   bash image-14/scripts/build-images-x86_64.sh --repair"
+    info "[HINT]   bash image-14/scripts/build-images-x86_64.sh --execute"
+  fi
   fail "Android image build failed (exit $result); log: $LOG"
 fi
 

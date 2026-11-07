@@ -38,12 +38,14 @@ Options:
   --with-widevine              Add Widevine L3 DRM from the same Google image
   --services-jar FILE         Tested framework override (older rootfs + GApps)
   --tool-id ID / --tool-name NAME         Steam tool identity
-  --from-stage DIR | --adb-zip FILE       Offline Deck tool provisioning
+  --from-stage DIR | --adb-zip FILE       Offline Deck tool provisioning (the
+                              staged ADB is never put in the archive)
   --sysbake-rendering software|amd        (default software; no GPU needed)
   --sysbake-timeout SECONDS               (default 600)
   --deck-ip IPv4              Transfer archive, checksum and installer after packaging
 
 --check validates inputs and destinations without writing anything.
+The archive does not contain Google's adb: the Deck installer downloads it.
 Afterwards on the Deck: bash ~/Downloads/lepton-deck-bundles/<name>.install.sh
 HELP
 }
@@ -109,7 +111,7 @@ step '1/4 Stage Android rootfs and launcher'
 mkdir -p -- "$(dirname -- "$STAGE")" "$BUNDLE_DIR"
 bash "$SCRIPT_DIR/internal/deploy-compat-x86_64.sh" --execute --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
 
-step '2/4 Provision Steam Deck tools (ADB, inotify-tools)'
+step '2/4 Provision Steam Deck tools (inotify-tools; ADB for local testing only)'
 bash "$SCRIPT_DIR/internal/provision-deck-tools.sh" --execute --stage-dir "$STAGE" "${PROVISION_ARGS[@]}"
 bash "$SCRIPT_DIR/internal/provision-deck-tools.sh" --check --stage-dir "$STAGE"
 

@@ -260,7 +260,7 @@ PROVENANCE="$STAGE/tools/BUILD-PROVENANCE.txt"
     printf 'Baked packages.xml SHA256: %s\n' "$(sha256sum "$STAGE/compat_tool/sysbake/system/packages.xml" | awk '{print $1}')"
     printf 'Optional GApps: %s; NDK: %s\n' "$WITH_GAPPS" "$WITH_NDK"
     printf 'Google payload/image hashes: compat_tool/provenance/gapps/ (when enabled)\n'
-    printf 'Google ADB and inotify versions: see tools/PROVENANCE.txt\n'
+    printf 'inotify version: see tools/PROVENANCE.txt; Google ADB is not bundled (the installer downloads it)\n'
 } > "$PROVENANCE"
 
 step 'Package the distributable bundle (local only)'
@@ -273,16 +273,16 @@ tar -tzf "$ARCHIVE" | awk '
     /^\.\/compat_tool\/images\/rootfs\/system\/build.prop$/ {rootfs=1}
     /^\.\/compat_tool\/sysbake\/system\/packages.xml$/ {sysbake=1}
     /^\.\/compat_tool\/sysbake.xattrs$/ {xattrs=1}
-    /^\.\/tools\/platform-tools\/adb$/ {adb=1}
+    /^\.\/tools\/platform-tools(\/|$)/ {adb++}
     /^\.\/tools\/bin\/inotifywait$/ {inotify=1}
     /^\.\/tools\/BUILD-PROVENANCE.txt$/ {provenance=1}
     /\.sysbake-work\./ || /podman-storage/ {unwanted++}
     END {
-        if (!rootfs || !sysbake || !xattrs || !adb || !inotify || !provenance || unwanted) {
+        if (!rootfs || !sysbake || !xattrs || adb || !inotify || !provenance || unwanted) {
             print "[FAIL] Archive content validation failed" > "/dev/stderr"
             exit 1
         }
-        print "[PASS] Archive has rootfs, sysbake, attributes, Deck tools, and provenance; no temporary sysbake work"
+        print "[PASS] Archive has rootfs, sysbake, attributes, Deck tools, and provenance; no Google adb or temporary sysbake work"
     }
 '
 pass "Local Android 14 x86_64 Steam Deck bundle: $ARCHIVE"

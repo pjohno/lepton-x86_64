@@ -38,9 +38,11 @@ Known limitations:
 | `image-14/scripts/build-images-x86_64.sh` | Build step 3: compiles system/vendor images and packages them as a rootfs |
 | `image-14/scripts/make-deck-bundle-x86_64.sh` | Build steps 4-5: rootfs to an installable Steam Deck bundle |
 | `image-14/scripts/transfer-deck-bundle.sh` | Sends a bundle to a Steam Deck over SSH (optionally installing it) |
+| `image-14/scripts/install-local.sh` | Installs a bundle on the build computer itself (checks its requirements first) |
 | `image-14/scripts/prepare-google-inputs.sh` | Turns a local Google Play emulator image zip into the optional GApps/NDK inputs |
 | `image-14/scripts/internal/` | Building blocks called by the scripts above (staging, packaging, transfer, sysbake, NDK extraction); not run directly |
 | `compat_tool/tools/lepton-install-bundle` | Deck-side installer, shipped next to each bundle |
+| `compat_tool/tools/lepton-host-check` | Read-only check that a computer can run Lepton games (run by the installer) |
 | `tests/runtime/` | Isolated local APK tests and JNI fixture builder |
 
 Some build components are Git submodules. Confirm that the URLs in `.gitmodules` are publicly accessible before attempting a fresh clone or reporting a reproducible clean build.
@@ -127,11 +129,27 @@ in both Desktop Mode and Gaming Mode. This is a functional test of the
 current Deck configuration, not broad coverage of other Steam versions.
 
 The `lepton-gamescope-bridge` keeps its known Gaming Mode SDL/X11 fullscreen
-path. On KDE Plasma Wayland Desktop Mode it selects a **windowed Wayland
-Gamescope** at 1280×800 (configurable with `LEPTON_RESOLUTION=WIDTHxHEIGHT`).
-Override detection using `LEPTON_DISPLAY_MODE=gaming` or `desktop`.
-The Desktop Wayland Gamescope window was verified on the Steam Deck, and
-the new 2048 shortcut launched successfully in Desktop and Gaming modes.
+path. On a KDE Plasma Wayland desktop (including the Deck's Desktop Mode) it
+uses a **Wayland Gamescope** that opens fullscreen at the main screen's size,
+which Android then uses as its screen size. `LEPTON_DESKTOP_WINDOWED=1` gives
+a movable 1280×800 window instead, and `LEPTON_RESOLUTION=WIDTHxHEIGHT` a
+window of any size. Override detection using `LEPTON_DISPLAY_MODE=gaming` or
+`desktop`.
+
+**Desktops other than KDE Plasma are untested.** GNOME takes the Gaming Mode
+path (fullscreen through Xwayland) and is expected to work with **one
+monitor**. With several monitors Android may be given their combined size,
+and with fractional scaling a scaled-down size; `LEPTON_RESOLUTION` overrides
+both.
+
+**Desktop PCs (experimental).** Lepton targets the Steam Deck. A bundle can be
+installed on a desktop PC with an AMD GPU (`image-14/scripts/install-local.sh`),
+and games start and draw correctly there, but **mouse and keyboard do not reach
+the game yet** (tested on KDE Plasma 6 with 125 % scaling, November 2026).
+`LEPTON_DESKTOP_DIRECT=1` (experimental) skips Gamescope and gives Android a
+KDE window directly; with fractional scaling Android then gets the wrong size,
+pointer positions miss and the window does not redraw reliably. Desktop input
+is future work.
 
 ## Steam Deck input notes (experimental)
 
@@ -167,6 +185,8 @@ This is a community modification of [Valve's public Lepton project](https://gitl
 - [`LICENSES/x86_64-contributions.md`](LICENSES/x86_64-contributions.md) — terms for original standalone material written for this port; this does **not** relicense Valve, Android, Waydroid, Mesa, or other third-party code.
 
 Source patches against upstream components retain the copyright and license requirements applicable to the code they modify. Building or distributing Android binaries would require a separate corresponding-source, third-party notice and license-compliance review. No Android binaries are included here.
+
+Google's Android Platform-Tools `adb` is **not** included in this repository or in the Steam Deck bundles. The bundle installer downloads the official, versioned Platform-Tools ZIP directly from Google on the user's machine and verifies the pinned `adb` (see [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md#google-adb)).
 
 ## Contributing
 

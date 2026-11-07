@@ -25,7 +25,7 @@ cat > "$work/bin/zenity" <<'SH'
 #!/bin/bash
 echo "zenity $1" >> "$UI_LOG"
 case "$1" in
-  --file-selection) [[ -n "${PICK:-}" ]] && printf '%s\n' "$PICK" || exit 1 ;;
+  --file-selection) printf '%s\n' "$@" > "$UI_LOG.picker"; [[ -n "${PICK:-}" ]] && printf '%s\n' "$PICK" || exit 1 ;;
   --entry) printf '%s\n' "$NAME_ANSWER" ;;
   --question) printf '%s\n' "$@" > "$UI_LOG.question"; exit "${CONFIRM_RC:-0}" ;;
   --info|--error) for a in "$@"; do [[ "$a" == --text=* ]] && printf '%s\n' "${a#--text=}" > "$UI_LOG.$1"; done ;;
@@ -47,6 +47,14 @@ grep -Fq 'Now exit Steam yourself' "$work/ui.log.question"
 grep -Fqx -- '--ok-label=Steam is closed' "$work/ui.log.question"
 grep -Fq 'It is now safe to start Steam again' "$work/ui.log.--info"
 grep -Fq 'Touchscreen Native Support' "$work/ui.log.--info"
+
+# The picker offers split-APK bundles too; their name drops the extension.
+grep -Fqx -- "--file-filter=Android apps (*.apk *.apkm) | *.apk *.APK *.apkm *.APKM" "$work/ui.log.picker"
+apkm="$work/home/Downloads/Roblox.apkm"
+touch "$apkm"
+reset; gui PICK="$apkm" NAME_ANSWER=''
+grep -Fqx "['$apkm', '--name', 'Roblox', '--dry-run']" "$work/add.log"
+grep -Fqx "['$apkm', '--name', 'Roblox']" "$work/add.log"
 
 # Cancel at file picker or confirmation: nothing is added.
 reset; gui PICK='' NAME_ANSWER=x
@@ -84,6 +92,7 @@ reset; gui LEPTON_DIALOG=kdialog PICK="$apk" NAME_ANSWER='KDE Name'
 grep -Fqx "['$apk', '--name', 'KDE Name']" "$work/add.log"
 grep -q 'kdialog --title .* --yes-label Steam is closed --no-label Cancel --yesno' "$work/ui.log"
 grep -q 'kdialog --title .* --msgbox' "$work/ui.log"
+grep -Fq -- "--getopenfilename $work/home/Downloads *.apk *.APK *.apkm *.APKM|Android apps (*.apk *.apkm)" "$work/ui.log"
 # The GUI never ran Steam in any scenario above.
 [[ ! -e "$work/ui.log.steam" ]]
 grep -Eq '^[^#]*\bsteam\b +-' "$repo/compat_tool/tools/lepton-add-game-gui" && { echo 'FAIL: GUI invokes steam'; exit 1; }
@@ -95,4 +104,4 @@ grep -q 'closes by itself in 60 seconds' "$work/wrap-ok.log"
 if bash "$wrap" sh -c 'exit 3' < /dev/null > "$work/wrap-fail.log"; then echo 'FAIL: status lost'; exit 1; fi
 grep -q 'exit status 3' "$work/wrap-fail.log"
 grep -q 'closes by itself in 600 seconds' "$work/wrap-fail.log"
-echo 'PASS: add-game GUI success, cancel, validation/add errors, default name and kdialog fallback; never runs Steam; terminal close prompt'
+echo 'PASS: add-game GUI success, APKM pick, cancel, validation/add errors, default name and kdialog fallback; never runs Steam; terminal close prompt'

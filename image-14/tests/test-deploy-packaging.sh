@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: MIT
 # Exercise the real deployment packaging entrypoint with a tiny synthetic stage.
 set -Eeuo pipefail
+not() { if "$@"; then echo "FAIL: unexpectedly succeeded: $*" >&2; exit 1; fi; }
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 deploy="$repo/image-14/scripts/internal/deploy-compat-x86_64.sh"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
+# Installs below use a synthetic home; this host's Podman/Binder/Steam are
+# irrelevant (test-host-check.sh covers the check; one case below runs it).
+export LEPTON_SKIP_HOST_CHECK=1
 stage="$work/stage"; out="$work/bundles"
 mkdir -p "$stage/compat_tool/liblepton" "$stage/compat_tool/tools" \
     "$stage/compat_tool/sysbake/system" "$stage/compat_tool/images/rootfs/system/etc/init/hw" \
@@ -26,6 +30,10 @@ mkdir -p "$stage/compat_tool/liblepton/apk_extractor/target" "$stage/compat_tool
 printf 'host build cache' > "$stage/compat_tool/liblepton/apk_extractor/target/host-cache"
 printf 'required Android asset' > "$stage/compat_tool/images/rootfs/system/target/required"
 printf '#!/bin/sh\n' > "$stage/tools/platform-tools/adb"
+mkdir -p "$stage/tools/licenses"
+printf 'Google notice\n' > "$stage/tools/licenses/google-platform-tools-NOTICE.txt"
+printf 'inotify notice\n' > "$stage/tools/licenses/COPYING"
+printf 'Google Android Platform-Tools: 37.0.1-15733141\nGoogle download URL (mutable): x\nInotify-tools: 4.23.9.0\n' > "$stage/tools/PROVENANCE.txt"
 printf '#!/bin/sh\n' > "$stage/tools/bin/inotifywait"
 cp "$stage/compat_tool/sysbake.xattrs" "$work/original-xattrs"
 run() { bash "$deploy" "$@"; }
@@ -44,6 +52,11 @@ for command in ssh rsync; do
     chmod +x "$work/bin/$command"
 done
 export PATH="$work/bin:$PATH"
+# The Deck installer's ADB download: fake curl + fixture ZIP (no network).
+source "$repo/image-14/tests/lib/fake-google-adb.sh"
+fake_sha="$(fake_adb_zip "$work/fake-adb")"
+install_fake_curl "$work/bin"
+export FAKE_ADB_ZIP="$work/fake-adb/platform-tools.zip" FAKE_CURL_LOG="$work/curl.log"
 run --package-only --check --stage-dir "$stage" --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1 > "$work/check.log"
 [[ ! -e "$out" && ! -e "$TRACE" ]]
 reject --package-only --check --stage-dir "$stage" --bundle-dir "$stage/recursive" --bundle-id fixture
@@ -55,20 +68,30 @@ run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-i
 archive="$out/lepton-x86_64-steamdeck-fixture.tar.gz"
 (cd "$out" && sha256sum -c "$(basename "$archive").sha256")
 tar -xOf "$archive" ./compat_tool/sysbake.xattrs > "$work/packaged-xattrs"
-! grep -q '^security.selinux=' "$work/packaged-xattrs"
+not grep -q '^security.selinux=' "$work/packaged-xattrs"
 grep -qx 'user.fake=0x31' "$work/packaged-xattrs"
 cmp "$work/original-xattrs" "$stage/compat_tool/sysbake.xattrs"
 tar -tzf "$archive" > "$work/contents"
 grep -qx './compat_tool/liblepton/ndk_auxv/runtime.sh' "$work/contents"
 grep -qx './compat_tool/images/rootfs/system/target/required' "$work/contents"
-! grep -q 'apk_extractor/target/' "$work/contents"
+# Google's adb and its notice stay in the stage; the archive never has them.
+not grep -Eq '(^|/)adb$|platform-tools|google-platform-tools' "$work/contents"
+grep -qx './tools/bin/inotifywait' "$work/contents"
+grep -qx './tools/licenses/COPYING' "$work/contents"
+[[ -f "$stage/tools/platform-tools/adb" && -f "$stage/tools/licenses/google-platform-tools-NOTICE.txt" ]]
+tar -xOf "$archive" ./tools/PROVENANCE.txt > "$work/PROVENANCE.txt"
+not grep -q '^Google Android Platform-Tools: ' "$work/PROVENANCE.txt"
+grep -q 'Inotify-tools: 4.23.9.0' "$work/PROVENANCE.txt"
+grep -q 'adb: NOT included in this archive' "$work/PROVENANCE.txt"
+tar -xOf "$archive" ./STEAM-DECK-INSTALL.txt | grep -q 'installer needs an internet connection'
+not grep -q 'apk_extractor/target/' "$work/contents"
 tar -xOf "$archive" ./compat_tool/toolmanifest.vdf | grep -Fq '"commandline" "/lepton-x86_64-entry %verb% --"'
 grep -qx './compat_tool/lepton-x86_64-entry' "$work/contents"
 for file in compat_tool/liblepton/properties.sh compat_tool/liblepton/networking.sh compat_tool/images/rootfs_overlay/system/bin/cmd tests/runtime/run-apk.sh tests/runtime/unpack-apkm.py tests/runtime/read-gsf-id.py; do
     tar -xOf "$archive" "./$file" > "$work/packaged-source"
     cmp "$repo/$file" "$work/packaged-source"
 done
-! rg -q 'runtime-profile|podman-storage|apks/' "$work/contents"
+not rg -q 'runtime-profile|podman-storage|apks/' "$work/contents"
 tar -xOf "$archive" ./BUNDLE.json > "$work/BUNDLE.json"
 python3 - "$work/BUNDLE.json" <<'PYMETA'
 import json, sys
@@ -79,15 +102,17 @@ PYMETA
 # Deck installer, run against a throwaway home (no real Steam/user files).
 installer="$out/lepton-x86_64-steamdeck-fixture.install.sh"
 [[ -x "$installer" ]]
+pinned="$out/fixture-pinned.install.sh"
+pin_installer "$installer" "$pinned" "$fake_sha"
 grep -Fq ' lepton-x86_64-steamdeck-fixture.install.sh' "$archive.sha256"
 deck_home="$work/deck-home"
 mkdir -p "$deck_home"
 # LEPTON_INSTALL_IN_TERMINAL stops the installer reopening itself in Konsole.
-deck() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 HOME="$deck_home" bash "$installer" --allow-non-amd "$@"; }
+deck() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 HOME="$deck_home" bash "$pinned" --allow-non-amd "$@"; }
 manage() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$deck_home" python3 "$deck_home/.local/bin/lepton-manage-installs" "$@"; }
 mkdir -p "$deck_home/Desktop"
 deck --check > "$work/install-check.log"
-! grep -q 'Press Enter' "$work/install-check.log"
+not grep -q 'Press Enter' "$work/install-check.log"
 # --pause ends with the close prompt, on success and on failure (stdin at EOF
 # makes the prompt return at once).
 deck --check --pause < /dev/null > "$work/install-pause.log"
@@ -99,6 +124,11 @@ dest="$deck_home/.local/share/lepton_x86_64_fixture"
 [[ ! -e "$dest" && ! -e "$deck_home/.config" ]]
 deck > "$work/install.log"
 [[ -x "$dest/compat_tool/lepton" && -f "$dest/BUNDLE.json" ]]
+# The installed tool has a working ADB at the expected path (downloaded once).
+[[ -x "$dest/tools/platform-tools/adb" && -f "$dest/tools/licenses/google-platform-tools-NOTICE.txt" ]]
+"$dest/tools/platform-tools/adb" version | grep -x 'Version 37.0.1-15733141' > /dev/null
+[[ $(wc -l < "$work/curl.log") == 1 ]]
+grep -Fq 'https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip' "$work/curl.log"
 vdf="$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_fixture.vdf"
 grep -Fq "\"$dest/compat_tool\"" "$vdf"
 grep -Fq '"Lepton x86_64 (community) - fixture"' "$vdf"
@@ -110,7 +140,7 @@ grep -Fq '"Lepton x86_64 (community) - fixture"' "$vdf"
 grep -Fqx "Exec=\"$deck_home/.local/bin/lepton-add-game-gui\"" "$deck_home/.local/share/applications/lepton-x86_64-add-game.desktop"
 grep -Fq -- '--gpu-check --execute' "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
 grep -Fq "lepton-in-terminal\" \"$deck_home/.local/bin/lepton-run-apk\"" "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
-! grep -q -- '--hold' "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
+not grep -q -- '--hold' "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-in-terminal")" == "$dest/compat_tool/tools/lepton-in-terminal" ]]
 [[ -x "$deck_home/Desktop/lepton-x86_64-add-game.desktop" && -x "$deck_home/Desktop/lepton-x86_64-gpu-check.desktop" ]]
 if command -v desktop-file-validate >/dev/null; then
@@ -128,7 +158,7 @@ if deck > "$work/reinstall.log" 2>&1; then echo 'FAIL: installer overwrote an ex
 grep -q -- '--replace' "$work/reinstall.log"
 # --replace overwrites in place and removes the old copy unless --keep-previous.
 deck --replace > "$work/replace.log"
-! compgen -G "$dest.previous-*" > /dev/null
+not compgen -G "$dest.previous-*" > /dev/null
 # Saved app profiles move into the new copy; the old copy is then removed.
 mkdir -p "$dest/.runtime-profile.playgames"
 echo signed-in > "$dest/.runtime-profile.playgames/profile-fingerprint"
@@ -136,7 +166,7 @@ manage --list | grep -q '1 saved app profile(s)'
 deck --replace > "$work/replace-profile.log"
 grep -q 'Moved 1 saved app profile(s) into the new install' "$work/replace-profile.log"
 [[ "$(cat "$dest/.runtime-profile.playgames/profile-fingerprint")" == signed-in ]]
-! compgen -G "$dest.previous-*" > /dev/null
+not compgen -G "$dest.previous-*" > /dev/null
 # A profile left in an old copy (e.g. a name clash) still keeps that copy.
 backup_dir="$dest.previous-20260101-000000"
 mk_backup() { mkdir -p "$backup_dir/compat_tool/liblepton" "$backup_dir/.runtime-profile.orphan"; printf '#!/bin/sh\n' > "$backup_dir/compat_tool/lepton"; }
@@ -155,7 +185,7 @@ manage --remove "$backup" > "$work/remove-check.log"
 grep -q 'Nothing was changed' "$work/remove-check.log"
 compgen -G "$dest.previous-*" > /dev/null
 manage --remove "$backup" --execute > "$work/remove.log"
-! compgen -G "$dest.previous-*" > /dev/null
+not compgen -G "$dest.previous-*" > /dev/null
 [[ -x "$dest/compat_tool/lepton" ]]
 
 # A Steam shortcut mapped to the fixture tool (as lepton-add-game writes it).
@@ -187,7 +217,7 @@ assert (m['tool_id'], m['install_directory'], m['packaged_tool_id']) == ('lepton
 PYINTO
 grep -Fq "\"$legacy/compat_tool\"" "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf"
 grep -Fq '"Lepton x86_64 (community) - fixture"' "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf"
-! compgen -G "$legacy.previous-*" > /dev/null
+not compgen -G "$legacy.previous-*" > /dev/null
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_dev.env ]]
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$legacy/compat_tool/tools/lepton-add-game" ]]
 # --into requires an existing install.
@@ -223,13 +253,33 @@ SH
 chmod +x "$work/gui-bin/zenity"
 env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u LEPTON_NO_DIALOGS LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_DIALOG=zenity \
     WAYLAND_DISPLAY=test-display UI_LOG="$work/gui-install.log" PATH="$work/gui-bin:$PATH" HOME="$deck_home" \
-    bash "$installer" --allow-non-amd --pause < /dev/null > "$work/gui-install.out"
+    bash "$pinned" --allow-non-amd --pause < /dev/null > "$work/gui-install.out"
 grep -q 'zenity --list --radiolist' "$work/gui-install.log"
 grep -q 'zenity --list --checklist' "$work/gui-install.log"
 [[ -f "$legacy/BUNDLE.json" && ! -e "$dest" ]]
 [[ ! -e "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_fixture.vdf" ]]
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_dev.env ]]
 grep -q 'Press Enter to close' "$work/gui-install.out"
+# Double-clicking the installer of a bundle that is already installed offers
+# "Reinstall" (preselected) and replaces it in place; other installs stay.
+deck > "$work/fixture-again.log"
+touch "$dest/stale-marker"
+cat > "$work/gui-bin/zenity" <<'SH'
+#!/bin/bash
+echo "zenity $*" >> "$UI_LOG"
+case "$1" in
+  --list) if [[ " $* " == *" --radiolist "* ]]; then echo lepton_x86_64_fixture; fi ;;
+  --question) exit 0 ;;
+esac
+SH
+env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u LEPTON_NO_DIALOGS LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_DIALOG=zenity \
+    WAYLAND_DISPLAY=test-display UI_LOG="$work/gui-reinstall.log" PATH="$work/gui-bin:$PATH" HOME="$deck_home" \
+    bash "$pinned" --allow-non-amd --pause < /dev/null > "$work/gui-reinstall.out" 2>&1 ||
+    { cat "$work/gui-reinstall.out"; echo 'FAIL: double-click reinstall'; exit 1; }
+grep -q 'Reinstall Lepton x86_64 (community) - fixture over the existing copy' "$work/gui-reinstall.log"
+not grep -q 'Install as a new tool' "$work/gui-reinstall.log"
+[[ -x "$dest/compat_tool/lepton" && ! -e "$dest/stale-marker" && -f "$legacy/BUNDLE.json" ]]
+not compgen -G "$dest.previous-*" > /dev/null
 mkdir -p "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore"
 printf 'synthetic' > "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk"
 mkdir -p "$stage/compat_tool/images/rootfs/system/framework"
@@ -250,8 +300,9 @@ PYMETA
 # GApps installs get Google game icons pointing at their own install;
 # removing the install removes them.
 g_home="$work/gapps-home"; mkdir -p "$g_home/Desktop"
+pin_installer "$out/lepton-x86_64-steamdeck-gapps-fixture.install.sh" "$out/gapps-pinned.install.sh" "$fake_sha"
 env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 HOME="$g_home" \
-    bash "$out/lepton-x86_64-steamdeck-gapps-fixture.install.sh" --allow-non-amd > "$work/gapps-install.log"
+    bash "$out/gapps-pinned.install.sh" --allow-non-amd > "$work/gapps-install.log"
 g_dest="$g_home/.local/share/lepton_gapps_gapps_fixture"
 for kind in add sign-in; do
     icon="$g_home/.local/share/applications/lepton-x86_64-google-$kind-lepton_gapps_gapps_fixture.desktop"
@@ -261,11 +312,37 @@ for kind in add sign-in; do
 done
 grep -q 'Name=Lepton: Google sign-in (gapps-fixture)' "$g_home/.local/share/applications/lepton-x86_64-google-sign-in-lepton_gapps_gapps_fixture.desktop"
 [[ -x "$g_dest/compat_tool/tools/lepton-google-game-gui" ]]
+"$g_dest/tools/platform-tools/adb" version | grep -x 'Version 37.0.1-15733141' > /dev/null
+tar -tzf "$out/lepton-x86_64-steamdeck-gapps-fixture.tar.gz" > "$work/gapps-contents"
+not grep -Eq '(^|/)adb$|platform-tools' "$work/gapps-contents"
 env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$g_home" python3 "$g_home/.local/bin/lepton-manage-installs" \
     --remove lepton_gapps_gapps_fixture --execute > /dev/null
-! compgen -G "$g_home/.local/share/applications/lepton-x86_64-google-*" > /dev/null
-! compgen -G "$g_home/Desktop/lepton-x86_64-google-*" > /dev/null
+not compgen -G "$g_home/.local/share/applications/lepton-x86_64-google-*" > /dev/null
+not compgen -G "$g_home/Desktop/lepton-x86_64-google-*" > /dev/null
 reject --package-only --check --stage-dir "$stage" --bundle-dir "$out" --bundle-id invalid-tool --tool-id ../bad
+# The installer runs the bundled host check first: a computer without Binder
+# is refused before anything is installed (or downloaded).
+grep -qx './compat_tool/tools/lepton-host-check' "$work/contents"
+h_home="$work/host-check-home"; mkdir -p "$h_home/.local/share/Steam"
+printf 'nodev\tproc\n' > "$work/no-binder"
+: > "$FAKE_CURL_LOG"
+if env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u LEPTON_SKIP_HOST_CHECK LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 \
+        LEPTON_HOST_FILESYSTEMS="$work/no-binder" HOME="$h_home" bash "$pinned" --allow-non-amd > "$work/host-check.log" 2>&1; then
+    echo 'FAIL: installed without Binder'; exit 1
+fi
+grep -q 'Android Binder (BinderFS) kernel support is not available' "$work/host-check.log"
+grep -q 'nothing was changed' "$work/host-check.log"
+[[ ! -e "$h_home/.local/share/lepton_x86_64_fixture" && ! -e "$h_home/.config" && ! -s "$FAKE_CURL_LOG" ]]
+not compgen -G "$h_home/.local/share/.lepton-*" > /dev/null
+cp "$stage/tools/platform-tools/adb" "$stage/tools/bin/adb"
+reject --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id stray-adb
+grep -q 'would redistribute Google Platform-Tools' "$work/rejected.log"
+[[ ! -e "$out/lepton-x86_64-steamdeck-stray-adb.tar.gz" ]]
+rm -f "$stage/tools/bin/adb"
+# Packaging no longer needs ADB in the stage at all.
+mv "$stage/tools/platform-tools" "$work/staged-platform-tools"
+run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id no-adb > "$work/no-adb.log"
+mv "$work/staged-platform-tools" "$stage/tools/platform-tools"
 [[ ! -e "$TRACE" ]]
 reject --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id fixture
 run --transfer-only --check --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1 > "$work/transfer-check.log"
@@ -285,4 +362,4 @@ grep -q 'LEPTON_NO_DIALOGS=1 bash "$HOME/Downloads/lepton-deck-bundles/lepton-x8
 grep -q 'Deck install lepton_x86_64_old overwritten' "$work/transfer-replace.log"
 printf 'broken' >> "$archive"
 reject --transfer-only --check --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1
-echo 'PASS: read-only packaging/transfer checks, real archive, xattr preservation, overwrite guards and mocked transfer'
+echo 'PASS: read-only packaging/transfer checks, real archive without Google adb, installer ADB download, xattr preservation, overwrite guards and mocked transfer'

@@ -22,7 +22,10 @@ class ToolSelectionTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         loader = importlib.machinery.SourceFileLoader('lepton_add_game_test', str(SCRIPT))
         self.module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-        loader.exec_module(self.module)
+        # Never read this computer's own Lepton installs (~/.config/lepton-x86_64).
+        with patch.dict('os.environ', {'HOME': str(self.root / 'home'),
+                                       'XDG_CONFIG_HOME': str(self.root / 'home/.config')}):
+            loader.exec_module(self.module)
         self.module.STEAM = self.root / 'Steam'
         self.module.INSTALL = self.root / 'standard'
         self.alt = self.root / 'ndk'
@@ -159,6 +162,105 @@ class ToolSelectionTests(unittest.TestCase):
         self.run_main()
         entries, _, _ = self.module.read_binary((self.user / 'shortcuts.vdf').read_bytes())
         self.assertIn('lepton-gamescope-bridge %command%', entries['0']['LaunchOptions'])
+
+    def appid(self, name='game'):
+        return self.module.zlib.crc32(('"' + str(self.apk) + '"' + name).encode()) | 0x80000000
+
+    def leave_deleted_shortcut(self, tool='lepton_removed_tool'):
+        # What Steam leaves after a shortcut is deleted: no shortcuts.vdf entry,
+        # but its CompatToolMapping entry and (after a launch) its compatdata.
+        self.config.write_text(
+            '"InstallConfigStore"\n{\n\t"CompatToolMapping"\n\t{\n'
+            '\t\t"' + str(self.appid()) + '"\n\t\t{\n\t\t\t"name"\t\t"' + tool + '"\n'
+            '\t\t\t"config"\t\t""\n\t\t\t"priority"\t\t"250"\n\t\t}\n'
+            '\t\t"7"\n\t\t{\n\t\t\t"name"\t\t"proton_9"\n\t\t}\n\t}\n}\n')
+        data = self.module.STEAM / 'steamapps/compatdata' / str(self.appid())
+        data.mkdir(parents=True)
+        return data
+
+    def run_main_output(self, *args):
+        out = io.StringIO()
+        with patch.object(sys, 'argv', [str(SCRIPT), str(self.apk), *args]), \
+             patch.object(self.module, 'steam_running', return_value=False), \
+             contextlib.redirect_stdout(out):
+            self.module.main()
+        return out.getvalue()
+
+    def test_readd_after_deleted_shortcut_replaces_leftover_mapping(self):
+        data = self.leave_deleted_shortcut()
+        (data / 'keep').write_text('saved game')
+        dry = self.run_main_output('--dry-run')
+        self.assertIn('Replacing the compatibility tool left by a deleted shortcut (lepton_removed_tool)', dry)
+        self.assertNotIn(self.module.TOOL, self.config.read_text())
+        output = self.run_main_output()
+        text = self.config.read_text()
+        self.assertEqual(text.count('"' + str(self.appid()) + '"'), 1)
+        self.assertIn('"name"\t\t"' + self.module.TOOL + '"', text)
+        self.assertNotIn('lepton_removed_tool', text)
+        self.assertIn('"proton_9"', text)  # other games' mappings are untouched
+        self.assertIn('Reusing the saved game data', output)
+        self.assertEqual((data / 'keep').read_text(), 'saved game')  # never deleted
+        entries, _, _ = self.module.read_binary((self.user / 'shortcuts.vdf').read_bytes())
+        self.assertEqual(entries['0']['appid'], self.appid())
+        # With the shortcut back, adding it again is a duplicate (with a hint
+        # for shortcuts Steam has not finished deleting).
+        with self.assertRaisesRegex(ValueError, '(?s)already exists.*restart the Steam Deck'):
+            self.run_main()
+
+    def test_deleted_google_game_needs_gapps_tool_or_new_name(self):
+        data = self.leave_deleted_shortcut()
+        (data / 'lepton-google-game').touch()
+        original = self.config.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'Google game.*different name'):
+            self.run_main()
+        self.assertEqual(self.config.read_bytes(), original)
+        self.assertFalse((self.user / 'shortcuts.vdf').exists())
+        # A new name is a new AppID with fresh data.
+        output = self.run_main_output('--name', 'game (base)')
+        self.assertNotIn('Reusing', output)
+        self.assertIn('"' + str(self.appid('game (base)')) + '"', self.config.read_text())
+
+    def test_deleted_google_game_data_reused_by_gapps_tool(self):
+        (self.leave_deleted_shortcut() / 'lepton-google-game').touch()
+        gms = self.module.INSTALL / self.module.GOOGLE_SERVICES_APK
+        gms.parent.mkdir(parents=True)
+        gms.touch()
+        self.assertIn('Reusing the saved game data', self.run_main_output())
+
+    def test_unexpected_mapping_shape_is_not_overwritten(self):
+        self.config.write_text('"CompatToolMapping"\n{\n"' + str(self.appid()) + '"\n{\n"x"\n{\n}\n}\n}\n')
+        with self.assertRaisesRegex(ValueError, 'unexpected mapping'):
+            self.run_main()
+        self.assertFalse((self.user / 'shortcuts.vdf').exists())
+
+    def test_missing_mapping_block_is_created_in_steam_section(self):
+        # A desktop Steam that has never used a compatibility tool has no
+        # CompatToolMapping yet (a Steam Deck always has one).
+        self.config.write_text(
+            '"InstallConfigStore"\n{\n\t"Software"\n\t{\n\t\t"Valve"\n\t\t{\n\t\t\t"Steam"\n\t\t\t{\n'
+            '\t\t\t\t"Note"\t\t"a { brace } in a value"\n\t\t\t\t"Accounts"\n\t\t\t\t{\n\t\t\t\t}\n'
+            '\t\t\t}\n\t\t}\n\t}\n\t"streaming"\n\t{\n\t}\n}\n')
+        self.assertIn('Added Steam', self.run_main_output('--dry-run'))
+        self.run_main()
+        text = self.config.read_text()
+        start = self.module.find_section(text, self.module.STEAM_SECTION + ('compattoolmapping',))
+        self.assertIsNotNone(start)
+        self.assertIn('"' + str(self.appid()) + '"', text[start:self.module.block_end(text, start)])
+        self.assertIn('"streaming"\n\t{\n\t}\n}\n', text)
+        second = self.root / 'second.apk'
+        second.touch()
+        self.apk = second
+        self.run_main()  # the next game uses the same block
+        self.assertEqual(text.count('CompatToolMapping'), 1)
+        self.assertEqual(self.config.read_text().count('CompatToolMapping'), 1)
+
+    def test_config_without_steam_section_is_not_changed(self):
+        self.config.write_text('"InstallConfigStore"\n{\n\t"streaming"\n\t{\n\t}\n}\n')
+        original = self.config.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'no Software/Valve/Steam section'):
+            self.run_main()
+        self.assertEqual(self.config.read_bytes(), original)
+        self.assertFalse((self.user / 'shortcuts.vdf').exists())
 
     def test_invalid_tool_id_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Invalid compatibility-tool ID'):

@@ -6,7 +6,7 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit_only.mk)
 # Inherit from waydroid device
 $(call inherit-product, $(LOCAL_PATH)/../device.mk)
 
-PRODUCT_BRAND := Steam-Frame
+PRODUCT_BRAND := Linux-PC
 PRODUCT_DEVICE := lepton_x86_64
 PRODUCT_MANUFACTURER := Lepton
 PRODUCT_NAME := lineage_lepton_x86_64

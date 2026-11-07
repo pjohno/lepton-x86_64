@@ -82,12 +82,27 @@ SOCKET="lepton-sysbake-$$"
 WESTON_PID=
 PARTIAL=
 PARTIAL_XATTR=
+# Lepton runs Android commands with `podman exec -it`. When its input is this
+# terminal, Podman switches the terminal to raw mode, and a container stopped
+# mid-command never switches it back (the terminal then needs `reset`).
+# Sysbake gets no terminal at all (as in upstream CI); restore the settings
+# on exit anyway.
+TTY_STATE=
+if [[ -t 0 ]]; then TTY_STATE="$(stty -g 2>/dev/null || true)"; fi
 cleanup() {
     rc=$?
     trap - EXIT INT TERM
+    if [[ -n "$TTY_STATE" ]]; then stty "$TTY_STATE" 2>/dev/null || true; fi
     # Only the private Podman graph/runroot is addressable through this wrapper.
     if [[ -x "$WORK/bin/podman" ]]; then
         "$WORK/bin/podman" rm -fi lepton-sysbake >/dev/null 2>&1 || true
+    fi
+    # Lepton's launcher waits for its container with a background
+    # `podman events`; if the container already existed, that watcher never
+    # exits and keeps this run's lock open, blocking every later sysbake.
+    # Stop whatever still uses this run's private runroot (a unique path).
+    if [[ -n "$RUNROOT" ]]; then
+        pkill -f -- "--runroot=$RUNROOT( |$)" >/dev/null 2>&1 || true
     fi
     # The runner preflights this slice as inactive, then only sysbake creates it.
     systemctl --user stop lepton-sysbake.slice >/dev/null 2>&1 || true
@@ -225,7 +240,7 @@ info "Booting fresh Android 14 for sysbake (timeout ${TIMEOUT}s)"
 (
     cd "$WORK/compat_tool"
     timeout --foreground --signal=TERM --kill-after=20s "${TIMEOUT}s" ./lepton sysbake
-) > "$WORK/sysbake.log" 2>&1 || {
+) < /dev/null > "$WORK/sysbake.log" 2>&1 || {
     tail -n 65 "$WORK/sysbake.log" >&2 || true
     fail "Android sysbake failed; see $WORK/sysbake.log"
 }

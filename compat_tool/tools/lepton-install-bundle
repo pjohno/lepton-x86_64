@@ -8,10 +8,21 @@
 #   bash lepton-x86_64-steamdeck-ID.install.sh --into OLD_TOOL_ID   # overwrite another
 #   bash lepton-x86_64-steamdeck-ID.install.sh --remove OLD_TOOL_ID # remove after install
 #
-# Steps: verify checksum, extract to ~/.local/share/<install_directory>,
-# register the Steam compatibility tool, and write
-# ~/.config/lepton-x86_64/<tool_id>.env (+ default.env) for the helper tools.
+# Steps: verify checksum, extract, download Google's ADB (needs internet),
+# move into ~/.local/share/<install_directory>, register the Steam
+# compatibility tool, and write ~/.config/lepton-x86_64/<tool_id>.env.
+#
+# Google's Android Platform-Tools are not part of the Lepton bundle. This
+# installer downloads the official versioned ZIP from Google on this machine,
+# extracts only adb and NOTICE.txt, and accepts adb only if it matches the
+# pinned SHA256 and version, before anything is moved into place. Keep this
+# pin identical to image-14/scripts/internal/provision-deck-tools.sh.
 set -Eeuo pipefail
+
+ADB_URL='https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip'
+ADB_SHA256='a902be8f45c6c62e76c9efaf6947a0fa747c9cabd89a2ac8e0d16ecb30b3ed01'
+ADB_VERSION='37.0.1-15733141'
+ADB_ZIP=''
 
 # Packaging substitutes the archive name; an explicit ARCHIVE argument wins.
 DEFAULT_ARCHIVE=''
@@ -29,7 +40,7 @@ fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 info() { printf '[INFO] %s\n' "$*"; }
 pass() { printf '[PASS] %s\n' "$*"; }
 usage() {
-    sed -n '3,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '3,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     cat <<'HELP'
 Options:
   --check          Verify the archive and destination; change nothing
@@ -42,13 +53,18 @@ Options:
                    see lepton-manage-installs --list)
   --allow-non-amd  Install on a host without an AMD GPU (software rendering only)
   --pause          End with "Press Enter to close" (used by desktop icons)
+  --adb-zip FILE   Use an already downloaded copy of Google's official
+                   platform-tools_r37.0.1-linux.zip instead of downloading it
+                   (its adb must still match the pinned SHA256 and version)
   ARCHIVE          Bundle .tar.gz (default: the archive next to this script)
 HELP
 }
 # Set up cleanup and the optional close prompt before parsing, so even an
 # invalid option leaves a readable window when --pause is in effect.
 TEMP=''
+ADB_WORK=''
 cleanup() {
+    [[ -z "${ADB_WORK:-}" ]] || rm -rf -- "$ADB_WORK"
     [[ -n "${TEMP:-}" ]] && rm -f -- "$TEMP.meta"
     [[ -z "${TEMP:-}" || ! -d "$TEMP" ]] && return
     chmod -R u+rwX -- "$TEMP" 2>/dev/null || true
@@ -84,6 +100,7 @@ while (($#)); do
         --remove) REMOVE_IDS+=("${2:?--remove needs a tool ID}"); shift 2 ;;
         --keep-previous) KEEP_PREVIOUS=true; shift ;;
         --allow-non-amd) ALLOW_NON_AMD=true; shift ;;
+        --adb-zip) ADB_ZIP="${2:?--adb-zip needs a ZIP file}"; shift 2 ;;
         --pause) PAUSE=true; shift ;;
         -h|--help) usage; exit 0 ;;
         -*) fail "Unknown option: $1" ;;
@@ -101,9 +118,15 @@ fi
 
 [[ $(id -u) -ne 0 ]] || fail 'Run as your normal user (deck), without sudo'
 [[ $(uname -m) == x86_64 ]] || fail 'This bundle requires an x86_64 host'
-for program in tar gzip sha256sum python3 realpath mktemp; do
+for program in tar gzip sha256sum python3 realpath mktemp timeout; do
     command -v "$program" >/dev/null || fail "Missing required program: $program"
 done
+if [[ -n "$ADB_ZIP" ]]; then
+    [[ -f "$ADB_ZIP" ]] || fail "ADB ZIP not found: $ADB_ZIP"
+    ADB_ZIP="$(realpath -e -- "$ADB_ZIP")"
+else
+    command -v curl >/dev/null || fail 'Missing required program: curl (needed to download ADB from Google)'
+fi
 
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 if [[ -z "$ARCHIVE" ]]; then
@@ -165,6 +188,14 @@ BUNDLE_ID="${meta[3]}"; HAS_GAPPS="${meta[4]}"; HAS_NDK="${meta[5]}"
 MANAGE="$TEMP/compat_tool/tools/lepton-manage-installs"
 [[ -f "$MANAGE" ]] || fail 'Bundle lacks lepton-manage-installs'
 manage() { python3 "$MANAGE" "$@"; }
+# What games need at launch (Podman, Binder, Gamescope, Steam...), checked
+# before anything is installed. Older bundles do not have the check.
+HOST_CHECK="$TEMP/compat_tool/tools/lepton-host-check"
+if [[ -f "$HOST_CHECK" && "${LEPTON_SKIP_HOST_CHECK:-}" != 1 ]]; then
+    info 'Checking that this computer can run Lepton games'
+    bash "$HOST_CHECK" ||
+        fail 'This computer is missing what Lepton needs (see above); nothing was changed. LEPTON_SKIP_HOST_CHECK=1 installs anyway.'
+fi
 # Started from a desktop icon: offer "new or replace" (tap-only).
 INTERACTIVE=false
 if [[ "$PAUSE" == true && "$MODE" == execute && -z "${LEPTON_NO_DIALOGS:-}" &&
@@ -222,6 +253,76 @@ if [[ "$MODE" == check ]]; then
     pass 'Install preflight passed; nothing was changed'
     exit 0
 fi
+
+# True if $1 is the pinned Google adb. The hash is checked before running it.
+adb_verified() {
+    local output
+    printf '%s  %s\n' "$ADB_SHA256" "$1" | sha256sum --check --status - || return 1
+    output="$(timeout 30 "$1" version 2>&1)" || return 1
+    [[ "$output" == *"Version $ADB_VERSION"* ]]
+}
+# Put the verified adb into the extracted (not yet installed) copy. Any failure
+# stops here, before the existing install or Steam registration is touched.
+provide_adb() {
+    local target="$TEMP/tools/platform-tools/adb" zip origin
+    if [[ -f "$target" && ! -L "$target" ]] && adb_verified "$target"; then
+        # Older bundles shipped adb themselves; keep it if it is the pinned one.
+        pass "ADB $ADB_VERSION from the bundle verified"
+        return
+    fi
+    rm -rf -- "$TEMP/tools/platform-tools"
+    ADB_WORK="$(mktemp -d "$DATA_HOME/.lepton-adb.XXXXXXXX")"
+    if [[ -n "$ADB_ZIP" ]]; then
+        zip="$ADB_ZIP"; origin="local copy of $ADB_URL ($(basename -- "$ADB_ZIP"))"
+        info "Using local Google Platform-Tools ZIP: $ADB_ZIP"
+    else
+        zip="$ADB_WORK/platform-tools.zip"; origin="$ADB_URL"
+        info "Downloading ADB $ADB_VERSION from Google (official Android Platform-Tools)"
+        info "  $ADB_URL"
+        local progress=(--silent --show-error)
+        [[ ! -t 2 ]] || progress=(--progress-bar)
+        curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --connect-timeout 20 --max-time 900 "${progress[@]}" \
+            --output "$zip" -- "$ADB_URL" ||
+            fail 'Could not download ADB from Google. Nothing was installed or changed; check the internet connection and run the installer again.'
+    fi
+    # Extract only adb and Google's notice; python3 avoids needing unzip.
+    python3 - "$zip" "$ADB_WORK" <<'PYZIP' ||
+import shutil, sys, zipfile
+archive, out = sys.argv[1:]
+try:
+    with zipfile.ZipFile(archive) as z:
+        for name, dest in (('platform-tools/adb', 'adb'), ('platform-tools/NOTICE.txt', 'NOTICE.txt')):
+            member = z.getinfo(name)
+            if member.is_dir() or member.file_size > 64 * 1024 * 1024:
+                raise ValueError('unexpected entry ' + name)
+            with z.open(member) as src, open(out + '/' + dest, 'wb') as dst:
+                shutil.copyfileobj(src, dst)
+except (OSError, KeyError, ValueError, zipfile.BadZipFile) as exc:
+    sys.exit('[FAIL] ' + str(exc))
+PYZIP
+        fail 'The Platform-Tools ZIP does not contain adb and NOTICE.txt. Nothing was installed or changed.'
+    chmod 755 "$ADB_WORK/adb"
+    printf '%s  %s\n' "$ADB_SHA256" "$ADB_WORK/adb" | sha256sum --check --status - ||
+        fail "Downloaded adb does not match the pinned SHA256 $ADB_SHA256. Nothing was installed or changed."
+    adb_verified "$ADB_WORK/adb" ||
+        fail "Downloaded adb is not version $ADB_VERSION. Nothing was installed or changed."
+    install -D -m 755 "$ADB_WORK/adb" "$target"
+    install -D -m 644 "$ADB_WORK/NOTICE.txt" "$TEMP/tools/licenses/google-platform-tools-NOTICE.txt"
+    cat > "$TEMP/tools/platform-tools/SOURCE.txt" <<SOURCE
+Google Android Platform-Tools adb, downloaded by the Lepton installer on this
+machine. It is not distributed in the Lepton bundle.
+Source: $origin
+Version: $ADB_VERSION
+adb SHA256 (verified): $ADB_SHA256
+Installed: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+Upstream notices: tools/licenses/google-platform-tools-NOTICE.txt
+SOURCE
+    rm -rf -- "$ADB_WORK"
+    ADB_WORK=''
+    pass "ADB $ADB_VERSION verified (SHA256 and version)"
+}
+provide_adb
 
 if pgrep -x steam >/dev/null 2>&1; then
     info 'Steam is running: it will only see the new tool after a restart'

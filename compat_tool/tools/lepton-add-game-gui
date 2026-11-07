@@ -26,10 +26,10 @@ fi
 
 pick_apk() {
     if [[ "$UI" == zenity ]]; then
-        zenity --file-selection --title="$TITLE: choose an APK" --filename="$HOME/Downloads/" \
-            --file-filter='Android apps (*.apk) | *.apk *.APK' 2>/dev/null
+        zenity --file-selection --title="$TITLE: choose an APK or APKM" --filename="$HOME/Downloads/" \
+            --file-filter='Android apps (*.apk *.apkm) | *.apk *.APK *.apkm *.APKM' 2>/dev/null
     else
-        kdialog --title "$TITLE" --getopenfilename "$HOME/Downloads" '*.apk *.APK|Android apps (*.apk)'
+        kdialog --title "$TITLE" --getopenfilename "$HOME/Downloads" '*.apk *.APK *.apkm *.APKM|Android apps (*.apk *.apkm)'
     fi
 }
 ask_name() {
