@@ -21,9 +21,13 @@ Google's `NOTICE.txt` (see [Google ADB](#google-adb)).
 ## What you need
 
 **Steam Deck**: SteamOS in Desktop Mode, signed in to Steam at least once, and
-about 3 GiB free in your home directory per install. Any other x86_64 Linux
-machine with an **AMD GPU** also works; other GPUs are not supported (the
-image only contains AMD RADV/radeonsi drivers).
+about 3 GiB free in your home directory per install.
+
+**Lepton supports the Steam Deck only.** Desktop PCs with an AMD GPU can
+install it, but that is experimental: games start and draw, but mouse and
+keyboard do not reach them yet
+([issue #9](https://github.com/pjohno/lepton-x86_64/issues/9)). Other GPUs are
+not supported (the image only contains AMD RADV/radeonsi drivers).
 
 ## Install from GitHub Releases
 

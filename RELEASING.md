@@ -62,12 +62,25 @@ The release commit is the commit the bundle is made from. It must be on the
 git switch main && git pull && git push github main
 ```
 
-### 2. Build the Android images if necessary
+### 2. Build the Android images
 
-Only needed after changes to the image or patches; see [BUILDING.md](BUILDING.md).
+Build them from the release commit's checkout (with its submodules checked
+out), so they record what they were built from in `images/BUILD-INFO.txt`:
+the commit, whether the image inputs (device files, Waydroid and Valve
+projects, patches) had uncommitted changes, whether the folders copied into
+the Android checkout still match the repository, and whether every Lepton
+patch is applied. After changes to the image or patches, run
+`prepare-x86_64.sh --reset` first; see [BUILDING.md](BUILDING.md). Without
+changes the build is quick (nothing is recompiled).
 ```bash
 bash image-14/scripts/build-images-x86_64.sh --execute
 ```
+
+The bundle carries this record as `tools/IMAGE-PROVENANCE.txt`. The publisher
+refuses a release whose images were built with modified inputs, without every
+patch applied, or from a commit whose image inputs differ from the release
+commit's. Images built at an earlier commit are accepted when only other files
+(scripts, docs) changed since.
 
 ### 3. Make the versioned base bundle
 
@@ -162,6 +175,13 @@ release, publish a new version.
 
 **What is never uploaded:** only the release files listed above are uploaded.
 Workspaces, stages, Google inputs, signing keys and credentials never are.
+
+## First stable release
+
+The release manager preselects the newest alpha while `ALPHA_PERIOD = True`
+in `compat_tool/tools/lepton-release-manager`. Set it to `False` (and raise
+`MANAGER_VERSION`) in the commit for the first stable release, so stable
+releases become the default choice.
 
 ## Release signing
 

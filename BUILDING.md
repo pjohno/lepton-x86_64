@@ -19,7 +19,7 @@ image).
 | Folder | What it holds |
 | --- | --- |
 | `aosp/` | The **checkout**: the Android 14 (AOSP) sources and their build output (`aosp/out/`). |
-| `images/` | `system.img` and `vendor.img` from the latest build, with checksums. |
+| `images/` | `system.img` and `vendor.img` from the latest build, with checksums and `BUILD-INFO.txt` (what they were built from). |
 | `rootfs/` | The **rootfs**: those images unpacked into one folder, ready for bundling. |
 | `stages/<ID>/` | One **stage** per bundle: the working folder in which `make-deck-bundle` assembles it. You never edit it, and can delete it once the bundle exists. |
 | `bundles/` | Finished **bundles**: `.tar.gz`, `.sha256` checksum and `.install.sh` installer. This is what goes to the Deck. |

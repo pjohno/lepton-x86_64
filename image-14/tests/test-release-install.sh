@@ -55,6 +55,9 @@ repo, out, home = (Path(p) for p in sys.argv[1:])
 loader = importlib.machinery.SourceFileLoader("rm", str(repo / "compat_tool/tools/lepton-release-manager"))
 M = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
 loader.exec_module(M)
+# These fake releases are unsigned; signatures are covered by test-release-manager.py.
+# Ignore whatever release key the repository lists.
+M.signing_keys = lambda: None
 M.HOME, M.DOWNLOADS, M.DATA = home, home / "Downloads/lepton-deck-bundles", home / ".local/share"
 share, steam = home / ".local/share", home / ".local/share/Steam"
 

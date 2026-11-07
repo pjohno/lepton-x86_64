@@ -374,4 +374,17 @@ grep -q 'LEPTON_NO_DIALOGS=1 bash "$HOME/Downloads/lepton-deck-bundles/lepton-x8
 grep -q 'Deck install lepton_x86_64_old overwritten' "$work/transfer-replace.log"
 printf 'broken' >> "$archive"
 reject --transfer-only --check --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1
-echo 'PASS: read-only packaging/transfer checks, real archive without Google adb, installer ADB download, xattr preservation, overwrite guards and mocked transfer'
+# Image provenance: carried only when it describes this bundle's rootfs.
+images="$work/images"; mkdir -p "$images"
+prop="$(sha256sum "$stage/compat_tool/images/rootfs/system/build.prop" | cut -d' ' -f1)"
+printf 'Image source commit: %s\nRootfs build.prop SHA256: %s\n' "$(printf 'b%.0s' {1..40})" "$prop" > "$images/BUILD-INFO.txt"
+LEPTON_IMAGES_DIR="$images" run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id prov-match > /dev/null
+tar -xOf "$out/lepton-x86_64-steamdeck-prov-match.tar.gz" ./tools/IMAGE-PROVENANCE.txt | cmp - "$images/BUILD-INFO.txt"
+tar -xOf "$out/lepton-x86_64-steamdeck-prov-match.tar.gz" ./tools/BUNDLE-PROVENANCE.txt |
+    grep -qx 'Image provenance: tools/IMAGE-PROVENANCE.txt'
+sed -i "s/^Rootfs build.prop SHA256: .*/Rootfs build.prop SHA256: $(printf '0%.0s' {1..64})/" "$images/BUILD-INFO.txt"
+LEPTON_IMAGES_DIR="$images" run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id prov-other > /dev/null
+not grep -qx './tools/IMAGE-PROVENANCE.txt' <(tar -tzf "$out/lepton-x86_64-steamdeck-prov-other.tar.gz")
+tar -xOf "$out/lepton-x86_64-steamdeck-prov-other.tar.gz" ./tools/BUNDLE-PROVENANCE.txt |
+    grep -q '^Image provenance: not recorded'
+echo 'PASS: read-only packaging/transfer checks, real archive without Google adb, installer ADB download, xattr preservation, overwrite guards, mocked transfer and image provenance'

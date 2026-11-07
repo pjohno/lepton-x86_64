@@ -11,9 +11,11 @@ supported by Valve.
 
 ## Supported hardware
 
-**Steam Deck (and other AMD GPUs).** The Android image contains AMD graphics
-drivers only. Software rendering for other GPUs (for example Intel) is
-experimental and is not part of this release.
+**Steam Deck only.** Desktop PCs with an AMD GPU can install this release, but
+desktop use is experimental: games start and draw, but mouse and keyboard do
+not reach them yet ([#9](https://github.com/pjohno/lepton-x86_64/issues/9)).
+The Android image contains AMD graphics drivers only; other GPUs (for example
+Intel) are not supported.
 
 ## Install
 
@@ -61,6 +63,7 @@ for details, including installing by double-click.
   **Repairing** the same version keeps the data.
 - **Steam's Stop button** stops Android immediately, so a game may lose progress
   it has not saved yet. To keep progress, close the game from inside the game.
-- **Intel software rendering** is experimental and is not part of this release.
+- **Desktop PCs** are experimental: no mouse or keyboard input in games yet (#9),
+  and the picture may only update after switching windows (#8).
 
 <!-- Maintainer: replace this comment with the changes since the previous release. -->

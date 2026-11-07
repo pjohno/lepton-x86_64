@@ -3,7 +3,7 @@
 # Local regression suite: synthetic stages, no Android build/boot or network.
 set -Eeuo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-for test_name in test-build-pipeline-cli test-deploy-compat-rootfs-source test-deploy-packaging test-installer-adb test-install-local test-release-install test-publish-release test-inject-ndk-translation-odm test-workspace-and-inputs; do
+for test_name in test-build-pipeline-cli test-deploy-compat-rootfs-source test-deploy-packaging test-installer-adb test-install-local test-release-install test-publish-release test-inject-ndk-translation-odm test-workspace-and-inputs test-image-provenance; do
     bash "$repo/image-14/tests/$test_name.sh"
 done
 bash "$repo/image-14/tests/test-build-recovery.sh"

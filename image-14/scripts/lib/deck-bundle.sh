@@ -431,6 +431,20 @@ done
     printf 'Payload provenance: compat_tool/provenance and compat_tool/ndk-provenance when present\n'
 } > "$tmp/payload/tools/BUNDLE-PROVENANCE.txt"
 
+# What the Android images were built from (build-images writes it). Carried
+# only when it describes this bundle's rootfs (same build.prop); a modified
+# rootfs (GApps, NDK) or an older build has no record.
+image_info="${LEPTON_IMAGES_DIR:+$LEPTON_IMAGES_DIR/BUILD-INFO.txt}"
+bundle_prop="$(sha256sum "$tmp/payload/compat_tool/images/rootfs/system/build.prop" 2>/dev/null | cut -d' ' -f1 || true)"
+if [[ -n "$image_info" && -f "$image_info" && -n "$bundle_prop" ]] &&
+   grep -qx "Rootfs build.prop SHA256: $bundle_prop" "$image_info"; then
+    cp -- "$image_info" "$tmp/payload/tools/IMAGE-PROVENANCE.txt"
+    printf 'Image provenance: tools/IMAGE-PROVENANCE.txt\n' >> "$tmp/payload/tools/BUNDLE-PROVENANCE.txt"
+else
+    printf 'Image provenance: not recorded (rootfs not from the latest recorded image build)\n' \
+        >> "$tmp/payload/tools/BUNDLE-PROVENANCE.txt"
+fi
+
 printf 'Creating compressed archive...\n'
 ( cd "$tmp/payload" && tar --warning=no-file-ignored -cf - . ) | gzip -1 > "$tmp/bundle.tar.gz"
 gzip -t "$tmp/bundle.tar.gz"

@@ -203,6 +203,17 @@ git cat-file -e "$COMMIT^{commit}" 2>/dev/null || fail "Bundle source commit $CO
 git merge-base --is-ancestor "$COMMIT" "$REMOTE/$BRANCH" 2>/dev/null ||
     fail "Commit $COMMIT is not on $REMOTE/$BRANCH (merge and push it, then git fetch $REMOTE)"
 pass "Source commit $COMMIT (clean, on $REMOTE/$BRANCH)"
+# The Android images must come from this commit's image inputs (device files,
+# Waydroid/Valve projects, patches), applied cleanly to the Android checkout.
+tar -xzOf "$ARCHIVE" ./tools/IMAGE-PROVENANCE.txt > "$WORK/image-provenance" 2>/dev/null ||
+    fail 'The bundle has no tools/IMAGE-PROVENANCE.txt: rebuild the images with build-images-x86_64.sh --execute (it records what they were built from), then make the bundle again'
+BUILD_PROP="$(sed -n 's|^\([0-9a-f]\{64\}\)  system/build.prop$|\1|p' "$WORK/provenance")"
+source "$ROOT/image-14/scripts/lib/image-provenance.sh"
+if ! image_provenance_check "$WORK/image-provenance" "$ROOT" "$COMMIT" "$BUILD_PROP" > "$WORK/image-problems"; then
+    sed 's/^/  /' "$WORK/image-problems" >&2
+    fail 'The Android images cannot be traced to the release commit (see above)'
+fi
+pass "Android images built from $(sed -n 's/^Image source commit: //p' "$WORK/image-provenance") (same image inputs as the release commit)"
 # The installer must be exactly the one in that commit (with the archive name).
 git show "$COMMIT:compat_tool/tools/lepton-install-bundle" |
     sed "s|^DEFAULT_ARCHIVE=''\$|DEFAULT_ARCHIVE='$NAME.tar.gz'|" > "$WORK/expected-installer"

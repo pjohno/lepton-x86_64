@@ -11,10 +11,13 @@ trap 'rm -rf -- "$work"' EXIT
 
 # A repository whose "github" remote is a local bare repository.
 fake="$work/repo"
-for file in image-14/scripts/publish-release.sh image-14/scripts/lib/workspace.sh .github/RELEASE_TEMPLATE.md \
+for file in image-14/scripts/publish-release.sh image-14/scripts/lib/workspace.sh image-14/scripts/lib/image-provenance.sh \
+            image-14/patches/0001-mesa-android-sdk34-link-libzstd.patch .github/RELEASE_TEMPLATE.md \
             compat_tool/tools/lepton-install-bundle compat_tool/release-keys/allowed_signers; do
     install -D "$repo/$file" "$fake/$file"
 done
+# Start without a release key, whatever the real repository lists.
+sed -i '/^[[:space:]]*[^#[:space:]]/d' "$fake/compat_tool/release-keys/allowed_signers"
 git -C "$fake" init -q -b main
 git -C "$fake" config user.email test@example.invalid
 git -C "$fake" config user.name Test
@@ -39,8 +42,14 @@ make_bundle() {
     printf '#!/bin/sh\n' > "$payload/compat_tool/lepton"
     printf '{"bundle_id": "%s", "tool_id": "lepton_x86_64_%s", "gapps": %s, "ndk": false}\n' \
         "${BUNDLE_ID:-$version}" "$(tr '.-' '__' <<< "$version")" "${GAPPS:-false}" > "$payload/BUNDLE.json"
-    printf 'Launcher source commit: %s\nLauncher working tree: %s\n' "$commit" "${TREE:-clean}" \
-        > "$payload/tools/BUNDLE-PROVENANCE.txt"
+    local prop=9297b881810c2b0e12c92f6e2b46265813eb26ba6f46446dfd998c6ed6499810
+    printf 'Launcher source commit: %s\nLauncher working tree: %s\n%s  system/build.prop\n' \
+        "$commit" "${TREE:-clean}" "$prop" > "$payload/tools/BUNDLE-PROVENANCE.txt"
+    if [[ "${NO_IMAGE_INFO:-}" != 1 ]]; then
+        printf 'Image source commit: %s\nImage inputs: %s\nCopied folders: match\nLepton patches: %s\nRootfs build.prop SHA256: %s\n' \
+            "${IMAGE_COMMIT:-$commit}" "${IMAGE_INPUTS:-clean}" "${IMAGE_PATCHES:-applied}" "${IMAGE_PROP:-$prop}" \
+            > "$payload/tools/IMAGE-PROVENANCE.txt"
+    fi
     if [[ -n "$extra" ]]; then mkdir -p "$payload/$(dirname "$extra")"; printf 'x' > "$payload/$extra"; fi
     tar -C "$payload" -czf "$out/$name.tar.gz" .
     git -C "$fake" show "$commit:compat_tool/tools/lepton-install-bundle" |
@@ -100,6 +109,24 @@ done
 GAPPS=true make_bundle "$V"; expect_fail 'not describe a base bundle' --check --version "$V" --unsigned
 BUNDLE_ID=v0.0.9 make_bundle "$V"; expect_fail 'not describe a base bundle' --check --version "$V" --unsigned
 TREE=dirty make_bundle "$V"; expect_fail 'uncommitted changes; rebuild' --check --version "$V" --unsigned
+# Image provenance: present, clean, patches applied, same build, same inputs.
+NO_IMAGE_INFO=1 make_bundle "$V"; expect_fail 'no tools/IMAGE-PROVENANCE.txt' --check --version "$V" --unsigned
+IMAGE_INPUTS=modified make_bundle "$V"; expect_fail 'uncommitted changes to their inputs' --check --version "$V" --unsigned
+IMAGE_PATCHES='missing (0001-mesa-android-sdk34-link-libzstd.patch)' make_bundle "$V"
+expect_fail 'Lepton patches were not applied' --check --version "$V" --unsigned
+IMAGE_PROP="$(printf '0%.0s' {1..64})" make_bundle "$V"; expect_fail 'different image build' --check --version "$V" --unsigned
+IMAGE_COMMIT="$(printf 'a%.0s' {1..40})" make_bundle "$V"; expect_fail 'unknown image source commit' --check --version "$V" --unsigned
+# Images from an earlier commit are fine if only non-image files changed since...
+image_commit="$(git -C "$fake" rev-parse HEAD)"
+echo '# docs' >> "$fake/.github/RELEASE_TEMPLATE.md"; git -C "$fake" commit -qam docs
+git -C "$fake" push -q github main && git -C "$fake" fetch -q github
+IMAGE_COMMIT="$image_commit" make_bundle "$V"
+publish --check --version "$V" --unsigned || { cat "$work/out.log"; exit 1; }
+grep -q "Android images built from $image_commit" "$work/out.log"
+# ...but not if an image input (here a patch) changed.
+echo '# changed' >> "$fake/image-14/patches/0001-mesa-android-sdk34-link-libzstd.patch"
+git -C "$fake" commit -qam patch && git -C "$fake" push -q github main && git -C "$fake" fetch -q github
+IMAGE_COMMIT="$image_commit" make_bundle "$V"; expect_fail 'image inputs changed between' --check --version "$V" --unsigned
 make_bundle "$V"
 LEPTON_TEST_MAX_ASSET_BYTES=10 expect_fail 'under 2 GiB' --check --version "$V" --unsigned
 expect_fail 'is not the bundle' --check --version "$V" --unsigned --commit 'HEAD^{tree}'
