@@ -30,6 +30,7 @@ ORIG_ARGS=("$@")
 MODE=execute
 PAUSE=false
 REPLACE=false
+NEW=false
 INTO=''
 REMOVE_IDS=()
 KEEP_PREVIOUS=false
@@ -45,6 +46,8 @@ usage() {
 Options:
   --check          Verify the archive and destination; change nothing
   --replace        Overwrite an existing install of this bundle's own tool ID
+  --new            Install as a new tool without asking (fails if this bundle's
+                   tool ID is already installed); used by the release manager
   --into TOOL_ID   Overwrite another existing install (e.g. lepton_x86_64_dev).
                    Its tool ID and directory are kept, so its Steam shortcuts
                    keep working; Steam shows the new name after a restart
@@ -96,6 +99,7 @@ while (($#)); do
     case "$1" in
         --check) MODE=check; shift ;;
         --replace) REPLACE=true; shift ;;
+        --new) NEW=true; shift ;;
         --into) INTO="${2:?--into needs a tool ID}"; shift 2 ;;
         --remove) REMOVE_IDS+=("${2:?--remove needs a tool ID}"); shift 2 ;;
         --keep-previous) KEEP_PREVIOUS=true; shift ;;
@@ -107,6 +111,7 @@ while (($#)); do
         *) [[ -z "$ARCHIVE" ]] || fail 'Only one archive may be given'; ARCHIVE="$1"; shift ;;
     esac
 done
+[[ "$NEW" == false || ( "$REPLACE" == false && -z "$INTO" ) ]] || fail '--new cannot be combined with --replace or --into'
 
 # Double-clicked in a file manager: reopen in a terminal so progress is visible.
 if [[ ! -t 0 && ! -t 1 && -z "${LEPTON_INSTALL_IN_TERMINAL:-}" &&
@@ -203,7 +208,7 @@ if [[ "$PAUSE" == true && "$MODE" == execute && -z "${LEPTON_NO_DIALOGS:-}" &&
    { command -v zenity >/dev/null 2>&1 || command -v kdialog >/dev/null 2>&1; }; then
     INTERACTIVE=true
 fi
-if [[ "$INTERACTIVE" == true && -z "$INTO" && "$REPLACE" == false ]]; then
+if [[ "$INTERACTIVE" == true && -z "$INTO" && "$REPLACE" == false && "$NEW" == false ]]; then
     choice="$(manage --gui-choose-target --new-id "$TOOL_ID" --new-name "$TOOL_NAME")" ||
         fail 'Installation cancelled; nothing was changed'
     [[ "$choice" == new ]] || INTO="$choice"
@@ -410,6 +415,44 @@ if [[ -d "$desktop_dir" ]]; then
     done
 fi
 pass "Menu entries: Lepton: Add Android game, Lepton: Check graphics, Lepton: Remove installs"
+
+# Lepton: Install / Update / Repair lives outside every versioned install, so it
+# keeps working when all of them are removed. An older bundle never replaces a
+# newer copy; files are replaced by rename, so a running copy is unaffected.
+manager_src="$DEST/compat_tool/tools/lepton-release-manager"
+if [[ -f "$manager_src" ]]; then
+    manager_home="$DATA_HOME/lepton-release-manager"
+    new_version="$(python3 "$manager_src" --version)"
+    old_version=0
+    if [[ -f "$manager_home/lepton-release-manager" ]]; then
+        old_version="$(python3 "$manager_home/lepton-release-manager" --version 2>/dev/null)" || old_version=0
+        [[ "$old_version" =~ ^[0-9]+$ ]] || old_version=0
+    fi
+    if [[ "$new_version" =~ ^[0-9]+$ ]] && (( new_version >= old_version )); then
+        mkdir -p -- "$manager_home"
+        for file in lepton-release-manager lepton-manage-installs; do
+            install -m 755 "$DEST/compat_tool/tools/$file" "$manager_home/.$file.new"
+            mv -f -- "$manager_home/.$file.new" "$manager_home/$file"
+        done
+        install -m 644 "$DEST/compat_tool/release-keys/allowed_signers" "$manager_home/.allowed_signers.new"
+        mv -f -- "$manager_home/.allowed_signers.new" "$manager_home/allowed_signers"
+        ln -sfn -- "$manager_home/lepton-release-manager" "$bin_dir/lepton-release-manager"
+        cat > "$apps/lepton-release-manager.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Lepton: Install / Update / Repair
+Comment=Install, update or repair Lepton x86_64 from its GitHub releases
+Exec="$manager_home/lepton-release-manager"
+Icon=system-software-update
+Terminal=false
+Categories=Game;
+DESKTOP
+        [[ ! -d "$desktop_dir" ]] || install -m 755 "$apps/lepton-release-manager.desktop" "$desktop_dir/lepton-release-manager.desktop"
+        pass "Lepton: Install / Update / Repair (version $new_version) in $manager_home"
+    else
+        info "Kept the newer Lepton: Install / Update / Repair (version $old_version) in $manager_home"
+    fi
+fi
 if [[ "$HAS_GAPPS" == true ]]; then
     # Google games use saved profiles inside THIS install, so these icons point
     # at its own copy (not the ~/.local/bin default links).
@@ -475,6 +518,7 @@ Next steps (desktop icons or application menu > Games; no typing needed)
   2. "Lepton: Add Android game": pick an APK; exit Steam when asked,
      then start Steam again once it reports success
   3. In the game's controller layout enable Touchscreen Native Support
+  4. "Lepton: Install / Update / Repair": later versions, updates and repair
 Terminal equivalents: lepton-run-apk --gpu-check --execute,
                       lepton-add-game GAME.apk (with Steam exited; in ~/.local/bin)
 EOF

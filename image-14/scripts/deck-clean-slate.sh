@@ -77,11 +77,13 @@ for path in "$share"/lepton* "$share"/.lepton-install.*; do
     fi
 done
 for path in "$steam"/compatibilitytools.d/lepton*.vdf "$HOME"/.local/bin/lepton-* \
-            "$share"/applications/lepton-x86_64-*.desktop "$HOME"/Desktop/lepton-*.desktop \
+            "$share"/applications/lepton-x86_64-*.desktop "$share"/applications/lepton-release-manager.desktop \
+            "$HOME"/Desktop/lepton-*.desktop \
             "$HOME"/Downloads/lepton-x86_64-steamdeck-*; do
     add "$path"
 done
 add "$HOME/.config/lepton-x86_64"
+add "$share/lepton-release-manager"   # Lepton: Install / Update / Repair
 add "$HOME/Downloads/lepton-deck-bundles"
 game_data=()
 for path in "$steam"/steamapps/compatdata/*; do

@@ -1,0 +1,11 @@
+# Lepton x86_64 release signing keys (OpenSSH allowed_signers format).
+#
+# The release manager (Lepton: Install / Update / Repair) trusts the keys
+# listed here. While this file lists no key, releases are verified by checksum
+# only and the user must confirm before a downloaded installer runs; once a
+# key is listed, unsigned or wrongly signed releases are refused.
+#
+# One line per key:
+#   lepton-release namespaces="lepton-release" ssh-ed25519 AAAA... lepton-release-YYYY
+# Optional valid-after="YYYYMMDD" / valid-before="YYYYMMDD" options support key
+# rotation. See RELEASING.md ("Release signing"). Never put a private key here.

@@ -280,6 +280,18 @@ grep -q 'Reinstall Lepton x86_64 (community) - fixture over the existing copy' "
 not grep -q 'Install as a new tool' "$work/gui-reinstall.log"
 [[ -x "$dest/compat_tool/lepton" && ! -e "$dest/stale-marker" && -f "$legacy/BUNDLE.json" ]]
 not compgen -G "$dest.previous-*" > /dev/null
+# --new (used by the release manager) never asks "new or replace", and refuses
+# when this bundle is already installed; it cannot be combined with --replace.
+if env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u LEPTON_NO_DIALOGS LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_DIALOG=zenity \
+        WAYLAND_DISPLAY=test-display UI_LOG="$work/gui-new.log" PATH="$work/gui-bin:$PATH" HOME="$deck_home" \
+        bash "$pinned" --allow-non-amd --pause --new < /dev/null > "$work/gui-new.out" 2>&1; then
+    echo 'FAIL: --new replaced an existing install'; exit 1
+fi
+grep -q 'Already installed' "$work/gui-new.out"
+[[ ! -e "$work/gui-new.log" ]] || not grep -q -- --radiolist "$work/gui-new.log"   # no dialog at all
+[[ -x "$dest/compat_tool/lepton" ]]
+if deck --new --replace > "$work/new-replace.log" 2>&1; then echo 'FAIL: --new --replace accepted'; exit 1; fi
+grep -q -- '--new cannot be combined' "$work/new-replace.log"
 mkdir -p "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore"
 printf 'synthetic' > "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk"
 mkdir -p "$stage/compat_tool/images/rootfs/system/framework"

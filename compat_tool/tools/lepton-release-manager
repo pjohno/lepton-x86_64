@@ -1,0 +1,818 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Lepton: Install / Update / Repair.
+
+Finds published Lepton x86_64 releases on GitHub, downloads and verifies the
+base bundle, and runs that bundle's own installer (lepton-install-bundle).
+Installing, Steam registration, Google ADB and removal are never done here.
+
+  lepton-release-manager                     # windows (zenity or kdialog)
+  lepton-release-manager --list-releases     # published releases, newest first
+  lepton-release-manager --list-installed    # installed tools and versions
+  lepton-release-manager --download VERSION  # download and verify only
+
+Trust model: see RELEASING.md. If a release signing key is installed next
+to this program (allowed_signers), a release must carry a valid signature of
+its .sha256 manifest, and the manifest must match the archive and installer.
+Without a key, checksums only detect damaged downloads; the user is told so
+and must confirm before downloaded code runs.
+"""
+import argparse
+import functools
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# Raise when this file changes, so installers only ever replace the installed
+# copy (~/.local/share/lepton-release-manager) with the same or a newer one.
+MANAGER_VERSION = 1
+
+REPO = "pjohno/lepton-x86_64"
+API = "https://api.github.com/repos/%s/releases?per_page=100" % REPO
+# Release files come from github.com and are redirected to GitHub's download
+# hosts; anything else (or plain http) is refused, also after redirects.
+ALLOWED_HOSTS = {"api.github.com", "github.com", "objects.githubusercontent.com",
+                 "release-assets.githubusercontent.com", "github-releases.githubusercontent.com"}
+PREFIX = "lepton-x86_64-steamdeck-"
+SIGNATURE_NAMESPACE = "lepton-release"
+SIGNER = "lepton-release"
+# During the alpha period the newest alpha is the preselected choice.
+ALPHA_PERIOD = True
+TITLE = "Lepton: Install / Update / Repair"
+HOME = Path.home()
+DOWNLOADS = HOME / "Downloads/lepton-deck-bundles"
+DATA = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share")
+HERE = Path(__file__).resolve().parent
+_IDENT = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+TAG_RE = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(%s(?:\.%s)*))?" % (_IDENT, _IDENT))
+SHA256_LINE = re.compile(r"([0-9a-f]{64}) [ *](\S+)")
+GIB = 1024 ** 3
+
+
+class ReleaseError(Exception):
+    """A problem to explain to the user; nothing was installed."""
+
+
+class Cancelled(Exception):
+    pass
+
+
+# ---------------------------------------------------------------- versions
+@functools.total_ordering
+class Version:
+    """vMAJOR.MINOR.PATCH[-PRERELEASE], ordered by Semantic Versioning 2.0
+    precedence: numbers compare numerically, a prerelease sorts before its
+    release (v0.2.0-alpha < v0.2.0), prerelease identifiers compare one by one
+    (numeric < alphanumeric, numbers numerically, more identifiers > fewer):
+    v0.1.0-alpha < v0.1.0-alpha.2 < v0.1.0-alpha.10 < v0.1.0-beta < v0.1.0."""
+
+    def __init__(self, tag):
+        match = TAG_RE.fullmatch(tag or "")
+        if not match:
+            raise ValueError("not a Lepton release version: %r" % tag)
+        self.tag = tag
+        self.core = tuple(int(match.group(i)) for i in (1, 2, 3))
+        self.pre = tuple(match.group(4).split(".")) if match.group(4) else ()
+
+    @property
+    def is_prerelease(self):
+        return bool(self.pre)
+
+    def key(self):
+        pre = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in self.pre)
+        return self.core + ((0, pre) if self.pre else (1, ()),)
+
+    def __eq__(self, other):
+        return self.key() == other.key()
+
+    def __lt__(self, other):
+        return self.key() < other.key()
+
+    def __hash__(self):
+        return hash(self.key())
+
+    def __str__(self):
+        return self.tag
+
+
+def parse_version(tag):
+    try:
+        return Version(tag)
+    except ValueError:
+        return None
+
+
+def asset_names(tag):
+    archive = PREFIX + tag + ".tar.gz"
+    return {"archive": archive, "manifest": archive + ".sha256",
+            "installer": PREFIX + tag + ".install.sh", "signature": archive + ".sha256.sig"}
+
+
+def packaged_tool_id(tag):
+    """The Steam tool ID a base bundle with this version installs as."""
+    return "lepton_x86_64_" + re.sub(r"[.-]", "_", tag)
+
+
+# ---------------------------------------------------------------- network
+def check_url(url):
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "https" or (parts.hostname or "").lower() not in ALLOWED_HOSTS:
+        raise ReleaseError("Refusing to download from an unexpected address: %s" % url)
+    return url
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        check_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class Transport:
+    """HTTPS access to GitHub. Tests replace this with a fake."""
+    user_agent = "lepton-release-manager/%d" % MANAGER_VERSION
+
+    def __init__(self):
+        self.opener = urllib.request.build_opener(_SafeRedirect)
+
+    def _open(self, url, accept):
+        request = urllib.request.Request(check_url(url), headers={
+            "User-Agent": self.user_agent, "Accept": accept})
+        try:
+            return self.opener.open(request, timeout=30)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (403, 429) and (exc.headers.get("X-RateLimit-Remaining") == "0"
+                                           or exc.code == 429):
+                reset = exc.headers.get("X-RateLimit-Reset")
+                when = time.strftime("%H:%M", time.localtime(int(reset))) if reset and reset.isdigit() else "later"
+                raise ReleaseError("GitHub's limit for anonymous requests was reached. "
+                                   "Try again after %s." % when) from None
+            if exc.code == 404 and urllib.parse.urlsplit(url).hostname == "api.github.com":
+                raise ReleaseError("GitHub does not show the project %s (it may not be public "
+                                   "yet). No releases can be listed." % REPO) from None
+            raise ReleaseError("GitHub answered %d (%s) for %s" % (exc.code, exc.reason, url)) from None
+        except urllib.error.URLError as exc:
+            raise ReleaseError("Could not connect to GitHub (%s). Check the internet "
+                               "connection and try again." % exc.reason) from None
+
+    def get_json(self, url):
+        """Returns (data, next page URL or None)."""
+        with self._open(url, "application/vnd.github+json") as response:
+            data = json.loads(response.read().decode("utf-8"))
+            link = response.headers.get("Link") or ""
+        match = re.search(r'<([^>]+)>;\s*rel="next"', link)
+        return data, (match.group(1) if match else None)
+
+    def download(self, url, destination, progress=None):
+        """Stream url into the (new) file destination; returns bytes written."""
+        written = 0
+        try:
+            with self._open(url, "application/octet-stream") as response, \
+                    open(destination, "xb") as out:
+                total = int(response.headers.get("Content-Length") or 0)
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    written += len(chunk)
+                    if progress:
+                        progress(written, total)
+        except OSError as exc:
+            raise ReleaseError("The download was interrupted (%s). Nothing was installed; "
+                               "try again." % exc) from None
+        return written
+
+
+TRANSPORT = Transport()
+
+
+# ---------------------------------------------------------------- releases
+class Release:
+    def __init__(self, tag, version, prerelease, published, assets, url):
+        self.tag, self.version, self.published, self.assets, self.url = tag, version, published, assets, url
+        self.prerelease = prerelease or version.is_prerelease
+        self.names = asset_names(tag)
+        self.signed = self.names["signature"] in assets
+
+    @property
+    def date(self):
+        return (self.published or "")[:10]
+
+    def label(self):
+        kind = "alpha / prerelease" if self.prerelease else "stable"
+        size = self.assets[self.names["archive"]].get("size", 0)
+        return "%s  (%s, published %s, %.1f GiB%s)" % (
+            self.tag, kind, self.date or "?", size / GIB, ", signed" if self.signed else "")
+
+
+def parse_releases(items):
+    """Published releases that carry exactly a Lepton base bundle, newest
+    first, plus (tag, reason) for every published release left out."""
+    releases, skipped = [], []
+    for item in items:
+        if item.get("draft") or not item.get("published_at"):
+            continue  # drafts are never offered
+        tag = item.get("tag_name") or ""
+        version = parse_version(tag)
+        if version is None:
+            skipped.append((tag, "not a Lepton version tag"))
+            continue
+        names = asset_names(tag)
+        assets = {a.get("name"): a for a in item.get("assets") or []}
+        unexpected = sorted(n for n in assets if n not in names.values())
+        missing = [names[k] for k in ("archive", "manifest", "installer") if names[k] not in assets]
+        incomplete = [n for n, a in assets.items() if a.get("state", "uploaded") != "uploaded"]
+        if unexpected or missing or incomplete:
+            skipped.append((tag, "unexpected files %s" % unexpected if unexpected else
+                            "missing %s" % (missing or incomplete)))
+            continue
+        releases.append(Release(tag, version, bool(item.get("prerelease")), item.get("published_at"),
+                                assets, item.get("html_url", "")))
+    releases.sort(key=lambda r: r.version, reverse=True)
+    return releases, skipped
+
+
+def fetch_releases(transport=None, pages=5):
+    transport = transport or TRANSPORT
+    items, url = [], API
+    while url and pages:
+        data, url = transport.get_json(url)
+        if not isinstance(data, list):
+            raise ReleaseError("Unexpected answer from GitHub's release list")
+        items += data
+        pages -= 1
+    return parse_releases(items)
+
+
+def latest(releases, prerelease):
+    """Newest stable release (prerelease=False) or newest alpha (True)."""
+    return next((r for r in releases if r.prerelease == prerelease), None)
+
+
+# ---------------------------------------------------------------- installs
+def manage_installs():
+    """lepton-manage-installs: the copy next to this program (the stable
+    location), else the default install's command."""
+    for candidate in (HERE / "lepton-manage-installs", HOME / ".local/bin/lepton-manage-installs"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def installed_tools():
+    """Installed Lepton tools with their bundle version and kind."""
+    manage = manage_installs()
+    if manage is None:
+        return []
+    result = subprocess.run([sys.executable, str(manage), "--list", "--json"],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    if result.returncode != 0:
+        return []
+    tools = []
+    for entry in json.loads(result.stdout or "[]"):
+        if entry.get("kind") != "install":
+            continue
+        try:
+            meta = json.loads((Path(entry["dir"]) / "BUNDLE.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            meta = {}
+        bundle = meta.get("bundle_id") or ""
+        kind = "GApps" if meta.get("gapps") else ("NDK" if meta.get("ndk") else "base")
+        tools.append(dict(entry, bundle=bundle, version=parse_version(bundle), variant=kind))
+    return tools
+
+
+def describe_tool(tool):
+    parts = [tool["name"], "version " + (tool["bundle"] or "unknown")]
+    if tool["variant"] != "base":
+        parts.append(tool["variant"])
+    parts.append("%d Steam shortcut(s)" % tool.get("shortcuts", 0))
+    return " - ".join(parts)
+
+
+def repair_target(tool, releases):
+    """(release, None) if this install can be repaired, else (None, reason)."""
+    if tool["variant"] != "base":
+        return None, ("%s is a %s install. Releases only contain the base bundle, so repairing "
+                      "it would remove %s. Reinstall it from the bundle you built instead."
+                      % (tool["name"], tool["variant"], tool["variant"]))
+    if tool["version"] is None:
+        return None, ("%s was not installed from a published release (its bundle ID is %r), "
+                      "so there is no release to repair it from. Reinstall it from the bundle "
+                      "it came from." % (tool["name"], tool["bundle"] or "unknown"))
+    match = next((r for r in releases if r.tag == tool["bundle"]), None)
+    if match is None:
+        return None, ("Version %s is not (or no longer) published on GitHub, so it cannot be "
+                      "repaired from there." % tool["bundle"])
+    return match, None
+
+
+def update_for(tool, releases):
+    """Newest release newer than this base install, or None."""
+    if tool["variant"] != "base" or tool["version"] is None:
+        return None
+    newer = [r for r in releases if r.version > tool["version"]]
+    if not tool["version"].is_prerelease:
+        newer = [r for r in newer if not r.prerelease] or newer
+    return newer[0] if newer else None
+
+
+# ---------------------------------------------------------------- verification
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def parse_manifest(text, names):
+    """The manifest must list exactly the archive and the installer."""
+    sums = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        match = SHA256_LINE.fullmatch(line.strip())
+        if not match or match.group(2) in sums:
+            raise ReleaseError("The release checksum file is malformed.")
+        sums[match.group(2)] = match.group(1)
+    if set(sums) != {names["archive"], names["installer"]}:
+        raise ReleaseError("The release checksum file does not list exactly the archive and installer.")
+    return sums
+
+
+def signing_keys():
+    """Trusted release keys installed with this program (empty: none)."""
+    for candidate in (HERE / "allowed_signers", HERE.parent / "release-keys/allowed_signers"):
+        if candidate.is_file():
+            lines = [l for l in candidate.read_text(encoding="utf-8").splitlines()
+                     if l.strip() and not l.lstrip().startswith("#")]
+            return candidate if lines else None
+    return None
+
+
+def verify_signature(manifest, signature, keys):
+    """Raise unless signature is a valid lepton-release signature of manifest."""
+    keygen = shutil.which("ssh-keygen")
+    if not keygen:
+        raise ReleaseError("ssh-keygen (OpenSSH) is needed to check the release signature.")
+    with open(manifest, "rb") as data:
+        result = subprocess.run([keygen, "-Y", "verify", "-f", str(keys), "-I", SIGNER,
+                                 "-n", SIGNATURE_NAMESPACE, "-s", str(signature)],
+                                stdin=data, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if result.returncode != 0:
+        raise ReleaseError("The release signature is NOT valid; nothing was installed.\n"
+                           + result.stdout.strip())
+
+
+def safe_download_dir(directory):
+    directory.mkdir(parents=True, exist_ok=True)
+    resolved = directory.resolve()
+    if directory.is_symlink() or HOME.resolve() not in resolved.parents:
+        raise ReleaseError("Refusing to use %s for downloads." % directory)
+    return resolved
+
+
+class Verified:
+    def __init__(self, release, directory, sums, authenticated):
+        self.release, self.directory, self.sums, self.authenticated = release, directory, sums, authenticated
+        self.installer = directory / release.names["installer"]
+        self.archive = directory / release.names["archive"]
+
+
+def download_release(release, ui, transport=None, directory=None, keys="auto"):
+    """Download (or reuse) the release's base bundle into directory, verified.
+    Files are written under temporary names and renamed only once verified."""
+    transport = transport or TRANSPORT
+    directory = safe_download_dir(directory or DOWNLOADS)
+    keys = signing_keys() if keys == "auto" else keys
+    names = release.names
+    if keys and not release.signed:
+        raise ReleaseError("Release %s is not signed, but this computer trusts a Lepton release "
+                           "key. It was not downloaded." % release.tag)
+    work = Path(tempfile.mkdtemp(prefix=".lepton-release-", dir=directory))
+    try:
+        manifest = work / names["manifest"]
+        transport.download(release.assets[names["manifest"]]["browser_download_url"], manifest)
+        if manifest.stat().st_size > 4096:
+            raise ReleaseError("The release checksum file is too large.")
+        signature = None
+        if keys:
+            signature = work / names["signature"]
+            transport.download(release.assets[names["signature"]]["browser_download_url"], signature)
+            verify_signature(manifest, signature, keys)
+        sums = parse_manifest(manifest.read_text(encoding="utf-8", errors="replace"), names)
+        needed = 0
+        for key in ("installer", "archive"):
+            final = directory / names[key]
+            if not (final.is_file() and not final.is_symlink() and sha256_file(final) == sums[names[key]]):
+                needed += int(release.assets[names[key]].get("size", 0))
+        free = shutil.disk_usage(directory).free
+        if needed and free < needed + 256 * 1024 ** 2:
+            raise ReleaseError("Not enough free space in %s: %.1f GiB needed, %.1f GiB free."
+                               % (directory, needed / GIB, free / GIB))
+        for key in ("installer", "archive"):
+            name, final = names[key], directory / names[key]
+            if final.is_file() and not final.is_symlink() and sha256_file(final) == sums[name]:
+                ui.note("Using the already downloaded %s (verified)" % name)
+                continue
+            asset = release.assets[name]
+            part = work / name
+            with ui.progress("Downloading %s" % name) as progress:
+                transport.download(asset["browser_download_url"], part, progress)
+            if asset.get("size") and part.stat().st_size != int(asset["size"]):
+                raise ReleaseError("%s is incomplete (%d of %d bytes). Nothing was installed; "
+                                   "try again." % (name, part.stat().st_size, int(asset["size"])))
+            if sha256_file(part) != sums[name]:
+                raise ReleaseError("%s does not match the release checksum (damaged or altered "
+                                   "download). Nothing was installed." % name)
+            os.replace(part, final)
+        os.replace(manifest, directory / names["manifest"])
+        if signature:
+            os.replace(signature, directory / names["signature"])
+        return Verified(release, directory, sums, authenticated=bool(keys))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- installing
+def run_installer(verified, args, ui):
+    """Run the release's own installer. Re-checks the installer's hash first;
+    nothing downloaded is executed before this point. Returns True on success."""
+    installer = verified.installer
+    if sha256_file(installer) != verified.sums[verified.release.names["installer"]]:
+        raise ReleaseError("The installer changed after it was verified; nothing was run.")
+    command = ["bash", str(installer)] + list(args)
+    # The release manager has already asked new-or-replace; no second dialog.
+    env = dict(os.environ, LEPTON_INSTALL_IN_TERMINAL="1", LEPTON_NO_DIALOGS="1")
+    if ui.graphical and shutil.which("konsole"):
+        with tempfile.TemporaryDirectory(prefix="lepton-release-") as tmp:
+            status = Path(tmp) / "status"
+            env["LEPTON_STATUS_FILE"] = str(status)
+            subprocess.run(["konsole", "-e", "bash", "-c",
+                            'bash "$@"; echo $? > "$LEPTON_STATUS_FILE"', "lepton-install"]
+                           + command[1:] + ["--pause"], env=env)
+            if not status.is_file():
+                ui.info("The installer runs in its own window; follow it there.")
+                return None
+            return status.read_text().strip() == "0"
+    result = subprocess.run(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    ui.text("Installer output", result.stdout)
+    return result.returncode == 0
+
+
+DATA_WARNING = (
+    "Games that use the replaced tool will start with fresh Android data on their next "
+    "launch: each Lepton release has its own Android image, and Android data from one "
+    "image cannot be opened by another. Installed apps, sign-ins and saves kept only on "
+    "the device are reset; shared storage (/sdcard) and online or cloud saves are kept. "
+    "Keeping the Steam shortcut does not keep the data.")
+TRUST_WARNING = (
+    "This release is not signed: this computer has no Lepton release key to check it "
+    "against. The checksums only show that the files were not damaged in transit; they do "
+    "not prove who published them.\n\nContinue only if you trust the GitHub project %s. "
+    "The installer runs as your user (not as root)." % REPO)
+
+
+def install(release, target, ui, transport=None, directory=None, keys="auto", tools=None):
+    """target: None for a new tool, else the tool ID to replace (kept)."""
+    tools = installed_tools() if tools is None else tools
+    if target is None and any(t["id"] == packaged_tool_id(release.tag) for t in tools):
+        raise ReleaseError("An install with tool ID %s already exists. Choose \"Replace\" or "
+                           "\"Repair\" for it instead." % packaged_tool_id(release.tag))
+    verified = download_release(release, ui, transport, directory, keys)
+    archive_size = verified.archive.stat().st_size
+    data = next((p for p in (DATA, *DATA.parents) if p.is_dir()), HOME)
+    free = shutil.disk_usage(data).free
+    if free < 3 * archive_size and not ui.question(
+            "Installing needs roughly %.1f GiB free in %s, but only %.1f GiB is free. Try anyway?"
+            % (3 * archive_size / GIB, DATA, free / GIB), "Try anyway"):
+        raise Cancelled()
+    if not verified.authenticated and not ui.question(TRUST_WARNING, "Install anyway"):
+        raise Cancelled()
+    args = ["--new"] if target is None else ["--into", target]
+    ok = run_installer(verified, args, ui)
+    if ok:
+        keep = target or packaged_tool_id(release.tag)
+        others = [t for t in installed_tools() if t["id"] != keep]
+        if others and ui.question("Installed %s. Remove older Lepton installs now? You choose which "
+                                  "in the next window; nothing is removed otherwise." % release.tag,
+                                  "Choose installs to remove"):
+            manage = manage_installs()
+            if manage:
+                subprocess.run([sys.executable, str(manage), "--gui", "--quiet-if-empty",
+                                "--exclude", keep, "--prompt",
+                                "Optionally remove older Lepton installs (game data is never deleted):"])
+    elif ok is False:
+        ui.error("The installer did not complete; see its window. Existing installs were kept.")
+    return ok
+
+
+# ---------------------------------------------------------------- user interface
+class UI:
+    """zenity or kdialog windows; plain text when there is no display."""
+
+    def __init__(self, tool="auto"):
+        """tool: "zenity", "kdialog", None (text only) or "auto" (detect)."""
+        if tool == "auto":
+            has_display = bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"))
+            tool = next((t for t in ("zenity", "kdialog") if has_display and shutil.which(t)), None)
+        self.tool = tool
+        self.graphical = tool is not None
+
+    def _run(self, args, **kw):
+        return subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, **kw)
+
+    def note(self, text):
+        print(text, file=sys.stderr)
+
+    def info(self, text):
+        self.note(text)
+        if self.tool == "zenity":
+            self._run(["zenity", "--info", "--title=" + TITLE, "--no-markup", "--width=560", "--text=" + text])
+        elif self.tool == "kdialog":
+            self._run(["kdialog", "--title", TITLE, "--msgbox", text])
+
+    def error(self, text):
+        print("ERROR: " + text, file=sys.stderr)
+        if self.tool == "zenity":
+            self._run(["zenity", "--error", "--title=" + TITLE, "--no-markup", "--width=560", "--text=" + text])
+        elif self.tool == "kdialog":
+            self._run(["kdialog", "--title", TITLE, "--error", text])
+
+    def question(self, text, ok_label="Continue"):
+        if self.tool == "zenity":
+            return self._run(["zenity", "--question", "--title=" + TITLE, "--no-markup", "--width=560",
+                              "--default-cancel", "--ok-label=" + ok_label, "--cancel-label=Cancel",
+                              "--text=" + text]).returncode == 0
+        if self.tool == "kdialog":
+            return self._run(["kdialog", "--title", TITLE, "--warningcontinuecancel", text,
+                              "--continue-label", ok_label]).returncode == 0
+        print(text + "\n[%s / Cancel] Type yes to continue: " % ok_label, end="", file=sys.stderr)
+        return sys.stdin.isatty() and input().strip().lower() == "yes"
+
+    def choose(self, text, rows):
+        """rows: [(tag, label)], first is preselected. Returns a tag or None."""
+        if not rows:
+            return None
+        if self.tool == "zenity":
+            args = ["zenity", "--list", "--radiolist", "--title=" + TITLE, "--text=" + text,
+                    "--width=820", "--height=440", "--column=", "--column=ID", "--column=Choice",
+                    "--print-column=2", "--hide-column=2"]
+            for i, (tag, label) in enumerate(rows):
+                args += ["TRUE" if i == 0 else "FALSE", tag, label]
+            picked = self._run(args)
+            return picked.stdout.strip().splitlines()[0] if picked.returncode == 0 and picked.stdout.strip() else None
+        if self.tool == "kdialog":
+            args = ["kdialog", "--title", TITLE, "--radiolist", text]
+            for i, (tag, label) in enumerate(rows):
+                args += [tag, label, "on" if i == 0 else "off"]
+            picked = self._run(args)
+            return picked.stdout.strip() if picked.returncode == 0 and picked.stdout.strip() else None
+        print(text, file=sys.stderr)
+        for i, (_, label) in enumerate(rows, 1):
+            print("  %d. %s" % (i, label), file=sys.stderr)
+        if not sys.stdin.isatty():
+            return None
+        answer = input("Number (Enter cancels): ").strip()
+        return rows[int(answer) - 1][0] if answer.isdigit() and 0 < int(answer) <= len(rows) else None
+
+    def text(self, title, body):
+        print(body, file=sys.stderr)
+        if self.tool == "zenity":
+            self._run(["zenity", "--text-info", "--title=" + title, "--width=760", "--height=520"],
+                      input=body)
+        elif self.tool == "kdialog":
+            self._run(["kdialog", "--title", title, "--msgbox", body[-4000:]])
+
+    def progress(self, text):
+        return _Progress(self, text)
+
+
+class _Progress:
+    def __init__(self, ui, text):
+        self.ui, self.text, self.proc, self.last = ui, text, None, -1
+
+    def __enter__(self):
+        self.ui.note(self.text + " ...")
+        if self.ui.tool == "zenity":
+            self.proc = subprocess.Popen(["zenity", "--progress", "--title=" + TITLE, "--text=" + self.text,
+                                          "--percentage=0", "--auto-close", "--width=520"],
+                                         stdin=subprocess.PIPE, text=True, stderr=subprocess.DEVNULL)
+        elif self.ui.tool == "kdialog":
+            subprocess.run(["kdialog", "--title", TITLE, "--passivepopup", self.text + " ...", "10"],
+                           stderr=subprocess.DEVNULL)
+        return self
+
+    def __call__(self, done, total):
+        percent = int(done * 100 / total) if total else 0
+        if percent == self.last:
+            return
+        self.last = percent
+        if self.proc:
+            if self.proc.poll() is not None:
+                raise Cancelled()
+            try:
+                self.proc.stdin.write("%d\n# %s: %.0f of %.0f MiB\n" % (
+                    min(percent, 99), self.text, done / 1048576, total / 1048576))
+                self.proc.stdin.flush()
+            except BrokenPipeError:
+                raise Cancelled() from None
+
+    def __exit__(self, *exc):
+        if self.proc:
+            try:
+                self.proc.stdin.write("100\n")
+                self.proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+            self.proc.wait()
+        return False
+
+
+# ---------------------------------------------------------------- flows
+def choose_release(ui, releases, prompt):
+    rows = [(r.tag, r.label()) for r in releases]
+    tag = ui.choose(prompt, rows)
+    return next((r for r in releases if r.tag == tag), None)
+
+
+def choose_target(ui, release, tools):
+    """New tool, or which base install to replace. Returns ('new', None),
+    ('replace', tool) or None (cancel)."""
+    rows = [("new", "Install %s alongside the existing versions (a new Steam tool)" % release.tag)]
+    replaceable = [t for t in tools if t["variant"] == "base"]
+    for tool in replaceable:
+        older = tool["version"] is not None and release.version < tool["version"]
+        rows.append((tool["id"], "Replace %s%s (its Steam tool ID is kept)" % (
+            describe_tool(tool), " - DOWNGRADE" if older else "")))
+    skipped = [t["name"] for t in tools if t["variant"] != "base"]
+    text = "How should %s be installed?" % release.tag
+    if skipped:
+        text += "\n(GApps/NDK installs are not offered for replacement: %s)" % ", ".join(skipped)
+    choice = ui.choose(text, rows)
+    if choice is None:
+        return None
+    if choice == "new":
+        return ("new", None)
+    return ("replace", next(t for t in replaceable if t["id"] == choice))
+
+
+def confirm_replace(ui, release, tool):
+    text = "Replace %s with %s?\n\n" % (describe_tool(tool), release.tag)
+    if tool["version"] is not None and release.version < tool["version"]:
+        text += ("WARNING: this is a DOWNGRADE from %s to the older %s.\n\n"
+                 % (tool["version"], release.tag))
+    if tool["version"] is None or tool["version"] != release.version:
+        text += DATA_WARNING
+    else:
+        text += "Same version: games keep their Android data."
+    return ui.question(text, "Replace")
+
+
+def flow_install(ui, release, transport=None):
+    tools = installed_tools()
+    target = choose_target(ui, release, tools)
+    if target is None:
+        raise Cancelled()
+    if target[0] == "replace":
+        if not confirm_replace(ui, release, target[1]):
+            raise Cancelled()
+        return install(release, target[1]["id"], ui, transport, tools=tools)
+    return install(release, None, ui, transport, tools=tools)
+
+
+def flow_repair(ui, releases, transport=None):
+    tools = installed_tools()
+    if not tools:
+        ui.info("No Lepton installs were found.")
+        return None
+    tag = ui.choose("Which install should be repaired? Its files are replaced by a fresh copy of "
+                    "the same release; its Steam tool ID, shortcuts and game data are kept. "
+                    "(Repair cannot fix damaged Android app data.)",
+                    [(t["id"], describe_tool(t)) for t in tools])
+    tool = next((t for t in tools if t["id"] == tag), None)
+    if tool is None:
+        raise Cancelled()
+    release, reason = repair_target(tool, releases)
+    if release is None:
+        ui.info(reason)
+        return None
+    if not ui.question("Repair %s by reinstalling %s over it?" % (tool["name"], release.tag), "Repair"):
+        raise Cancelled()
+    return install(release, tool["id"], ui, transport, tools=tools)
+
+
+def main_menu(ui, transport=None):
+    releases, skipped = fetch_releases(transport)
+    for tag, reason in skipped:
+        ui.note("Ignored release %s: %s" % (tag, reason))
+    tools = installed_tools()
+    alpha, stable = latest(releases, True), latest(releases, False)
+    rows = []
+    for tool in tools:
+        update = update_for(tool, releases)
+        if update:
+            rows.append(("update:" + tool["id"], "Update %s to %s" % (describe_tool(tool), update.label())))
+    alpha_row = ("alpha", "Install the latest alpha: " + (alpha.label() if alpha else "none published"))
+    stable_row = ("stable", "Install the latest stable release: " + (stable.label() if stable else
+                                                                     "none published yet"))
+    rows += [alpha_row, stable_row] if ALPHA_PERIOD else [stable_row, alpha_row]
+    rows += [("choose", "Choose from all published versions (%d)" % len(releases)),
+             ("repair", "Repair an existing installation"),
+             ("remove", "Remove installs (Steam shortcuts are shown for each)")]
+    choice = ui.choose("Lepton x86_64 releases from github.com/%s" % REPO, rows)
+    if choice is None:
+        raise Cancelled()
+    if choice.startswith("update:"):
+        tool = next(t for t in tools if t["id"] == choice[7:])
+        release = update_for(tool, releases)
+        if not confirm_replace(ui, release, tool):
+            raise Cancelled()
+        return install(release, tool["id"], ui, transport, tools=tools)
+    if choice in ("alpha", "stable"):
+        release = alpha if choice == "alpha" else stable
+        if release is None:
+            ui.info("No %s release has been published yet. Use \"Choose from all published "
+                    "versions\" to see what is available." % ("alpha" if choice == "alpha" else "stable"))
+            return None
+        return flow_install(ui, release, transport)
+    if choice == "choose":
+        if not releases:
+            ui.info("No usable releases are published yet.")
+            return None
+        release = choose_release(ui, releases, "Published Lepton x86_64 versions (newest first):")
+        if release is None:
+            raise Cancelled()
+        return flow_install(ui, release, transport)
+    if choice == "repair":
+        return flow_repair(ui, releases, transport)
+    manage = manage_installs()
+    if manage is None:
+        ui.info("No Lepton installs were found.")
+        return None
+    subprocess.run([sys.executable, str(manage), "--gui"])
+    return None
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--list-releases", action="store_true", help="List usable published releases")
+    action.add_argument("--list-installed", action="store_true", help="List installed tools and versions")
+    action.add_argument("--download", metavar="VERSION", help="Download and verify a release (no install)")
+    action.add_argument("--version", action="store_true", help="Print this program's version")
+    parser.add_argument("--json", action="store_true", help="With --list-releases")
+    args = parser.parse_args()
+    if args.version:
+        print(MANAGER_VERSION)
+        return 0
+    if args.list_installed:
+        for tool in installed_tools():
+            print(tool["id"] + "\n      " + describe_tool(tool))
+        return 0
+    ui = UI("auto") if not (args.list_releases or args.download) else UI(None)
+    try:
+        if args.list_releases:
+            releases, skipped = fetch_releases()
+            if args.json:
+                print(json.dumps([dict(tag=r.tag, prerelease=r.prerelease, published=r.published,
+                                       signed=r.signed, url=r.url) for r in releases], indent=2))
+            else:
+                for release in releases:
+                    print(release.label())
+                for tag, reason in skipped:
+                    print("ignored %s: %s" % (tag, reason))
+            return 0
+        if args.download:
+            releases, _ = fetch_releases()
+            release = next((r for r in releases if r.tag == args.download), None)
+            if release is None:
+                raise ReleaseError("Version %s is not published (see --list-releases)." % args.download)
+            verified = download_release(release, ui)
+            print("Verified%s: %s" % ("" if verified.authenticated else " (checksums only, not signed)",
+                                      verified.installer))
+            return 0
+        main_menu(ui)
+        return 0
+    except Cancelled:
+        ui.note("Cancelled; nothing was changed.")
+        return 1
+    except ReleaseError as exc:
+        ui.error(str(exc))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,137 +1,37 @@
-# Pending tests for `release/adb-and-local-install`
+# Pending tests for `feature/release-framework`
 
 Delete this file when the branch is merged into `main`.
 
-## What the branch adds
+## Release framework (branch `feature/release-framework`)
 
-Each item is one commit:
+Automated tests cover the logic. These need a real Steam Deck and GitHub:
 
-- **Steam Deck installer downloads Google ADB.** Bundles no longer contain it.
-- **Add-game changes:**
-  - the picker accepts `.apkm` files;
-  - games whose shortcut was deleted can be added again;
-  - desktop Steam with no `CompatToolMapping` section works.
-- **Build recovery after a power cut:** `build-images-x86_64.sh --repair`, and an
-  "unfinished build" marker.
-- **Local install and host check:** `install-local.sh` and `lepton-host-check`.
-- **Double-click reinstall:** double-clicking an installed bundle offers "Reinstall".
-- **Neutral device brand:** the x86_64 image reports `Linux-PC` instead of
-  `Steam-Frame` (needs an image rebuild; see build machine item 0).
-- **Stronger tests:** "must not" checks that can now fail, and no real dialogs
-  during tests.
-
-The local suite passes:
-
-```
-bash image-14/tests/run-workflow-tests.sh
-```
-
-On a computer without `lpunpack`, put a stub `lpunpack` on `PATH`. Only
-`test-workspace-and-inputs` needs it.
-
-## Already confirmed on the Steam Deck
-
-These were tested with a bundle from this code (before the last two commits):
-
-- **Roblox (`.apkm`)** installs and runs on the base bundle.
-- **A game's data is kept between launches on the same tool**, when the game is
-  closed from inside the game (see Facts below).
-
-## Still to test
-
-Make a fresh bundle from this branch first. Keep the bundle ID `combined-test`,
-so that installing it also tests item 1.
-
-### On the Deck
-
-1. **Double-click reinstall.** Double-click the new `combined-test` installer.
-   - The first choice is "Reinstall … over the existing copy" and is preselected.
-   - The install is replaced.
-   - Game data is kept.
-2. **ADB download.** Run:
-   ```
-   cat ~/.local/share/lepton_x86_64_combined_test/tools/platform-tools/SOURCE.txt
-   ```
-   It should say "downloaded by the Lepton installer", with the verified SHA256.
-3. **Re-adding a deleted shortcut.**
-   1. Delete a game's shortcut in Steam.
-   2. Restart the Deck.
-   3. Add the same game again with the same name using "Lepton: Add Android game".
-   - Expected: the game is added, with the note "Reusing the saved game data".
-   - Without the restart: a "restart the Steam Deck" hint.
-4. **GApps and NDK bundles with the ADB change.** These have never been tested
-   on hardware. Make both bundles from this branch, install them, and check:
-   - Google sign-in;
-   - an ARM64 game.
-5. *(Optional)* **Offline install.** Run the installer with
-   `--adb-zip platform-tools_r37.0.1-linux.zip`.
-
-### On the build machine
-
-0. **Brand change (`PRODUCT_BRAND := Linux-PC`).** Rebuild the images, reusing
-   `out/`. Do not reset and do not delete `out/`. First copy the changed file
-   into the Android checkout, because `prepare-x86_64.sh` copied the device
-   files there only once:
-   ```
-   cp image-14/android_device_valve_lepton/lepton_x86_64/aosp_lepton_x86_64.mk \
-      <workspace>/aosp/device/waydroid/waydroid/lepton_x86_64/
-   bash image-14/scripts/build-images-x86_64.sh --execute
-   ```
-   Then make the bundles from the new images and check:
-   ```
-   tar -xzOf <bundle>.tar.gz ./compat_tool/images/rootfs/system/build.prop | grep -E 'fingerprint|brand|build\.(user|host)='
-   ```
-   - Expected: `Linux-PC/…` with `ro.build.user=lepton` and
-     `ro.build.host=lepton-build`. No `Steam-Frame`, and no login name.
-   - Any game's data starts fresh on the new bundle, including a Google
-     sign-in. This happens with any new build.
-   - While the bundle is made, sysbake must no longer leave the terminal
-     broken. Before this branch it needed `reset` afterwards.
-6. **Build recovery on a real build.** On a finished build, run:
-   ```
-   bash image-14/scripts/build-images-x86_64.sh --repair
-   ```
-   - It must report **0** damaged files.
-   - `--check` must then not warn about an unfinished build.
-
-### On the desktop with an AMD GPU (Intel CPU)
-
-7. **Local install.**
-   1. Run `install-local.sh --check --bundle-id <id>`.
-   2. Run `install-local.sh --execute --bundle-id <id>`, without
-      `--allow-non-amd`.
-   3. Run "Check graphics".
-   4. Add a game and play it. This also tests the `CompatToolMapping` fix,
-      because desktop Steam often lacks that section.
-   - If the machine also has an Intel iGPU: confirm games use the AMD GPU.
-
-The workspace path differs per machine. Set `LEPTON_OUTPUT_DIR` in `.build-env`,
-or override it for one command, for example:
-
-```
-LEPTON_OUTPUT_DIR=/mnt/…/lepton-workspace bash image-14/scripts/install-local.sh …
-```
-
-## Facts learned in testing (do not re-investigate)
-
-- **Kept game data only works with the exact bundle it was made on.**
-  - Each bundle's sysbake creates its own user 0 and storage keys.
-  - Starting one bundle's data on another hangs on "Phone is starting…", with
-    `LockSettingsService: Failed to unwrap synthetic password` in logcat.
-  - So clearing the data on a tool switch (`check_kept_app_data`) is correct.
-  - Relaxing that check was tried and withdrawn.
-  - Possible later improvements: move the data aside instead of deleting it,
-    restore it on switching back, or warn at launch.
-- **Steam's Stop does not save game progress.**
-  - Lepton stops Android immediately (`reboot -p`, then `podman stop -t 0`,
-    which is Valve's code).
-  - So games that save when paused, such as 2048, lose unsaved moves.
-  - Closing the game from inside the game saves.
-  - This was kept on purpose: on Steam you save manually.
-- **Lepton's host-side `rm -rf` cannot delete files that belong to Android's
-  users** (subuids under rootless Podman).
-  - A failed or partial clear leaves a half-deleted `compatdata/<AppID>/baked`.
-  - Remove it with `podman unshare rm -rf`.
-- **Software rendering (non-AMD GPUs) crashes on Intel.**
-  - It is on its own branch, `feature/software-launch`, and is not merged.
-  - Lepton is Steam Deck / AMD only for now.
+1. **Dolphin and downloaded installers.**
+   - On the Deck, download the three release files with the browser.
+   - Confirm that double-clicking the `.install.sh` opens it as text, since the
+     downloaded file isn't executable.
+   - Confirm that **Open Terminal Here** + `bash …install.sh` works.
+   - Confirm that **Properties > Permissions > Is executable**, then
+     double-click and **Execute**, opens Konsole and installs. Note the exact
+     wording Dolphin shows.
+2. **A real draft and publish** with `publish-release.sh` and a real `gh`, on a
+   test version such as `v0.0.1-alpha.test`.
+   - The repository must be **public** for users and the release manager to see
+     releases. The API currently answers 404 for `pjohno/lepton-x86_64`.
+   - Check the uploaded file sizes and digests, then delete the test release
+     and its tag.
+3. **Lepton: Install / Update / Repair on the Deck:**
+   - the menu;
+   - a zenity progress bar during the download;
+   - the unsigned-release warning;
+   - install alongside, replace (the tool ID is kept), downgrade warning;
+   - repair;
+   - the cleanup prompt;
+   - that Konsole shows the installer and the manager continues after it
+     closes.
+4. **Signing:** generate the real release key, commit it to `allowed_signers`,
+   publish a signed test release, and confirm the manager verifies it. Then
+   confirm it refuses a release with the signature file removed.
+5. **Manager independence:** remove every install with **Lepton: Remove
+   installs**. **Lepton: Install / Update / Repair** must still be on the desktop
+   and still open.
