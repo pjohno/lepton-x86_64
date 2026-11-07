@@ -97,6 +97,13 @@ cleanup() {
     if [[ -x "$WORK/bin/podman" ]]; then
         "$WORK/bin/podman" rm -fi lepton-sysbake >/dev/null 2>&1 || true
     fi
+    # Lepton's launcher waits for its container with a background
+    # `podman events`; if the container already existed, that watcher never
+    # exits and keeps this run's lock open, blocking every later sysbake.
+    # Stop whatever still uses this run's private runroot (a unique path).
+    if [[ -n "$RUNROOT" ]]; then
+        pkill -f -- "--runroot=$RUNROOT( |$)" >/dev/null 2>&1 || true
+    fi
     # The runner preflights this slice as inactive, then only sysbake creates it.
     systemctl --user stop lepton-sysbake.slice >/dev/null 2>&1 || true
     if [[ -n "$WESTON_PID" ]]; then
