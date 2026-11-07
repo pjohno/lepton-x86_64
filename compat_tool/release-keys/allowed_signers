@@ -9,3 +9,4 @@
 #   lepton-release namespaces="lepton-release" ssh-ed25519 AAAA... lepton-release-YYYY
 # Optional valid-after="YYYYMMDD" / valid-before="YYYYMMDD" options support key
 # rotation. See RELEASING.md ("Release signing"). Never put a private key here.
+lepton-release namespaces="lepton-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF2amudmzGr0yA3WJkFeT3LLGwnl7lIK4+2h7vc0e9wA lepton-release-2026
