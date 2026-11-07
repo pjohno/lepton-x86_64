@@ -167,11 +167,15 @@ Each puts an **Install Lepton *ID*** icon on the Deck's desktop; continue with
 To update an existing install in place instead (its games keep working), add
 `--replace TOOL_ID`; `lepton-manage-installs --list` on the Deck shows the IDs.
 
-## Or install on this computer
+## Or install on this computer (experimental)
 
 A bundle can also be installed on the build computer itself, with the same
 installer a Deck uses: it registers the Steam compatibility tool and adds
 **Lepton: Add Android game** to the application menu.
+
+**Lepton targets the Steam Deck.** On a desktop PC games start and draw
+correctly, but **mouse and keyboard do not reach the game yet**, so this is
+for testing only. See README.md, "Desktop PCs".
 
 ```bash
 bash image-14/scripts/install-local.sh --check --bundle-id base-20261104

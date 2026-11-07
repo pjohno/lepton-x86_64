@@ -102,6 +102,12 @@ so that installing it also tests item 1.
 
 ### On the desktop with an AMD GPU (Intel CPU)
 
+**Tested 2026-11-07 (KDE Plasma, 125 % scaling):** install, host check and a
+game launch work, and the game draws, but mouse and keyboard do not reach it.
+Desktop is documented as experimental; Lepton is Deck-only for the release.
+Remaining check: with the default (fullscreen Gamescope at the screen's size),
+the game fills the screen at full resolution.
+
 7. **Local install.**
    1. Run `install-local.sh --check --bundle-id <id>`.
    2. Run `install-local.sh --execute --bundle-id <id>`, without

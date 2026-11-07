@@ -129,11 +129,27 @@ in both Desktop Mode and Gaming Mode. This is a functional test of the
 current Deck configuration, not broad coverage of other Steam versions.
 
 The `lepton-gamescope-bridge` keeps its known Gaming Mode SDL/X11 fullscreen
-path. On KDE Plasma Wayland Desktop Mode it selects a **windowed Wayland
-Gamescope** at 1280×800 (configurable with `LEPTON_RESOLUTION=WIDTHxHEIGHT`).
-Override detection using `LEPTON_DISPLAY_MODE=gaming` or `desktop`.
-The Desktop Wayland Gamescope window was verified on the Steam Deck, and
-the new 2048 shortcut launched successfully in Desktop and Gaming modes.
+path. On a KDE Plasma Wayland desktop (including the Deck's Desktop Mode) it
+uses a **Wayland Gamescope** that opens fullscreen at the main screen's size,
+which Android then uses as its screen size. `LEPTON_DESKTOP_WINDOWED=1` gives
+a movable 1280×800 window instead, and `LEPTON_RESOLUTION=WIDTHxHEIGHT` a
+window of any size. Override detection using `LEPTON_DISPLAY_MODE=gaming` or
+`desktop`.
+
+**Desktops other than KDE Plasma are untested.** GNOME takes the Gaming Mode
+path (fullscreen through Xwayland) and is expected to work with **one
+monitor**. With several monitors Android may be given their combined size,
+and with fractional scaling a scaled-down size; `LEPTON_RESOLUTION` overrides
+both.
+
+**Desktop PCs (experimental).** Lepton targets the Steam Deck. A bundle can be
+installed on a desktop PC with an AMD GPU (`image-14/scripts/install-local.sh`),
+and games start and draw correctly there, but **mouse and keyboard do not reach
+the game yet** (tested on KDE Plasma 6 with 125 % scaling, November 2026).
+`LEPTON_DESKTOP_DIRECT=1` (experimental) skips Gamescope and gives Android a
+KDE window directly; with fractional scaling Android then gets the wrong size,
+pointer positions miss and the window does not redraw reliably. Desktop input
+is future work.
 
 ## Steam Deck input notes (experimental)
 

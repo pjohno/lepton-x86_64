@@ -108,11 +108,43 @@ else
     }
 fi
 
-# Default to an 800p movable window on Desktop rather than using the full
-# desktop resolution; retain the tested Gaming Mode resolution detection.
+# Experimental, opt-in (LEPTON_DESKTOP_DIRECT=1): no Gamescope; Android draws
+# straight into a KDE window. Known problems with fractional desktop scaling:
+# Android gets the wrong size, pointer positions miss and the window does not
+# redraw reliably. Kept for later work on desktop support.
+if [[ "$display_mode" == desktop && "${LEPTON_DESKTOP_DIRECT:-0}" == 1 ]]; then
+    echo "Lepton display: desktop Wayland ($WAYLAND_DISPLAY), no Gamescope (experimental)"
+    lepton_check_binder || exit 1
+    export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"
+    exec "$@"
+fi
+
+# Android's screen size is fixed when it starts, so pick it now. On the
+# desktop, as in Gaming Mode, use the main screen's real size and go
+# fullscreen. LEPTON_DESKTOP_WINDOWED=1 keeps a movable 1280x800 window;
+# LEPTON_RESOLUTION=WxH sets any size (windowed on the desktop).
+desktop_screen_size() {
+    command -v kscreen-doctor >/dev/null 2>&1 || return 1
+    kscreen-doctor -j 2>/dev/null | python3 -c '
+import json, sys
+outputs = [o for o in json.load(sys.stdin).get("outputs", []) if o.get("enabled")]
+outputs.sort(key=lambda o: o.get("priority") or 99)  # 1 = main screen
+for o in outputs:
+    mode = {m["id"]: m for m in o.get("modes", [])}.get(o.get("currentModeId"))
+    if mode:
+        print("%dx%d" % (mode["size"]["width"], mode["size"]["height"]))
+        break
+' 2>/dev/null
+}
 resolution="${LEPTON_RESOLUTION:-}"
+desktop_fullscreen=()
 if [[ -z "$resolution" && "$display_mode" == desktop ]]; then
-    resolution=1280x800
+    if [[ "${LEPTON_DESKTOP_WINDOWED:-0}" != 1 ]] &&
+       resolution="$(desktop_screen_size)" && [[ -n "$resolution" ]]; then
+        desktop_fullscreen=(-f)
+    else
+        resolution=1280x800
+    fi
 fi
 if [[ -z "$resolution" ]]; then
     resolution="$(DISPLAY="$outer_display" xdpyinfo 2>/dev/null |
@@ -132,9 +164,10 @@ echo "Lepton Gamescope mode: $display_mode; resolution: ${width}x${height}"
 lepton_check_binder || exit 1
 
 if [[ "$display_mode" == desktop ]]; then
-    # A normal KDE window, no fullscreen flag and no X11 Steam window tagging.
+    # A KDE window (fullscreen at the screen's size unless asked otherwise),
+    # no X11 Steam window tagging.
     # The inner gamescope sets WAYLAND_DISPLAY for the Lepton container.
-    ENABLE_GAMESCOPE_WSI=0 gamescope --backend wayland --expose-wayland \
+    ENABLE_GAMESCOPE_WSI=0 gamescope --backend wayland --expose-wayland "${desktop_fullscreen[@]}" \
         -W "$width" -H "$height" -w "$width" -h "$height" \
         --default-touch-mode 4 \
         -- sh -c 'export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"; exec "$@"' sh "$@"
