@@ -37,11 +37,17 @@ touch "$steam/compatibilitytools.d/lepton_x86_64_a.vdf" "$steam/compatibilitytoo
       "$share/applications/other.desktop" "$home/Desktop/lepton-install-a.desktop" "$home/Desktop/steam.desktop" \
       "$home/Downloads/lepton-x86_64-steamdeck-a.tar.gz" "$home/Downloads/holiday.jpg" "$home/.local/bin/other-tool"
 ln -s "$share/lepton_x86_64_a/compat_tool/tools/lepton-add-game" "$home/.local/bin/lepton-add-game"
+# Lepton: Install / Update / Repair (outside the versioned installs).
+mkdir -p "$share/lepton-release-manager"; touch "$share/lepton-release-manager/lepton-release-manager" \
+    "$share/applications/lepton-release-manager.desktop" "$home/Desktop/lepton-release-manager.desktop"
+ln -s "$share/lepton-release-manager/lepton-release-manager" "$home/.local/bin/lepton-release-manager"
 
 lepton_items=("$share/lepton_x86_64_a" "$share/lepton-x86_64-dev" "$share/lepton_gapps_b.previous-20261103-120000"
     "$share/.lepton-install.AbCd1234" "$share/lepton" "$steam/compatibilitytools.d/lepton_x86_64_a.vdf"
     "$home/.config/lepton-x86_64" "$home/.local/bin/lepton-add-game" "$share/applications/lepton-x86_64-add-game.desktop"
-    "$home/Desktop/lepton-install-a.desktop" "$home/Downloads/lepton-x86_64-steamdeck-a.tar.gz" "$home/Downloads/lepton-deck-bundles")
+    "$home/Desktop/lepton-install-a.desktop" "$home/Downloads/lepton-x86_64-steamdeck-a.tar.gz" "$home/Downloads/lepton-deck-bundles"
+    "$share/lepton-release-manager" "$share/applications/lepton-release-manager.desktop"
+    "$home/Desktop/lepton-release-manager.desktop" "$home/.local/bin/lepton-release-manager")
 unrelated=("$share/leptonic-other" "$share/other-app" "$steam/compatibilitytools.d/proton_custom.vdf"
     "$share/applications/other.desktop" "$home/Desktop/steam.desktop" "$home/Downloads/holiday.jpg"
     "$home/.local/bin/other-tool" "$steam/steamapps/compatdata/456")

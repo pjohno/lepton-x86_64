@@ -1,8 +1,13 @@
 # Install Lepton on a Steam Deck
 
-This guide takes a finished bundle to an Android game running from Steam on a
-Steam Deck with AMD hardware graphics. Make the bundles first with
-**[BUILDING.md](BUILDING.md)**.
+This guide gets Android games running from Steam on a Steam Deck with AMD
+hardware graphics. There are two ways to install:
+
+- **[From GitHub Releases](#install-from-github-releases)**: for most people. No
+  SSH, Git or developer tools are needed.
+- **[Your own bundle](#developer-install-your-own-bundle)**: for developers who
+  build bundles with **[BUILDING.md](BUILDING.md)** and copy them to the Deck
+  over SSH or USB.
 
 Nothing here downloads Android images, Google apps or games for you. You provide
 your own APK files.
@@ -16,11 +21,151 @@ Google's `NOTICE.txt` (see [Google ADB](#google-adb)).
 ## What you need
 
 **Steam Deck**: SteamOS in Desktop Mode, signed in to Steam at least once, and
-about 3 GiB free in your home directory per install. Any other x86_64 Linux
-machine with an **AMD GPU** also works; other GPUs are not supported (the
-image only contains AMD RADV/radeonsi drivers).
+about 3 GiB free in your home directory per install.
 
-## 1. The bundle
+**Lepton supports the Steam Deck only.** Desktop PCs with an AMD GPU can
+install it, but that is experimental: games start and draw, but mouse and
+keyboard do not reach them yet
+([issue #9](https://github.com/pjohno/lepton-x86_64/issues/9)). Other GPUs are
+not supported (the image only contains AMD RADV/radeonsi drivers).
+
+## Install from GitHub Releases
+
+Releases are published at <https://github.com/pjohno/lepton-x86_64/releases>.
+Each release of version `VERSION` (for example `v0.1.0-alpha`) has these files:
+
+| File | Purpose |
+| --- | --- |
+| `lepton-x86_64-steamdeck-VERSION.tar.gz` | The bundle |
+| `lepton-x86_64-steamdeck-VERSION.tar.gz.sha256` | Checksums of the bundle and the installer |
+| `lepton-x86_64-steamdeck-VERSION.install.sh` | The installer |
+| `lepton-x86_64-steamdeck-VERSION.tar.gz.sha256.sig` | Signature (signed releases only) |
+
+### First installation
+
+1. **Download the files.** In Desktop Mode, open the release page in a web
+   browser and download the `.tar.gz`, `.tar.gz.sha256` and `.install.sh` files
+   of the **same version** into one folder. The browser's `Downloads` folder is
+   fine. Keep the file names exactly as they are: the installer finds the bundle
+   by name next to itself. If your browser added ` (1)` to a name, delete the
+   copies and download again.
+2. **Run the installer.** Browsers don't keep the "executable" permission on
+   downloaded files, so a plain double-click on the `.install.sh` file opens it
+   in a text editor instead of running it. Use one of these methods:
+   - **Terminal (dependable):** in Dolphin, open the folder with the three files,
+     right-click an empty area, choose **Open Terminal Here**, and run (Tab
+     completes the file name):
+
+     ```bash
+     bash lepton-x86_64-steamdeck-VERSION.install.sh
+     ```
+   - **Double-click:** in Dolphin, right-click the `.install.sh` file and choose
+     **Properties > Permissions**. Tick **Is executable** (called **Allow
+     executing file as program** on some versions), then **OK**. Double-click the
+     file and choose **Execute** when Dolphin asks. A Konsole window opens and
+     shows the progress.
+
+The installer:
+- needs an internet connection, but no password and no `sudo`;
+- checks the bundle against the `.sha256` file before unpacking anything;
+- checks that the Deck can run Lepton games;
+- downloads Google's `adb` and checks it (see [Google ADB](#google-adb));
+- installs into `~/.local/share` and registers the Steam compatibility tool.
+
+If anything fails, nothing is installed and existing installs are unchanged.
+Restart Steam afterwards. Then continue with
+[Check graphics](#4-check-graphics) and [Add a game](#5-add-a-game).
+
+The installer also adds these entries to the application menu and the desktop:
+
+| Entry | Use |
+| --- | --- |
+| **Lepton: Install / Update / Repair** | Later versions, updates and repair (below) |
+| **Lepton: Add Android game** | Add an APK or APKM to Steam |
+| **Lepton: Check graphics** | Check the AMD hardware graphics |
+| **Lepton: Remove installs** | Remove old installs |
+
+### Later versions, updates and repair
+
+Open **Lepton: Install / Update / Repair**. It lists the releases published on
+GitHub and offers:
+
+- **Update** an installed version when a newer release exists. During the alpha
+  period, alpha releases count as updates.
+- **Install the latest alpha** (preselected during the alpha period), or **the
+  latest stable release**. If none of that kind has been published yet, it says
+  so.
+- **Choose from all published versions.** Each version shows its date, whether
+  it's an alpha, its size, and whether it is signed.
+- **Repair an existing installation:** reinstall the same version over it.
+- **Remove installs:** opens **Lepton: Remove installs**.
+
+When you install a version, you choose to install it **alongside** the existing
+ones (a new Steam tool) or to **replace** one of them. Replacing keeps that
+tool's Steam ID, so games set to it keep using it. The manager warns before a
+**downgrade**. Nothing is installed or replaced until you confirm.
+
+How downloads work:
+- Files go to `~/Downloads/lepton-deck-bundles/`. They're downloaded under
+  temporary names and only take their real names once their checksums are
+  verified.
+- Files that are already there and verify are reused. Damaged or incomplete
+  files are downloaded again.
+- The release's own installer then does the installing, exactly as for a first
+  installation.
+- GApps, NDK and Widevine add-ons are never downloaded.
+
+After an install, you can remove older installs. You tick which ones in **Lepton:
+Remove installs**, which shows how many Steam shortcuts use each. Nothing is
+removed without your confirmation, and game data in Steam's `compatdata` folder
+is never deleted.
+
+**Repair** reinstalls the version an install came from, with the same Steam tool
+ID, shortcuts and game data. It can't repair:
+- damaged Android app data inside a game;
+- installs of bundles that were never published (your own builds);
+- GApps or NDK installs, because releases only contain the base bundle.
+
+In those cases it explains why and changes nothing.
+
+**Lepton: Install / Update / Repair** lives in
+`~/.local/share/lepton-release-manager/`, outside the versioned installs, so it
+keeps working after every install is removed. Installing a newer release also
+updates it; an older release never replaces a newer copy of it.
+
+**Authenticity:**
+- **Signed releases:** when the release manager has a Lepton release key (it
+  comes with the manager), it checks the release's signature and refuses
+  unsigned or wrongly signed releases.
+- **Unsigned releases:** the checksums only show that the files were not
+  damaged. The manager says so and asks before running the downloaded
+  installer.
+- **First installation:** you trust the files because you downloaded them over
+  HTTPS from the project's GitHub page.
+
+See [RELEASING.md](RELEASING.md#trust-model).
+
+### Game data when you change versions
+
+Each release (and each bundle someone builds) has its own Android image. Android
+app data made with one image can't be opened by another, because the images'
+system data and credentials differ.
+
+**When a game changes to a different version** (an update, a downgrade, a
+replaced tool, or switching the game to another Lepton tool), Lepton starts it
+with fresh Android data on its next launch:
+- **reset:** installed apps, sign-ins, and saves kept only on the device;
+- **kept:** shared storage (`/sdcard`) and online or cloud saves.
+
+Keeping the same Steam shortcut, AppID or tool ID doesn't keep this data.
+**Repairing the same version keeps it.**
+
+Separately, Steam's **Stop** button ends Android immediately. To keep progress a
+game hasn't saved yet, close the game from inside the game.
+
+## Developer install: your own bundle
+
+### 1. The bundle
 
 A bundle is three files in the workspace's `bundles/` folder on the build computer, for
 example for the bundle ID `base-20261104`:
@@ -31,7 +176,7 @@ example for the bundle ID `base-20261104`:
 | `lepton-x86_64-steamdeck-base-20261104.tar.gz.sha256` | Checksums |
 | `lepton-x86_64-steamdeck-base-20261104.install.sh` | One-command installer |
 
-## 2. Copy it to the Deck
+### 2. Copy it to the Deck
 
 **Over the network (SSH).** On the Deck, once: open Konsole in Desktop Mode, set
 a password with `passwd`, and run `sudo systemctl enable --now sshd`. Find the
@@ -53,7 +198,7 @@ the Deck.
 
 **By USB drive.** Copy the three files into one folder on the Deck.
 
-## 3. Install (Steam Deck, Desktop Mode)
+### 3. Install (Steam Deck, Desktop Mode)
 
 Double-tap **Install Lepton base-20261104** on the desktop. (After a USB copy,
 double-tap the `.install.sh` file in Dolphin instead.) A Konsole window shows
@@ -86,7 +231,7 @@ are kept). Steam does
 not need to be closed for installing, replacing or removing (only for adding
 games); restart Steam afterwards so it shows the new tool.
 
-### Google ADB
+#### Google ADB
 
 The installer downloads
 `https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip`
@@ -114,7 +259,7 @@ replaces an existing install; `--replace` replaces this bundle's own earlier
 install; `--remove TOOL_ID` (repeatable) removes others after installing;
 `--keep-previous` keeps the replaced copy as `<directory>.previous-<date>`.
 
-## 4. Check graphics
+### 4. Check graphics
 
 Double-tap **Lepton: Check graphics**, or run
 `~/.local/bin/lepton-run-apk --gpu-check --execute`. This boots Android once
@@ -122,7 +267,7 @@ without any app (about a minute) and must end with
 `[PASS] Hardware acceleration: ANGLE on Vulkan/RADV`. On a Steam Deck the
 graphics line names `RADV VANGOGH`.
 
-## 5. Add a game
+### 5. Add a game
 
 Steam must be closed while a shortcut is added, and its on-screen keyboard
 closes with it, so the add-game window needs only taps:

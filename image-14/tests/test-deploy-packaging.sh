@@ -280,6 +280,18 @@ grep -q 'Reinstall Lepton x86_64 (community) - fixture over the existing copy' "
 not grep -q 'Install as a new tool' "$work/gui-reinstall.log"
 [[ -x "$dest/compat_tool/lepton" && ! -e "$dest/stale-marker" && -f "$legacy/BUNDLE.json" ]]
 not compgen -G "$dest.previous-*" > /dev/null
+# --new (used by the release manager) never asks "new or replace", and refuses
+# when this bundle is already installed; it cannot be combined with --replace.
+if env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u LEPTON_NO_DIALOGS LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_DIALOG=zenity \
+        WAYLAND_DISPLAY=test-display UI_LOG="$work/gui-new.log" PATH="$work/gui-bin:$PATH" HOME="$deck_home" \
+        bash "$pinned" --allow-non-amd --pause --new < /dev/null > "$work/gui-new.out" 2>&1; then
+    echo 'FAIL: --new replaced an existing install'; exit 1
+fi
+grep -q 'Already installed' "$work/gui-new.out"
+[[ ! -e "$work/gui-new.log" ]] || not grep -q -- --radiolist "$work/gui-new.log"   # no dialog at all
+[[ -x "$dest/compat_tool/lepton" ]]
+if deck --new --replace > "$work/new-replace.log" 2>&1; then echo 'FAIL: --new --replace accepted'; exit 1; fi
+grep -q -- '--new cannot be combined' "$work/new-replace.log"
 mkdir -p "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore"
 printf 'synthetic' > "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk"
 mkdir -p "$stage/compat_tool/images/rootfs/system/framework"
@@ -362,4 +374,17 @@ grep -q 'LEPTON_NO_DIALOGS=1 bash "$HOME/Downloads/lepton-deck-bundles/lepton-x8
 grep -q 'Deck install lepton_x86_64_old overwritten' "$work/transfer-replace.log"
 printf 'broken' >> "$archive"
 reject --transfer-only --check --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1
-echo 'PASS: read-only packaging/transfer checks, real archive without Google adb, installer ADB download, xattr preservation, overwrite guards and mocked transfer'
+# Image provenance: carried only when it describes this bundle's rootfs.
+images="$work/images"; mkdir -p "$images"
+prop="$(sha256sum "$stage/compat_tool/images/rootfs/system/build.prop" | cut -d' ' -f1)"
+printf 'Image source commit: %s\nRootfs build.prop SHA256: %s\n' "$(printf 'b%.0s' {1..40})" "$prop" > "$images/BUILD-INFO.txt"
+LEPTON_IMAGES_DIR="$images" run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id prov-match > /dev/null
+tar -xOf "$out/lepton-x86_64-steamdeck-prov-match.tar.gz" ./tools/IMAGE-PROVENANCE.txt | cmp - "$images/BUILD-INFO.txt"
+tar -xOf "$out/lepton-x86_64-steamdeck-prov-match.tar.gz" ./tools/BUNDLE-PROVENANCE.txt |
+    grep -qx 'Image provenance: tools/IMAGE-PROVENANCE.txt'
+sed -i "s/^Rootfs build.prop SHA256: .*/Rootfs build.prop SHA256: $(printf '0%.0s' {1..64})/" "$images/BUILD-INFO.txt"
+LEPTON_IMAGES_DIR="$images" run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id prov-other > /dev/null
+not grep -qx './tools/IMAGE-PROVENANCE.txt' <(tar -tzf "$out/lepton-x86_64-steamdeck-prov-other.tar.gz")
+tar -xOf "$out/lepton-x86_64-steamdeck-prov-other.tar.gz" ./tools/BUNDLE-PROVENANCE.txt |
+    grep -q '^Image provenance: not recorded'
+echo 'PASS: read-only packaging/transfer checks, real archive without Google adb, installer ADB download, xattr preservation, overwrite guards, mocked transfer and image provenance'

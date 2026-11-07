@@ -42,6 +42,9 @@ Known limitations:
 | `image-14/scripts/prepare-google-inputs.sh` | Turns a local Google Play emulator image zip into the optional GApps/NDK inputs |
 | `image-14/scripts/internal/` | Building blocks called by the scripts above (staging, packaging, transfer, sysbake, NDK extraction); not run directly |
 | `compat_tool/tools/lepton-install-bundle` | Deck-side installer, shipped next to each bundle |
+| `compat_tool/tools/lepton-release-manager` | Lepton: Install / Update / Repair: finds, verifies and installs published releases (runs the bundle installer) |
+| `compat_tool/release-keys/allowed_signers` | Public keys the release manager trusts for release signatures |
+| `image-14/scripts/publish-release.sh` | Maintainers: checks a built bundle and publishes it as a GitHub Release ([RELEASING.md](RELEASING.md)) |
 | `compat_tool/tools/lepton-host-check` | Read-only check that a computer can run Lepton games (run by the installer) |
 | `tests/runtime/` | Isolated local APK tests and JNI fixture builder |
 
@@ -49,7 +52,15 @@ Some build components are Git submodules. Confirm that the URLs in `.gitmodules`
 
 ## Building and installing
 
-**[BUILDING.md](BUILDING.md)** is the step-by-step guide: one-time setup, five
+**Most people don't need to build anything.** Download a release from
+**[GitHub Releases](https://github.com/pjohno/lepton-x86_64/releases)** and
+follow **[Install from GitHub Releases](INSTALL-STEAM-DECK.md#install-from-github-releases)**.
+After the first install, **Lepton: Install / Update / Repair** (on the desktop
+and in the application menu) installs later versions, updates and repairs
+installs. A release contains the base bundle only, for the Steam Deck and other
+AMD GPUs; GApps, NDK translation and Widevine are not included.
+
+To build it yourself: **[BUILDING.md](BUILDING.md)** is the step-by-step guide: one-time setup, five
 commands from the Android sources to a base bundle and a GApps + NDK bundle, and
 sending bundles to a Steam Deck. **[INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md)**
 continues on the Deck: installing, the graphics check and adding games to Steam.

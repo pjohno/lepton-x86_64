@@ -19,7 +19,7 @@ image).
 | Folder | What it holds |
 | --- | --- |
 | `aosp/` | The **checkout**: the Android 14 (AOSP) sources and their build output (`aosp/out/`). |
-| `images/` | `system.img` and `vendor.img` from the latest build, with checksums. |
+| `images/` | `system.img` and `vendor.img` from the latest build, with checksums and `BUILD-INFO.txt` (what they were built from). |
 | `rootfs/` | The **rootfs**: those images unpacked into one folder, ready for bundling. |
 | `stages/<ID>/` | One **stage** per bundle: the working folder in which `make-deck-bundle` assembles it. You never edit it, and can delete it once the bundle exists. |
 | `bundles/` | Finished **bundles**: `.tar.gz`, `.sha256` checksum and `.install.sh` installer. This is what goes to the Deck. |
@@ -201,6 +201,21 @@ the check warns but allows them.
 If the bundle does not exist yet but its stage does, the stage is packaged
 first. Installing again needs `--replace` (or `--into TOOL_ID`), as on the
 Deck. Restart Steam afterwards to see the new tool.
+
+## Publishing a release (maintainers)
+
+A public release is a base bundle made with the release version as its bundle
+ID, then checked and uploaded by `publish-release.sh`:
+
+```bash
+bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id v0.1.0-alpha
+bash image-14/scripts/publish-release.sh --check --version v0.1.0-alpha
+```
+
+Make the bundle from a clean commit on `main`. **[RELEASING.md](RELEASING.md)**
+has the whole workflow, from testing and signing to drafting, reviewing and
+publishing. The publisher never builds anything; it only uploads bundles that
+have already been made and tested.
 
 ## Rebuilding later
 

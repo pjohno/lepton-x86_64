@@ -369,6 +369,12 @@ fi
 bash "$ROOT/image-14/scripts/internal/package-repro-rootfs.sh" "$TARGET" "$LEPTON_ROOTFS_DIR" ||
   fail "Packaging the rootfs failed; log: $LOG"
 
+# Record what these images were built from (bundles carry it; releases check it).
+source "$ROOT/image-14/scripts/lib/image-provenance.sh"
+image_provenance_write "$ROOT" "$TARGET" "$LEPTON_ROOTFS_DIR" "$LEPTON_IMAGES_DIR/BUILD-INFO.txt" ||
+  fail "Could not record the image provenance; log: $LOG"
+sed 's/^/[INFO]   /' "$LEPTON_IMAGES_DIR/BUILD-INFO.txt"
+
 info "[PASS] Android images built and packaged"
 info "Next: bash image-14/scripts/make-deck-bundle-x86_64.sh --check --bundle-id ID"
 info "Log: $LOG"

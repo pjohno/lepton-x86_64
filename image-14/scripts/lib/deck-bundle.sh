@@ -307,6 +307,12 @@ install -m 755 "$repo/compat_tool/tools/lepton-host-check" \
     "$tmp/payload/compat_tool/tools/lepton-host-check"
 install -m 755 "$repo/compat_tool/tools/lepton-google-game-gui" \
     "$tmp/payload/compat_tool/tools/lepton-google-game-gui"
+# Lepton: Install / Update / Repair and the release keys it trusts; the
+# installer copies both to ~/.local/share/lepton-release-manager.
+install -m 755 "$repo/compat_tool/tools/lepton-release-manager" \
+    "$tmp/payload/compat_tool/tools/lepton-release-manager"
+install -D -m 644 "$repo/compat_tool/release-keys/allowed_signers" \
+    "$tmp/payload/compat_tool/release-keys/allowed_signers"
 # Self-contained tool: Steam starts lepton-x86_64-entry, which supplies this
 # install's bridge, ADB and flatscreen default, so shortcuts need no launch
 # options. The repository's Valve manifest is left unchanged.
@@ -373,6 +379,8 @@ then offers to remove older installs; in a terminal use --into TOOL_ID,
 Steam does not need to be closed to install or remove; restart it afterwards.
 
 Then use the new desktop/menu entries (no typing needed):
+  "Lepton: Install / Update / Repair"  later versions from GitHub Releases,
+                                updates, repair; stays when installs are removed
   "Lepton: Check graphics"      confirms AMD RADV graphics
   "Lepton: Add Android game"    picks an APK/APKM; asks you to exit Steam, then
                                 says when it is safe to start Steam again
@@ -396,7 +404,9 @@ install -m 644 "$repo/GAPPS.md" "$tmp/payload/GAPPS.md"
 for script in "${runtime_scripts[@]}"; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
-python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$tmp/payload/compat_tool/tools/lepton-add-game"
+for tool in lepton-add-game lepton-release-manager lepton-manage-installs; do
+    python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$tmp/payload/compat_tool/tools/$tool"
+done
 grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/google_games.sh"
 for script in compat_tool/lepton compat_tool/tools/lepton-gamescope-bridge compat_tool/tools/lepton-controller-hotplug-experiment; do
     bash -n "$tmp/payload/$script"
@@ -420,6 +430,20 @@ done
     done
     printf 'Payload provenance: compat_tool/provenance and compat_tool/ndk-provenance when present\n'
 } > "$tmp/payload/tools/BUNDLE-PROVENANCE.txt"
+
+# What the Android images were built from (build-images writes it). Carried
+# only when it describes this bundle's rootfs (same build.prop); a modified
+# rootfs (GApps, NDK) or an older build has no record.
+image_info="${LEPTON_IMAGES_DIR:+$LEPTON_IMAGES_DIR/BUILD-INFO.txt}"
+bundle_prop="$(sha256sum "$tmp/payload/compat_tool/images/rootfs/system/build.prop" 2>/dev/null | cut -d' ' -f1 || true)"
+if [[ -n "$image_info" && -f "$image_info" && -n "$bundle_prop" ]] &&
+   grep -qx "Rootfs build.prop SHA256: $bundle_prop" "$image_info"; then
+    cp -- "$image_info" "$tmp/payload/tools/IMAGE-PROVENANCE.txt"
+    printf 'Image provenance: tools/IMAGE-PROVENANCE.txt\n' >> "$tmp/payload/tools/BUNDLE-PROVENANCE.txt"
+else
+    printf 'Image provenance: not recorded (rootfs not from the latest recorded image build)\n' \
+        >> "$tmp/payload/tools/BUNDLE-PROVENANCE.txt"
+fi
 
 printf 'Creating compressed archive...\n'
 ( cd "$tmp/payload" && tar --warning=no-file-ignored -cf - . ) | gzip -1 > "$tmp/bundle.tar.gz"
