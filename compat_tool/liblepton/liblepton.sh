@@ -747,13 +747,61 @@ function is_ancestor_of()
 }
 
 
+function container_running()
+{
+    [[ "$(podman container inspect -f '{{.State.Running}}' "lepton-${1}" 2>/dev/null || true)" == "true" ]]
+}
+
+# x86_64 port: CHANGE TO VALVE'S STOP SEQUENCE (check when merging Valve's
+# kill_container). Valve runs `reboot -p` and then `podman stop -t 0` straight
+# away. `reboot -p` returns at once and init only sends SIGTERM to apps, so a
+# game killed by Steam's Stop never gets onPause/onStop: settings and sign-ins
+# it writes there (SharedPreferences apply(), Roblox's login without Play
+# services, 2048's KorgeNativeStorage.xml) are lost. Before stopping we send
+# HOME so the game goes to the background and saves, then let Android finish
+# its own shutdown, and only then fall back to Valve's instant stop.
+#   LEPTON_STOP_SAVE_WAIT=<s>      wait after HOME (default 3; 0 skips HOME)
+#   LEPTON_STOP_SHUTDOWN_WAIT=<s>  wait for Android to power off (default 5)
+# Both 0 gives Valve's behaviour. sysbake keeps Valve's behaviour unchanged.
+function graceful_stop_container()
+{
+    local CONTEXT="$1"
+    local SAVE_WAIT="${LEPTON_STOP_SAVE_WAIT:-3}"
+    local SHUTDOWN_WAIT="${LEPTON_STOP_SHUTDOWN_WAIT:-5}"
+    [[ "${SAVE_WAIT}" =~ ^[0-9]+$ ]] || SAVE_WAIT=3
+    [[ "${SHUTDOWN_WAIT}" =~ ^[0-9]+$ ]] || SHUTDOWN_WAIT=5
+
+    if [[ "${CONTEXT}" == sysbake ]] || ! container_running "${CONTEXT}"; then
+        return 0
+    fi
+
+    if (( SAVE_WAIT > 0 )); then
+        println "Stopping ${CONTEXT}: sending HOME so the game can save (${SAVE_WAIT}s)..."
+        timeout 5 podman exec "lepton-${CONTEXT}" /system/bin/input keyevent KEYCODE_HOME >/dev/null 2>&1 || true
+        sleep "${SAVE_WAIT}"
+    fi
+
+    STOP_OUTPUT+="$(timeout 5 podman exec -i "lepton-${CONTEXT}" /system/bin/reboot -p 2>&1 || true)"
+    local end=$((SECONDS + SHUTDOWN_WAIT))
+    while (( SECONDS < end )) && container_running "${CONTEXT}"; do
+        sleep 0.5
+    done
+    if container_running "${CONTEXT}"; then
+        println "Stopping ${CONTEXT}: Android did not power off within ${SHUTDOWN_WAIT}s, forcing stop"
+    else
+        println "Stopping ${CONTEXT}: Android powered off cleanly"
+    fi
+}
+
 function kill_container()
 {
     local CONTEXT="${1:-${LEPTON_CONTEXT}}"
 
     local LEPTON_PID=$(podman inspect -f '{{ index .Config.Labels "lepton_pid" }}' "lepton-${CONTEXT}" 2>/dev/null || true)
 
-    STOP_OUTPUT="$(podman exec -i "lepton-${CONTEXT}" /system/bin/reboot -p 2>&1 || true)"
+    STOP_OUTPUT=""
+    graceful_stop_container "${CONTEXT}"
+    STOP_OUTPUT+="$(podman exec -i "lepton-${CONTEXT}" /system/bin/reboot -p 2>&1 || true)"
     STOP_OUTPUT+="$(podman stop -t 0 "lepton-${CONTEXT}" 2>&1 || true)"
 
     # Can't wait for ourselves:
