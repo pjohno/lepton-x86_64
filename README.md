@@ -1,206 +1,199 @@
-# Lepton x86_64 — experimental community port
+# Lepton x86_64
 
-> **Unofficial developer preview.** This repository contains an experimental x86_64 Linux port of [Valve's Lepton](https://gitlab.steamos.cloud/frame-public/lepton), intended to explore running Android applications through Steam on Linux desktops and Steam Deck. **It is not affiliated with, supported by, or endorsed by Valve.**
+Run Android games from Steam on a Steam Deck.
+
+Lepton x86_64 is a community port of [Valve's Lepton](https://gitlab.steamos.cloud/frame-public/lepton)
+to x86_64 Linux. Each Android game becomes a normal Steam shortcut: you press
+Play, and Lepton starts Android 14 in a container, shows the game full screen
+with the Deck's controls and touchscreen, and keeps its saves between launches.
+
+> **Unofficial and experimental.** This project is not affiliated with,
+> supported by, or endorsed by Valve. It targets the Steam Deck; other
+> computers are experimental.
 >
-> **Source code and build recipes only.** No Android system or vendor images, extracted Android root filesystems, Steam depot binaries, proprietary applications, or APKs are supplied.
+> **You provide the games.** This repository contains source code and build
+> recipes only: no Android images, Steam binaries, apps or APKs. Releases
+> contain a ready-built base bundle (see [Install](#install-on-a-steam-deck)).
 
-## Status
+## What you need
 
-**Experimental — October 2026.** The port has booted Android 14 on an x86_64 AMD/Fedora development system and on a Steam Deck, and has launched local Android applications through Steam. These results are development observations, not a general compatibility guarantee.
+- A **Steam Deck** running SteamOS, signed in to Steam at least once.
+- About **3 GiB free** in your home directory.
+- An **internet connection** while installing. The installer downloads Google's
+  `adb` tool directly from Google; it is not shipped in the bundle.
+- The **Android games** you want to play, as `.apk` files or split-APK bundles
+  (`.apkm`).
 
-Verified on the development setup:
+Desktop PCs with an **AMD GPU** can install Lepton, but this is experimental:
+games start and draw, but mouse and keyboard don't reach them yet
+([issue #9](https://github.com/pjohno/lepton-x86_64/issues/9)). Other GPUs are
+not supported, because the Android image only contains AMD graphics drivers.
 
-- Android 14 boots through Lepton's rootless Podman integration.
-- An ANGLE → Vulkan → Mesa RADV graphics path provides interactive output on the tested AMD hardware.
-- A local Android 2048 APK was launched through Steam with persistent saves.
-- Steam Deck gamepad axes are recognised by Android after correcting inherited EventHub handling of native evdev axis ranges.
-- Native Steam Deck touchscreen input works in the tested Android applications when the launcher and Steam Input are configured appropriately.
+## Install on a Steam Deck
 
-Known limitations:
+The full guide, with every step and troubleshooting, is **[INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md)**. In short:
 
-- The clean Android 14 x86_64 source preparation, image build, and rootfs packaging workflows have succeeded on the development Fedora host. Boot validation of the **newly reproduced** rootfs is still in progress; earlier boot results do not establish that this new build boots.
-- USB mouse interaction is incomplete; connecting/disconnecting a mouse may affect application touch handling.
-- Multiple controllers connected at startup were verified on the Steam Deck; live hotplug remains experimental and must be explicitly enabled.
-- Steam shortcuts, input configuration, Binder support, host graphics, and Android application compatibility vary by system.
-- ARM translation is experimental: an NDK-enabled test stage passed ARM64 JNI on Fedora. The [version-specific compatibility shim](compat_tool/liblepton/ndk_auxv/README.md) now enables automatically for its matching translator. AAAAXY ARM64 and SuperTuxKart 1.4 in both x86_64 and forced ARM64 modes launched, rendered and were played on Fedora. Broader ARM game compatibility and this fix on Deck remain unverified. See [local debugging findings](FEDORA-DEBUGGING.md).
-- Native Android depots, broad game compatibility, clean sysbake generation, and other GPUs/platforms remain unverified.
+1. **Switch to Desktop Mode** and open
+   [GitHub Releases](https://github.com/pjohno/lepton-x86_64/releases).
+2. **Download the three files** of the newest release into `Downloads`, keeping
+   their names: the `.tar.gz`, the `.tar.gz.sha256` and the `.install.sh`.
+3. **Run the installer** from a terminal (Konsole):
+   ```bash
+   cd ~/Downloads && bash lepton-x86_64-steamdeck-VERSION.install.sh
+   ```
+   It checks the download and the Deck, installs into `~/.local/share` and
+   registers Lepton as a Steam compatibility tool. If anything fails, nothing
+   is changed.
+4. **Check graphics:** double-tap **Lepton: Check graphics** on the desktop. It
+   should report the AMD (RADV) driver.
 
-## Repository layout
+Later versions, updates and repairs: double-tap
+**Lepton: Install / Update / Repair**
+([details](INSTALL-STEAM-DECK.md#later-versions-updates-and-repair)).
 
-| Path | Purpose |
+## Add and play a game
+
+1. Double-tap **Lepton: Add Android game** and pick the game's `.apk` or
+   `.apkm`.
+2. When asked, **exit Steam** (Steam menu > Exit) and tap **Steam is closed**.
+   Lepton never closes or starts Steam itself.
+3. Start Steam again. The game is under **Non-Steam games**, with Lepton already
+   selected as its compatibility tool.
+4. **Turn on touch:** in the game's controller layout, enable
+   Controller Settings > Edit Layout > Default Action Set > Always-On Command >
+   System > **Touchscreen Native Support**.
+
+Then play it from Gaming Mode like any other game. The first launch installs
+the game into Android and takes longer.
+
+**Saves.** A game's Android data is kept between launches, in Steam's
+compatdata folder for that shortcut. When you press **Stop** in Steam, Lepton
+sends the game to the background and gives it a few seconds to save before
+shutting Android down, so Stop takes a few seconds. Switching a game to a
+different Lepton version resets its Android data once
+([why](INSTALL-STEAM-DECK.md#game-data-between-launches)).
+
+## Launch options
+
+Games need no launch options. These optional ones go in the shortcut's
+Properties > Launch Options, followed by `%command%`:
+
+| Option | Effect |
 | --- | --- |
-| `compat_tool/` | Lepton runtime, local test scripts, and x86_64 adaptations |
-| `compat_tool/tools/lepton-gamescope-bridge` | Experimental nested Gamescope launcher used on Steam Deck |
-| `image-14/` | Android 14 image build configuration, vendor projects, and scripts |
-| `image-14/patches/` | Reviewed source patches, including native evdev input-axis handling |
-| `image-14/scripts/preflight-x86_64.sh` | Build step 1: checks host and workflow prerequisites (`fresh` or `existing`) |
-| `image-14/scripts/prepare-x86_64.sh` | Build step 2: downloads and patches the Android 14 sources (`--reset` re-patches an existing checkout) |
-| `image-14/scripts/build-images-x86_64.sh` | Build step 3: compiles system/vendor images and packages them as a rootfs |
-| `image-14/scripts/make-deck-bundle-x86_64.sh` | Build steps 4-5: rootfs to an installable Steam Deck bundle |
-| `image-14/scripts/transfer-deck-bundle.sh` | Sends a bundle to a Steam Deck over SSH (optionally installing it) |
-| `image-14/scripts/install-local.sh` | Installs a bundle on the build computer itself (checks its requirements first) |
-| `image-14/scripts/prepare-google-inputs.sh` | Turns a local Google Play emulator image zip into the optional GApps/NDK inputs |
-| `image-14/scripts/internal/` | Building blocks called by the scripts above (staging, packaging, transfer, sysbake, NDK extraction); not run directly |
-| `compat_tool/tools/lepton-install-bundle` | Deck-side installer, shipped next to each bundle |
-| `compat_tool/tools/lepton-release-manager` | Lepton: Install / Update / Repair: finds, verifies and installs published releases (runs the bundle installer) |
-| `compat_tool/release-keys/allowed_signers` | Public keys the release manager trusts for release signatures |
-| `image-14/scripts/publish-release.sh` | Maintainers: checks a built bundle and publishes it as a GitHub Release ([RELEASING.md](RELEASING.md)) |
-| `compat_tool/tools/lepton-host-check` | Read-only check that a computer can run Lepton games (run by the installer) |
-| `tests/runtime/` | Isolated local APK tests and JNI fixture builder |
+| `LEPTON_RESET_APP_DATA=true` | Reset this game's Android data on the next launch (remove the option afterwards) |
+| `LEPTON_KEEP_APP_DATA=false` | Start fresh on every launch (Valve's original behaviour) |
+| `LEPTON_GAMEPAD_HOTPLUG=true` | Experimental: connect and disconnect controllers while the game runs (see [limitations](#known-limitations)) |
+| `LEPTON_GAMEPAD_PASSTHROUGH=false` | Don't pass controllers to Android |
+| `LEPTON_STOP_SAVE_WAIT=<s>`, `LEPTON_STOP_SHUTDOWN_WAIT=<s>` | Time given to the game to save at Stop (default 3 s) and to Android to shut down (default 5 s); `0` and `0` stop instantly |
+| `LEPTON_NDK_TRANSLATION_MODE=light-translate-or-interpret` | ARM64 games on an NDK bundle: slower, most compatible translation |
+| `LEPTON_DESKTOP_WINDOWED=1`, `LEPTON_RESOLUTION=WIDTHxHEIGHT` | Desktop Mode: a 1280×800 window, or a window of any size, instead of full screen |
 
-Some build components are Git submodules. Confirm that the URLs in `.gitmodules` are publicly accessible before attempting a fresh clone or reporting a reproducible clean build.
+## What works
 
-## Building and installing
+- Android 14 games launched from Steam in Gaming Mode and Desktop Mode on the
+  Steam Deck, with AMD hardware graphics (ANGLE on Vulkan, Mesa RADV).
+- The Deck's touchscreen, its built-in controls, and Bluetooth controllers
+  connected before the game starts, each as a separate Android controller.
+- Saves kept between launches.
+- Audio and video playback (for example YouTube up to 1080p).
+- Optional, in bundles you build yourself: Google Play services, ARM64
+  translation for ARM-only games, and Widevine protected video
+  ([GAPPS.md](GAPPS.md)).
 
-**Most people don't need to build anything.** Download a release from
-**[GitHub Releases](https://github.com/pjohno/lepton-x86_64/releases)** and
-follow **[Install from GitHub Releases](INSTALL-STEAM-DECK.md#install-from-github-releases)**.
-After the first install, **Lepton: Install / Update / Repair** (on the desktop
-and in the application menu) installs later versions, updates and repairs
-installs. A release contains the base bundle only, for the Steam Deck and other
-AMD GPUs; GApps, NDK translation and Widevine are not included.
+Compatibility varies from game to game.
 
-To build it yourself: **[BUILDING.md](BUILDING.md)** is the step-by-step guide: one-time setup, five
-commands from the Android sources to a base bundle and a GApps + NDK bundle, and
-sending bundles to a Steam Deck. **[INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md)**
-continues on the Deck: installing, the graphics check and adding games to Steam.
+## Known limitations
 
-Only AMD GPUs are supported: the image contains AMD RADV/radeonsi drivers, and
-Lepton stops with an explicit message on other hosts unless
-`LEPTON_FORCE_SOFTWARE=true` (slow software rendering) is set.
+- **Release bundles are base bundles:** no Google Play services and no ARM64
+  translation. Games that need either must be built with
+  [GApps and NDK](GAPPS.md) yourself.
+- **Mouse and keyboard** don't reach games on desktop PCs yet, and a USB mouse
+  on the Deck may interfere with touch.
+- **Controller hotplug** (`LEPTON_GAMEPAD_HOTPLUG=true`) gives Android read
+  access to *all* the computer's input devices, not just controllers. Leave it
+  off unless you need it.
+- **Desktops other than KDE Plasma** are untested. With several monitors or
+  fractional scaling, Android may get the wrong screen size; set
+  `LEPTON_RESOLUTION`.
 
-### Lepton's Android patches
+## Documentation
 
-Source preparation applies Valve's patches and then the x86_64 patches in
-`image-14/patches/`:
+| Guide | For |
+| --- | --- |
+| [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md) | Installing, updating, several installs side by side, game data, troubleshooting |
+| [BUILDING.md](BUILDING.md) | Building Android and the Deck bundles from source |
+| [GAPPS.md](GAPPS.md) | Optional Google Play services, ARM64 translation and Widevine bundles |
+| [RELEASING.md](RELEASING.md) | Maintainers: publishing a GitHub release |
+| [FEDORA-DEBUGGING.md](FEDORA-DEBUGGING.md) | Testing APKs and debugging crashes on a Fedora build computer |
+| [compat_tool/README.md](compat_tool/README.md) | Valve's Lepton runtime documentation |
 
-The native controller range correction is held in `image-14/patches/0007-eventhub-preserve-evdev-axes.patch` and is applied during the source preparation workflow to the AOSP `frameworks/native` checkout. It preserves synthetic Wayland input ranges while restoring the evdev axis information of real controllers.
+## For developers
 
-Video playback (Android's software decoders, e.g. YouTube) relies on two patches applied the same way. `0004-minigbm-gbm-mesa-driver.patch` gives YV12 video buffers a real linear three-plane layout, so decoders can write frames. `0002-radv-android-yv12-hardware-buffers.patch` lets RADV import those buffers as an external YCbCr format, so SurfaceFlinger (Skia on ANGLE/Vulkan) can display them. Tested with H.264 on Fedora (RX 6700-class) and YouTube up to 1080p on a Steam Deck.
+**Building.** [BUILDING.md](BUILDING.md) takes you from the Android sources to an
+installable bundle in five commands, on an x86_64 Linux computer with about
+350 GB of free space. Some build components are Git submodules.
 
-**Do not point packaging or deployment scripts at an existing Steam Deck runtime, and do not distribute generated Android binaries without a separate license and security review.**
-
-## Runtime testing prerequisites
-
-For fast local APK installation, ARM64 JNI checks, and captured game crash logs
-on Fedora, see [Local Fedora APK debugging](FEDORA-DEBUGGING.md).
-
-When testing Lepton on Fedora, SteamOS, or a second x86_64 Linux computer:
-
-- Install the Steam client for the Linux user who will run Lepton.
-- Launch Steam and complete account sign-in at least once using **that same Linux user**.
-- Steam does **not necessarily need to remain running** for the shell-based runtime tests. Launching Android applications through Steam may require an active Steam session.
-- Install rootless Podman and the other host dependencies required by the runtime.
-- Ensure the required Wayland, audio, BinderFS, and graphics resources are accessible to the test user. On a Fedora Wayland desktop, `GAMESCOPE_WAYLAND_DISPLAY=wayland-0` may be necessary. Lepton maps this variable to its expected Wayland socket during setup.
-- When running tests over SSH, use the account with the existing Steam setup and desktop runtime resources. An SSH login alone does not create a Wayland or audio session.
-
-To check a build on this computer, boot a stage and run an APK with
-`tests/runtime/run-apk.sh` (see [tests/runtime/README.md](tests/runtime/README.md)).
-The offline regression suite, which needs no Android build, Deck or network, is:
+**Tests.** The offline regression suite needs no Android build, Deck or network:
 
 ```bash
 bash image-14/tests/run-workflow-tests.sh
 ```
 
-Do not run `.ci_scripts/run-tests.sh` directly on a normal Fedora desktop: the CI harness includes system-wide changes and a forced Podman reset.
+To check a built image, boot it and run an APK with `tests/runtime/run-apk.sh`
+([tests/runtime/README.md](tests/runtime/README.md)). Don't run
+`.ci_scripts/run-tests.sh` on a normal desktop: it makes system-wide changes
+and resets Podman.
 
-## Optional Google services
+**Android patches.** Source preparation applies Valve's patches, then these:
 
-See [GApps build, installation and fixes](GAPPS.md) for the opt-in pipeline,
-side-by-side Deck bundles, persistent sign-in and APKM Gaming Mode shortcuts.
+| Patch (`image-14/patches/`) | Purpose |
+| --- | --- |
+| `0001-mesa-android-sdk34-link-libzstd.patch` | Links Mesa with `libzstd` on Android 14 |
+| `0002-radv-android-yv12-hardware-buffers.patch` | RADV imports YV12 video buffers, so video can be displayed |
+| `0004-minigbm-gbm-mesa-driver.patch` | Real three-plane layout for YV12 buffers, so decoders can write frames |
+| `0007-eventhub-preserve-evdev-axes.patch` | Keeps real controllers' axis ranges |
+| `0008-inputreader-separate-steam-input-pads.patch` | Steam Input controllers appear as separate Android controllers |
 
-## Steam Deck shortcut and display-mode helper
+**Where things are:**
 
-The Deck bundle includes `compat_tool/tools/lepton-add-game`, a standard-library
-Python script to register a non-Steam APK shortcut, its Lepton compatibility
-tool mapping. Bundled tools start their own Gamescope bridge and ADB, so the
-shortcut needs no launch options. The installer links it into
-`~/.local/bin`, and it finds its own installation. After **fully exiting Steam**
-from Desktop Mode:
+| Path | Contents |
+| --- | --- |
+| `compat_tool/` | The Lepton runtime that Steam runs, with the x86_64 changes |
+| `compat_tool/tools/` | Deck tools: installer, add-game, release manager, Gamescope bridge, host check |
+| `image-14/` | Android 14 build configuration, device files and patches |
+| `image-14/scripts/` | The build, bundle, install and release commands from [BUILDING.md](BUILDING.md) |
+| `tests/`, `image-14/tests/` | Regression and runtime tests |
 
-```bash
-~/.local/bin/lepton-add-game "$HOME/Android_Games/RetroArch.apk"
-```
+Changes to Valve's code are marked with `x86_64 port:` comments, so they can be
+found when merging Valve's updates.
 
-Restart Steam to see the new shortcut. Add `--hotplug` to opt in to the
-experimental broad `/dev/input` mount and live gamepad hotplug. Without it,
-the default only passes identified controllers present at startup. The helper
-does not set Steam Input layouts: enable **Touchscreen Native Support** in the
-shortcut's controller layout manually.
+## Upstream, attribution and licences
 
-The helper refuses to modify Steam's binary shortcuts or text compatibility
-mapping if it cannot recognise their format, if the APK is already registered,
-or if Steam is running. When more than one Steam user directory exists, pass
-`--userdata ~/.local/share/Steam/userdata/USER_ID`.
+This is a community modification of
+[Valve's public Lepton project](https://gitlab.steamos.cloud/frame-public/lepton),
+which remains the authoritative upstream. Keep Valve's copyright notices,
+third-party attribution and licence headers in files taken from upstream.
 
-**Verified on Steam Deck, 29 October 2026:** A dry run validated Steam's
-existing shortcuts and compatibility mapping without writing files; a new
-2048 shortcut was then created, selected Lepton automatically, and launched
-in both Desktop Mode and Gaming Mode. This is a functional test of the
-current Deck configuration, not broad coverage of other Steam versions.
+**The repository is not covered by one licence.** See:
 
-The `lepton-gamescope-bridge` keeps its known Gaming Mode SDL/X11 fullscreen
-path. On a KDE Plasma Wayland desktop (including the Deck's Desktop Mode) it
-uses a **Wayland Gamescope** that opens fullscreen at the main screen's size,
-which Android then uses as its screen size. `LEPTON_DESKTOP_WINDOWED=1` gives
-a movable 1280×800 window instead, and `LEPTON_RESOLUTION=WIDTHxHEIGHT` a
-window of any size. Override detection using `LEPTON_DISPLAY_MODE=gaming` or
-`desktop`.
+- [`LICENSE.md`](LICENSE.md): Valve's licence index.
+- [`LICENSES/compat_tool.md`](LICENSES/compat_tool.md): MIT terms for the top
+  level and the compatibility tool, with Valve's notice.
+- [`LICENSES/image.md`](LICENSES/image.md): the Android image. The combined
+  image has a GPL-3.0 declaration; its component projects keep their own
+  licences.
+- [`LICENSES/x86_64-contributions.md`](LICENSES/x86_64-contributions.md):
+  original material written for this port. It does not relicense Valve,
+  Android, Waydroid, Mesa or other third-party code.
 
-**Desktops other than KDE Plasma are untested.** GNOME takes the Gaming Mode
-path (fullscreen through Xwayland) and is expected to work with **one
-monitor**. With several monitors Android may be given their combined size,
-and with fractional scaling a scaled-down size; `LEPTON_RESOLUTION` overrides
-both.
-
-**Desktop PCs (experimental).** Lepton targets the Steam Deck. A bundle can be
-installed on a desktop PC with an AMD GPU (`image-14/scripts/install-local.sh`),
-and games start and draw correctly there, but **mouse and keyboard do not reach
-the game yet** (tested on KDE Plasma 6 with 125 % scaling, November 2026).
-`LEPTON_DESKTOP_DIRECT=1` (experimental) skips Gamescope and gives Android a
-KDE window directly; with fractional scaling Android then gets the wrong size,
-pointer positions miss and the window does not redraw reliably. Desktop input
-is future work.
-
-## Steam Deck input notes (experimental)
-
-The checked-in `compat_tool/tools/lepton-gamescope-bridge` reflects a tested nested Gamescope configuration with `--default-touch-mode 4`. **That switch alone is not enough** for native touch on the Steam Deck. The Lepton Steam shortcut's Steam Input configuration must also enable:
-
-**Controller Settings → Edit Layout → Default Action Set → Always-On Command → System → Touchscreen Native Support**
-
-With this combination, touch worked in the tested 2048 application and RetroArch's menu (with RetroArch's Mouse Support disabled). Results are specific to the development configuration. A USB mouse is not a substitute for native touch and may behave inconsistently.
-
-**Verified on Steam Deck, 28 October 2026:** RetroArch recognises the built-in Steam Input virtual Xbox controller and its buttons, D-pad, and analogue axes with `Vendor_28de_Product_11ff.kl` and the patched Android InputReader. Controller passthrough defaults to **enabled** for all recognised Steam Input virtual controllers present when Lepton starts; set `LEPTON_GAMEPAD_PASSTHROUGH=false` to opt out.
-
-**Experimental clean-install test, 29 October 2026:** On a freshly cleared Steam Deck, RetroArch launched in Gaming Mode through `lepton-gamescope-bridge`. The built-in Deck controller operated on Port 1, and two Bluetooth controllers were recognised independently on Ports 2 and 3. Both Bluetooth controllers connected and disconnected during the same session, and native touch remained usable after the display correction.
-
-The original experimental hotplug test enabled two development switches. The user-facing switch is now **`LEPTON_GAMEPAD_HOTPLUG=true`**, which enables both the experimental input mount and automatic watcher; the unified switch has passed a Deck smoke test. Touch initially failed on controller connect because the watcher inherited nested Gamescope `DISPLAY=:2`, while the native-touch property was on host `DISPLAY=:0`. Setting `LEPTON_TOUCH_DISPLAY=:0` fixed the behaviour. The watcher's default was subsequently corrected to `:0`; the new default was exercised in the transferred host scripts during the single-switch smoke test.
-
-**Security limitation:** `LEPTON_GAMEPAD_HOTPLUG=true` bind-mounts the host's *entire* `/dev/input` directory read-only into the Android container for experimental hotplug. Read-only access does **not** prevent reading events from unrelated host input devices. This feature is opt-in and is **not suitable as a general/default deployment** until exposure is narrowed.
-
-**Default multi-controller startup test, 29 October 2026:** With hotplug disabled, two Bluetooth controllers and the built-in Deck controller worked simultaneously. The container mounted only `/dev/input/event10`, `/dev/input/event11`, and `/dev/input/event24` as individual input nodes; it did **not** mount the full host input directory. Later Bluetooth/keyboard hotplug is not supported in this mode.
-
-**Build and bundle provenance:** The working controller test used an existing previously validated Android rootfs with an updated InputReader library compiled from the prepared Android source tree containing patches `0007-eventhub-preserve-evdev-axes.patch` and `0008-inputreader-separate-steam-input-pads.patch`. The test bundle was `lepton-x86_64-steamdeck-clean-install-controller-test-20261029.tar.gz`. This was a functional test of the assembled installation, **not** verification of a freshly rebuilt, complete Android rootfs. `deploy-compat-x86_64.sh --package-only` packages an existing stage and refreshes selected host-side scripts; it does not rebuild Android or substitute individual libraries. A full-from-source image/rootfs rebuild and whole-output verification are separate follow-up work.
-
-RetroArch's controller assignment and per-core bindings may differ from other Android applications.
-
-## Upstream, attribution and licenses
-
-This is a community modification of [Valve's public Lepton project](https://gitlab.steamos.cloud/frame-public/lepton). Retain Valve's copyright notices, third-party attribution, and the license headers in files taken from upstream. Valve's public GitLab is the authoritative upstream project; this repository is an independent experimental port.
-
-**The repository is not covered by one universal license.** Read:
-
-- [`LICENSE.md`](LICENSE.md) — Valve's top-level license index.
-- [`LICENSES/compat_tool.md`](LICENSES/compat_tool.md) — MIT terms for the top level and compatibility tool, retaining Valve's notice.
-- [`LICENSES/image.md`](LICENSES/image.md) — Android-image license information; the combined image has a GPL-3.0 declaration and its component projects retain their own licenses.
-- [`LICENSES/x86_64-contributions.md`](LICENSES/x86_64-contributions.md) — terms for original standalone material written for this port; this does **not** relicense Valve, Android, Waydroid, Mesa, or other third-party code.
-
-Source patches against upstream components retain the copyright and license requirements applicable to the code they modify. Building or distributing Android binaries would require a separate corresponding-source, third-party notice and license-compliance review. No Android binaries are included here.
-
-Google's Android Platform-Tools `adb` is **not** included in this repository or in the Steam Deck bundles. The bundle installer downloads the official, versioned Platform-Tools ZIP directly from Google on the user's machine and verifies the pinned `adb` (see [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md#google-adb)).
+Patches keep the licence of the code they modify. Google's `adb` is not in this
+repository or in the bundles; the installer downloads the official
+Platform-Tools from Google and checks it against a pinned checksum
+([details](INSTALL-STEAM-DECK.md#google-adb)).
 
 ## Contributing
 
-Issues and patches reproducing problems on x86_64 Linux are welcome. Please include host hardware and OS, a precise launch configuration, relevant command output, and whether the problem reproduces without local modifications. Do not upload proprietary game files, Android images, Steam depot binaries, credentials, or personal logs.
-
-The primary goal of this repository is reproducible technical investigation, not a claim of supported consumer compatibility.
+Bug reports and patches are welcome. Please include your hardware and OS, the
+Lepton version, the game, how you launched it, and the relevant part of
+`~/.steam/steam/logs/lepton-*.log`. Don't upload game files, Android images,
+Steam binaries, credentials or personal data.
