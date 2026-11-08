@@ -365,6 +365,14 @@ once with the launch option `LEPTON_RESET_APP_DATA=true %command%`, then remove
 the option. `LEPTON_KEEP_APP_DATA=false %command%` restores the old behaviour
 (fresh install on every launch).
 
+When you press Stop in Steam, Lepton first sends the game to the background
+(as if you pressed Home) and waits 3 seconds so it can save, then lets Android
+shut down for up to 5 seconds before stopping it. Stop therefore takes a few
+seconds. Games that only save when paused or closed (for example sign-ins
+without Google Play services) keep that data. The waits can be changed with
+`LEPTON_STOP_SAVE_WAIT=<seconds>` and `LEPTON_STOP_SHUTDOWN_WAIT=<seconds>`;
+setting both to `0` gives the old instant stop.
+
 ## Starting again from a clean slate
 
 To remove every Lepton install and trace from a Deck, run from the build
