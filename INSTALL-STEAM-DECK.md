@@ -62,8 +62,9 @@ Each release of version `VERSION` (for example `v0.1.0-alpha`) has these files:
    - **Double-click:** in Dolphin, right-click the `.install.sh` file and choose
      **Properties > Permissions**. Tick **Is executable** (called **Allow
      executing file as program** on some versions), then **OK**. Double-click the
-     file and choose **Execute** when Dolphin asks. A Konsole window opens and
-     shows the progress.
+     file. When Dolphin asks whether to **Launch this program as an executable**,
+     choose **Launch** (or **Yes**). A Konsole window opens and shows the
+     progress.
 
 The installer:
 - needs an internet connection, but no password and no `sudo`;
@@ -160,8 +161,10 @@ with fresh Android data on its next launch:
 Keeping the same Steam shortcut, AppID or tool ID doesn't keep this data.
 **Repairing the same version keeps it.**
 
-Separately, Steam's **Stop** button ends Android immediately. To keep progress a
-game hasn't saved yet, close the game from inside the game.
+Separately, Steam's **Stop** button gives the game a few seconds to save before
+Android shuts down (see [Game data between launches](#game-data-between-launches)). A game that only
+saves at certain points, such as checkpoints, can still lose progress since its
+last save; to be safe, close the game from inside the game.
 
 ## Developer install: your own bundle
 

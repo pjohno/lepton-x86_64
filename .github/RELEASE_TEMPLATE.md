@@ -61,8 +61,10 @@ for details, including installing by double-click.
   tool, or its tool is updated or downgraded, the game starts with fresh Android
   data. Shared storage (`/sdcard`) and online or cloud saves are kept.
   **Repairing** the same version keeps the data.
-- **Steam's Stop button** stops Android immediately, so a game may lose progress
-  it has not saved yet. To keep progress, close the game from inside the game.
+- **Steam's Stop button** gives the game a few seconds to save before Android
+  shuts down, so Stop takes a few seconds. A game that only saves at certain
+  points (for example at checkpoints) can still lose progress since its last
+  save; to be safe, close the game from inside the game.
 - **Desktop PCs** are experimental: no mouse or keyboard input in games yet (#9),
   and the picture may only update after switching windows (#8).
 
