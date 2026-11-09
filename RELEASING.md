@@ -85,10 +85,10 @@ complete Android contents against the baseline, recheck the source stage, and
 verify the packaged scripts against the reviewed checkout. Stop on unexplained
 Android differences. Check that the archive contains `tools/IMAGE-PROVENANCE.txt`
 (it is copied only when the images folder's `BUILD-INFO.txt` matches the
-stage's `build.prop`); the publisher refuses a bundle without it. Release/tool identity changes alone must not reset game
-profiles. See [PERSISTENCE-SAFETY.md](PERSISTENCE-SAFETY.md) for the validation
-report and outstanding Deck gates. The existing checksum/signing and approval
-requirements still apply.
+stage's `build.prop`); the publisher refuses a bundle without it.
+Release/tool identity changes alone must not reset game profiles (see
+[Game data between launches](INSTALL-STEAM-DECK.md#game-data-between-launches)).
+The existing checksum/signing and approval requirements still apply.
 
 ## Release workflow
 
