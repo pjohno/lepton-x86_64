@@ -8,7 +8,7 @@ for fn in profile_has_no_mounts should_keep_app_data remove_baked_workdirs lepto
           remove_prefix clear_baked_app_data prepare_baked_data_for_removal data_mount_path data_workdir app_workdir app_datadir cleanup_container install_app; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/liblepton.sh")"
 done
-for fn in get_baked_app_data_dir app_install_complete_path app_apk_set_matches is_app_baked; do
+for fn in get_baked_app_data_dir app_install_complete_path app_apk_set_matches is_app_baked app_install_needed; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/baking.sh")"
 done
 for fn in extract_app_mount_dir extract_app_hash; do
@@ -59,7 +59,7 @@ cp "$work/game.apk" "$baked/app_overlay/base.apk"
 extract_app_hash > "$baked/app_hash"
 touch "$baked/app_install_complete"
 assert_saved() { [[ "$(cat "$save")" == 'board=2048;level=7' && "$(cat "$STEAM_COMPAT_DATA_PATH/external/save")" == shared ]]; }
-refuses() { if check_kept_app_data; then echo 'FAIL: unsafe reuse accepted'; exit 1; fi; assert_saved; }
+refuses() { if check_kept_app_data; then echo 'FAIL: unsafe reuse accepted'; exit 1; fi; [[ -z "$APP_REUSE_VALIDATED" ]]; assert_saved; }
 # Exercise the launcher's actual teardown body for session lengths and a signal.
 eval "$(sed -n '/^        function teardown()/,/^        }/p' "$repo/compat_tool/lepton")"
 eval "$(sed -n '/^        function handle_signal()/,/^        }/p' "$repo/compat_tool/lepton")"
@@ -74,6 +74,13 @@ log_moved_dirs() { :; }
 kill_descendants() { :; }
 MOVED_INACCESSIBLE=''
 check_kept_app_data
+# Android 14 renames packages.xml aside while rewriting it at boot. A post-start
+# re-check during that window must not reinstall over a validated profile.
+mv "$baked/data_overlay/system/packages.xml" "$work/packages-booting"
+if app_install_needed; then echo 'FAIL: validated profile reinstalled after start'; exit 1; fi
+if (APP_REUSE_VALIDATED=''; ! app_install_needed); then echo 'FAIL: unvalidated missing install not detected'; exit 1; fi
+mv "$work/packages-booting" "$baked/data_overlay/system/packages.xml"
+[[ -e "$baked/app_install_complete" ]]; assert_saved
 for scenario in normal short long crash invalid-short; do
     LEPTON_PREFIX="$(mktemp -d /tmp/lepton-context.XXXXXXXXXX)"
     mkdir -p "$baked/data_workdir/work" "$baked/app_workdir/work"

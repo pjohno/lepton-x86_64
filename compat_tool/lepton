@@ -289,7 +289,7 @@ case "${COMMAND}" in
 
         if ! is_steamlaunch && ! is_app; then
             continue_boot_after_bake
-        elif ! is_app_baked; then
+        elif app_install_needed; then
             clear_app_install_complete
             if install_app; then
                 # x86_64 port: patch ARM64 wait hints; pick the translator mode.

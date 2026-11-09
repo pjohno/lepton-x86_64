@@ -73,9 +73,13 @@ the game into Android and takes longer.
 **Saves.** A game's Android data is kept between launches, in Steam's
 compatdata folder for that shortcut. When you press **Stop** in Steam, Lepton
 sends the game to the background and gives it a few seconds to save before
-shutting Android down, so Stop takes a few seconds. Switching a game to a
-different Lepton version resets its Android data once
-([why](INSTALL-STEAM-DECK.md#game-data-between-launches)).
+shutting Android down, so Stop takes a few seconds. Save inside the game
+before pressing Stop: Lepton gives the game time to save, but can't make it
+save. Switching a game to a different Lepton version keeps its Android data
+when that version uses the same Android image. If the image differs, or the
+installed APK no longer matches the game's file, Lepton stops with a message
+and keeps the data. It never resets data on its own
+([details](INSTALL-STEAM-DECK.md#game-data-between-launches)).
 
 ## Launch options
 
@@ -84,8 +88,7 @@ Properties > Launch Options, followed by `%command%`:
 
 | Option | Effect |
 | --- | --- |
-| `LEPTON_RESET_APP_DATA=true` | Reset this game's Android data on the next launch (remove the option afterwards) |
-| `LEPTON_KEEP_APP_DATA=false` | Start fresh on every launch (Valve's original behaviour) |
+| `LEPTON_RESET_APP_DATA=true` | Permanently delete this game's Android profile (installed app, saves, logins) on the next launch. Back it up first and remove the option afterwards; shared storage is kept ([scope](INSTALL-STEAM-DECK.md#game-data-between-launches)) |
 | `LEPTON_GAMEPAD_HOTPLUG=true` | Experimental: connect and disconnect controllers while the game runs (see [limitations](#known-limitations)) |
 | `LEPTON_GAMEPAD_PASSTHROUGH=false` | Don't pass controllers to Android |
 | `LEPTON_STOP_SAVE_WAIT=<s>`, `LEPTON_STOP_SHUTDOWN_WAIT=<s>` | Time given to the game to save at Stop (default 3 s) and to Android to shut down (default 5 s); `0` and `0` stop instantly |

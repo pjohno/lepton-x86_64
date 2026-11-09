@@ -143,6 +143,15 @@ function is_app_baked()
     println "Installation validation passed; launcher release identity does not invalidate profile" >&2
 }
 
+# Existing profiles are validated before mounting. Android 14 renames
+# packages.xml aside while rewriting it during boot, so a post-start re-check
+# must never turn a validated profile into an install over existing data.
+function app_install_needed()
+{
+    [[ "${APP_REUSE_VALIDATED:-}" != yes ]] || return 1
+    ! is_app_baked
+}
+
 function autobake()
 {
     if ! is_system_baked; then

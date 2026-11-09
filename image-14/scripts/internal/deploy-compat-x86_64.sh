@@ -55,7 +55,8 @@ Usage: bash image-14/scripts/internal/deploy-compat-x86_64.sh [--check|--execute
 --tool-name NAME: Steam display name for the packaged tool.
 --check: inspect source and existing destination; never modify files.
 --execute: refuse to overwrite existing rootfs/stage or Steam installation.
---package-only: package an existing complete stage with fresh sysbake and tools;
+--package-only: package an existing complete stage (its rootfs and existing
+                sysbake, unchanged) with the current launcher scripts and tools;
                 does not rebuild images, generate sysbake or replace the stage.
 --bundle-dir DIR: archive destination (default: the workspace's bundles/).
 --bundle-id ID: required archive identifier for packaging/transfer.

@@ -56,6 +56,8 @@ function prepare_apkm()
     CACHE="${CACHE_ROOT}/${KEY}"
     if [[ ! -f "${CACHE}/base.apk" ]]; then
         mkdir -p -- "${CACHE_ROOT}"
+        # Only this key's unfinished scratch copy; completed caches are kept.
+        rm -rf -- "${CACHE}.tmp"
         python3 - "${APKM}" "${CACHE}.tmp" <<'PY' || die "Cannot unpack ${APKM} (expected an APKMirror-style bundle with base.apk)."
 import re, shutil, sys, zipfile
 from pathlib import Path

@@ -164,6 +164,7 @@ function check_kept_app_data()
     local DIR FINGERPRINT_FILE CURRENT STORED
     DIR="$(get_baked_app_data_dir)"
     FINGERPRINT_FILE="$DIR/lepton-runtime-fingerprint"
+    APP_REUSE_VALIDATED=""
     if [[ -L "$DIR" || -L "$DIR/data_overlay" || -L "$DIR/app_overlay" ]]; then
         println "ERROR: unexpected profile symlink; profile preserved but not mounted: $DIR" >&2
         return 1
@@ -187,6 +188,7 @@ function check_kept_app_data()
             return 1
         fi
         println "Existing profile validated for reuse"
+        APP_REUSE_VALIDATED=yes
     else
         println "Existing profile detected: no; creating new profile; runtime fingerprint=$CURRENT"
         mkdir -p "$DIR"

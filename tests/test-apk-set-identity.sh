@@ -56,4 +56,26 @@ mv "$work/split" "$work/baked/app_overlay/split_config.x86_64.apk"
 is_app_baked
 rm "$work/baked/app_install_complete"; refuses
 [[ ! -e "$work/baked/app_hash" ]]
-echo 'PASS: legacy base/archive/stale metadata verified against complete APK set; base/split changes, missing/extra/symlink code refused; data and metadata preserved'
+# An interrupted first unpack leaves <key>.tmp; only that scratch copy is
+# replaced, and other completed (possibly installed) caches are retained.
+eval "$(sed -n "/^function prepare_apkm()/,/^}/p" "$repo/compat_tool/liblepton/google_games.sh")"
+die() { echo "FAIL: $*"; exit 1; }
+rootfs_has_arm_translation() { return 0; }
+unset LEPTON_APKM_DIR LEPTON_APKM_HASH APP_PATH
+export STEAM_COMPAT_DATA_PATH="$work/compatdata"
+python3 -I - "$work/game.apkm" <<'PY2'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr("base.apk", "base-binary\n")
+    z.writestr("split_config.x86_64.apk", "split-binary\n")
+    z.writestr("split_config.arm64_v8a.apk", "arm-binary\n")
+PY2
+key="$(sha256sum "$work/game.apkm" | cut -c1-16)"
+mkdir -p "$STEAM_COMPAT_DATA_PATH/lepton-apkm/$key.tmp" "$STEAM_COMPAT_DATA_PATH/lepton-apkm/0123456789abcdef"
+echo partial > "$STEAM_COMPAT_DATA_PATH/lepton-apkm/$key.tmp/base.apk"
+echo older-installed > "$STEAM_COMPAT_DATA_PATH/lepton-apkm/0123456789abcdef/base.apk"
+prepare_apkm "$work/game.apkm"
+[[ "$LEPTON_APKM_DIR" == "$STEAM_COMPAT_DATA_PATH/lepton-apkm/$key" && ! -e "$LEPTON_APKM_DIR.tmp" ]]
+[[ "$(cat "$LEPTON_APKM_DIR/base.apk")" == base-binary && -f "$LEPTON_APKM_DIR/split_config.x86_64.apk" && ! -e "$LEPTON_APKM_DIR/split_config.arm64_v8a.apk" ]]
+[[ "$(cat "$STEAM_COMPAT_DATA_PATH/lepton-apkm/0123456789abcdef/base.apk")" == older-installed ]]
+echo 'PASS: legacy base/archive/stale metadata verified against complete APK set; base/split changes, missing/extra/symlink code refused; interrupted APKM unpack recovered; data, metadata and other caches preserved'
