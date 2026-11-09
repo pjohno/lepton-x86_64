@@ -11,6 +11,10 @@ with the Deck's controls and touchscreen, and keeps its saves between launches.
 > supported by, or endorsed by Valve. It targets the Steam Deck; other
 > computers are experimental.
 >
+> **AI Assistance Disclosure.** AI tools have been used to aid development
+> in this repo. I (as author) maintain responsibility for the code, and
+> have reviewed as much as possible. 
+>
 > **You provide the games.** This repository contains source code and build
 > recipes only: no Android images, Steam binaries, apps or APKs. Releases
 > contain a ready-built base bundle (see [Install](#install-on-a-steam-deck)).
