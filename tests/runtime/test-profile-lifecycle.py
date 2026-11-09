@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Check explicit persistence keeps Android data while default cleanup is unchanged."""
+"""Default and development cleanup preserve Android identity and save contents."""
 import os
 from pathlib import Path
 import subprocess
@@ -26,7 +26,15 @@ class ProfileTests(unittest.TestCase):
             (root / "prefix").mkdir()
             code = '''set -euo pipefail
 case_root=$1
-LEPTON_PREFIX="$case_root/prefix"
+LEPTON_CONTEXT=dev
+LEPTON_PREFIX=$(mktemp -d /tmp/lepton-context.XXXXXXXX)
+printf '%s' "$LEPTON_PREFIX" > "$case_root/prefix-path"
+podman() {
+    case "$1 ${2:-}" in
+        'container exists') return 1;;
+        'unshare rm') shift; "$@";;
+    esac
+}
 is_app() { return 1; }
 data_mount_path() { printf '%s/data/data_overlay\\n' "$case_root"; }
 data_workdir() { printf '%s/data/data_workdir\\n' "$case_root"; }
@@ -34,16 +42,15 @@ app_datadir() { printf '%s/data/app_overlay\\n' "$case_root"; }
 get_baked_app_data_dir() { printf '%s/data\\n' "$case_root"; }
 println() { :; }
 '''
-            code += FUNCTIONS + '\nremove_prefix\nclear_baked_app_data "normal shutdown"\n'
+            code += FUNCTIONS + '\nremove_prefix\n! clear_baked_app_data "normal shutdown"\n'
             result = subprocess.run(["bash", "-c", code, "--", directory], text=True,
                                     capture_output=True, env={**os.environ, "LEPTON_NO_CLEANUP": str(preserve).lower()})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertFalse((root / "prefix").exists())
-            self.assertEqual(identity.exists(), preserve)
-            if preserve:
-                self.assertEqual(identity.read_text(), "registered-identity")
+            self.assertFalse(Path((root / "prefix-path").read_text()).exists())
+            self.assertTrue((root / "prefix").exists())
+            self.assertEqual(identity.read_text(), "registered-identity")
 
-    def test_default_still_cleans_disposable_state(self):
+    def test_default_preserves_identity(self):
         self.cleanup_case(False)
 
     def test_override_preserves_identity(self):

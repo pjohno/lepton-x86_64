@@ -167,24 +167,6 @@ case "${COMMAND}" in
         autobake
         #preload_app_resources
 
-        # This must happen before any call to is_app_baked
-        APP_OR_DEPOT_CHANGED=false
-        if is_app; then
-            if [[ "$(get_app_hash)" != "$(extract_app_hash)" ]]; then
-                echo "The app has changed, baked app data will be cleared."
-                APP_OR_DEPOT_CHANGED=true
-            elif [[ "$(get_app_last_depot_version)" != "$(extract_app_last_depot_version)" ]]; then
-                echo "The depot has changed, baked app data will be cleared."
-                APP_OR_DEPOT_CHANGED=true
-            fi
-        fi
-
-        # We need to do this before starting/setting up the container
-        # otherwise we would delete our media0 storage.
-        if is_app && { ! is_app_baked || [ "${APP_OR_DEPOT_CHANGED}" != "false" ]; }; then
-            clear_baked_app_data "app or depot changed"
-        fi
-
         setup_container
         logcat_debug "post-setup"
         generate_app_launch_rc
@@ -254,18 +236,18 @@ case "${COMMAND}" in
             if (( "$(date "+%s")" < "${app_start_time} + 30" )); then
                 EARLY_SHUTDOWN=1
             fi
+            local LOGCAT_CAPTURE_PID=''
+            if [[ "${EARLY_SHUTDOWN}" == "1" ]]; then
+                println "Early shutdown detected (<30s); profile retained"
+                ndk_note_early_exit
+            fi
             if [[ -n "${LEPTON_DUMP_LOGCAT:-}" ]] || [[ "${EARLY_SHUTDOWN}" == "1" ]]; then
-                println "Dumping logcat to $(logcat_debug_dir)"
-                dump_logcat "$(logcat_debug_dir)"
-
-                # x86_64 port: with kept app data, a quick exit of a correctly
-                # installed game must not erase its saves; only clear when the
-                # app did not finish installing.
-                [[ "${EARLY_SHUTDOWN}" != "1" ]] || ndk_note_early_exit
-                if [[ "${EARLY_SHUTDOWN}" == "1" ]] && ! { should_keep_app_data && is_app_baked; }; then
-                    # Clearing baked app data in this case since something might be wrong.
-                    clear_baked_app_data "early exit"
-                fi
+                println "Collecting bounded logcat alongside shutdown: $(logcat_debug_dir)"
+                (
+                    uninherit_lepton_lock
+                    dump_logcat "$(logcat_debug_dir)"
+                ) &
+                LOGCAT_CAPTURE_PID=$!
             fi
 
             # Give the watcher a chance to remove only its own guest links
@@ -282,11 +264,13 @@ case "${COMMAND}" in
 
             if ! is_steamlaunch; then
                 remove_context "${LEPTON_CONTEXT}"
-                clear_baked_app_data "non steamlaunch container"
+                println "Non-Steam profile retained"
             fi
 
             log_moved_dirs "${MOVED_INACCESSIBLE}"
 
+            # Capture is bounded and must not delay HOME, power-off or cleanup.
+            [[ -z "$LOGCAT_CAPTURE_PID" ]] || wait "$LOGCAT_CAPTURE_PID"
             kill_descendants
 
             trap "-" INT TERM ERR
@@ -628,7 +612,7 @@ EOF
         echo
         println "    ${_GREEN}$0 kill_all${_PLAIN}"
         echo
-        println "To wipe out all baked state (typically unnecessary) use cleanup_all:"
+        println "To clean stopped containers while retaining profiles use cleanup_all:"
         echo
         println "    ${_GREEN}$0 cleanup_all${_PLAIN}"
         ;;

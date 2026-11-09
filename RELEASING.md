@@ -49,6 +49,28 @@ So `v0.1.0-alpha` < `v0.1.0-alpha.2` < `v0.1.0-alpha.10` < `v0.1.0-beta` <
 The publisher refuses an archive containing any of these. It also checks that
 the bundle's `BUNDLE.json` says `gapps: false` and `ndk: false`.
 
+## Launcher-only releases using a validated stage
+
+Launcher fixes can reuse the tested Android system and sysbake. Do not run the
+full bundle pipeline for these updates: it creates a new sysbake. Record full
+rootfs/sysbake manifests and compatibility-input hashes before packaging, then
+use the existing stage read-only:
+
+```bash
+bash image-14/scripts/internal/deploy-compat-x86_64.sh --package-only --execute \
+  --stage-dir "$VALIDATED_STAGE" --bundle-dir "$RELEASE_BUNDLE_DIR" \
+  --bundle-id v0.1.1-alpha
+```
+
+This refreshes host runtime scripts and injected launcher hooks in a temporary
+payload. It does not prepare Android or regenerate sysbake. Compare the archive's
+complete Android contents against the baseline, recheck the source stage, and
+verify the packaged scripts against the reviewed checkout. Stop on unexplained
+Android differences. Release/tool identity changes alone must not reset game
+profiles. See [PERSISTENCE-SAFETY.md](PERSISTENCE-SAFETY.md) for the validation
+report and outstanding Deck gates. The existing checksum/signing and approval
+requirements still apply.
+
 ## Release workflow
 
 Run everything from a clean checkout of the repository on the build machine,

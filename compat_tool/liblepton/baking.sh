@@ -71,16 +71,76 @@ function clear_app_install_complete()
     rm -f "$(app_install_complete_path)"
 }
 
+# Validate the complete code set, including split-only changes. Legacy app_hash
+# metadata may identify either base.apk or an APKM archive. Neither is proof of
+# the full installed set: compare each selected APK and reject extra/missing code.
+function app_apk_set_matches()
+{
+    local INSTALLED="$(get_baked_app_data_dir)/app_overlay" BASE SRC NAME RESULT
+    local -A SOURCES=()
+    BASE="$(get_apk_path)"
+    SOURCES[base.apk]="$BASE"
+    [[ -d "$INSTALLED" && -r "$INSTALLED" && -x "$INSTALLED" && ! -L "$INSTALLED" ]] || {
+        println "Installation invalid: installed APK directory missing, unreadable or a symlink" >&2; return 1;
+    }
+    if [[ -n "${LEPTON_APKM_DIR:-}" ]]; then
+        [[ "$BASE" == "$LEPTON_APKM_DIR/base.apk" && -r "$LEPTON_APKM_DIR" && -x "$LEPTON_APKM_DIR" && ! -L "$LEPTON_APKM_DIR" ]] || {
+            println "Installation invalid: selected APKM cache cannot be validated" >&2; return 1;
+        }
+        for SRC in "$LEPTON_APKM_DIR"/*.apk; do
+            [[ -e "$SRC" || -L "$SRC" ]] || continue
+            NAME="${SRC##*/}"
+            [[ "$NAME" =~ ^[A-Za-z0-9_.-]+\.apk$ ]] || {
+                println "Installation invalid: unrecognised split APK filename" >&2; return 1;
+            }
+            SOURCES["$NAME"]="$SRC"
+        done
+    fi
+    for NAME in "${!SOURCES[@]}"; do
+        SRC="${SOURCES[$NAME]}"
+        [[ -f "$SRC" && -s "$SRC" && -r "$SRC" && ! -L "$SRC" &&
+           -f "$INSTALLED/$NAME" && -s "$INSTALLED/$NAME" && -r "$INSTALLED/$NAME" && ! -L "$INSTALLED/$NAME" ]] || {
+            println "Installation invalid: selected/installed APK missing, unreadable or a symlink: $NAME" >&2; return 1;
+        }
+        RESULT=0
+        cmp -s -- "$SRC" "$INSTALLED/$NAME" || RESULT=$?
+        case "$RESULT" in
+            0) ;;
+            1) println "APK content changed: yes; installed $NAME differs from selected source; safe update required" >&2; return 1 ;;
+            *) println "Installation invalid: could not compare APK contents: $NAME" >&2; return 1 ;;
+        esac
+    done
+    for SRC in "$INSTALLED"/*.apk; do
+        [[ -e "$SRC" || -L "$SRC" ]] || continue
+        NAME="${SRC##*/}"
+        [[ -n "${SOURCES[$NAME]+present}" ]] || {
+            println "APK split set changed: installed APK absent from selected source: $NAME" >&2; return 1;
+        }
+    done
+}
+
 function is_app_baked()
 {
-    is_app &&
-    [[ -f "$(app_install_complete_path)" ]] &&
-    [[ "$(get_baked_app_data_dir)/data_overlay/system/packages.xml" -nt "$(get_apk_path)" ]] &&
-    # x86_64 port: Android 14 writes packages.xml as binary XML (ABX); GNU grep
-    # prints no line for binary matches, so test its exit status, as text.
-    grep -qaF -- "$(get_app_id)" "$(get_baked_app_data_dir)/data_overlay/system/packages.xml" 2>/dev/null &&
-    # The installed app is mounted back at its codePath; without it, reinstall.
-    [[ -n "$(get_app_mount_dir)" ]]
+    is_app || return 1
+    local DIR="$(get_baked_app_data_dir)" CODE STORED_HASH CURRENT_HASH
+    [[ -f "$(app_install_complete_path)" ]] || { println "Installation marker present: no" >&2; return 1; }
+    println "Installation marker present: yes" >&2
+    grep -qaF -- "$(get_app_id)" "$DIR/data_overlay/system/packages.xml" 2>/dev/null || {
+        println "Installation invalid: package absent or packages.xml unreadable/unrecognised" >&2; return 1;
+    }
+    CODE="$(extract_app_mount_dir)"
+    [[ -n "$CODE" && -s "$DIR/app_overlay/base.apk" ]] || {
+        println "Installation invalid: installed codePath or app_overlay/base.apk missing" >&2; return 1;
+    }
+    app_apk_set_matches || return 1
+    CURRENT_HASH="$(extract_app_hash)" || return 1
+    [[ "$CURRENT_HASH" =~ ^[0-9a-f]{64}$ ]] || { println "Installation invalid: cannot hash selected base APK" >&2; return 1; }
+    STORED_HASH="$(cat "$DIR/app_hash" 2>/dev/null || true)"
+    if [[ "$STORED_HASH" != "$CURRENT_HASH" ]]; then
+        println "Stored APK hash missing/stale or uses a different scheme; complete installed APK set verified unchanged; metadata retained" >&2
+    fi
+    println "APK content changed: no; complete installed APK set matches selected source" >&2
+    println "Installation validation passed; launcher release identity does not invalidate profile" >&2
 }
 
 function autobake()

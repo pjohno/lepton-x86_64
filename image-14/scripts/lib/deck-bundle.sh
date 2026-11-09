@@ -326,6 +326,10 @@ grep -Fq '/lepton-x86_64-entry %verb%' "$tmp/payload/compat_tool/toolmanifest.vd
 install -m 644 "$repo/compat_tool/liblepton/Vendor_28de_Product_11ff.kl" \
     "$tmp/payload/compat_tool/liblepton/Vendor_28de_Product_11ff.kl"
 
+# This runtime hook must track the persistence fix, like the cmd wrapper.
+install -D -m 755 "$repo/compat_tool/images/rootfs_overlay/vendor/bin/fix_obb_symlink.sh" \
+    "$tmp/payload/compat_tool/images/rootfs_overlay/vendor/bin/fix_obb_symlink.sh"
+
 # A Fedora sysbake may carry security.selinux xattrs, which cannot be restored
 # by Deck users. Keep every user.* attribute and its file-path record intact.
 xattrs="$tmp/payload/compat_tool/sysbake.xattrs"
@@ -391,6 +395,10 @@ Terminal equivalents:
 Enable Touchscreen Native Support in the game's controller
 layout (Controller Settings > Edit Layout > Default Action Set >
 Always-On Command > System > Touchscreen Native Support).
+
+Save using the game's own save/exit function before pressing Steam Stop.
+In 2048, Exit or going back through moves saves the board. Steam Stop keeps
+the last saved board but does not guarantee that new moves are saved.
 
 For Google sign-in and APKM games in a persistent profile, see GAPPS.md.
 Saved profiles and credentials are never bundled.

@@ -45,120 +45,166 @@ function create_prefix()
     fi
 }
 
+# Ordinary cleanup never owns the Android overlays. Deletion is reset-only.
 function prepare_baked_data_for_removal()
 {
-    # A persistent development profile keeps all Android state, including Google
-    # identity and account data, when its temporary launcher prefix is removed.
-    if [[ "${LEPTON_NO_CLEANUP:-false}" != false ]]; then
-        return 0
-    fi
-    # Clear workdirs first
-    if is_app; then
-        local APP_WORKDIR="$(app_workdir $@)"
-        if [[ -d "${APP_WORKDIR}" ]]; then
-            chmod -R 700 "${APP_WORKDIR}"
-            rm -rf "${APP_WORKDIR}"
-        fi
-    fi
-
-    local DATA_WORKDIR="$(data_workdir $@)"
-    if [[ -d "${DATA_WORKDIR}" ]]; then
-        chmod -R 700 "${DATA_WORKDIR}"
-        rm -rf "${DATA_WORKDIR}"
-    fi
-
-    local DATA_DIR="$(data_mount_path $@)"
-    if [[ -d "${DATA_DIR}" ]]; then
-        chmod -R 700 "${DATA_DIR}"
-        rm -rf "${DATA_DIR}"
-    fi
-
-    local APPDATA_DIR="$(app_datadir $@)"
-    if [[ -d "${APPDATA_DIR}" ]]; then
-        chmod -R 700 "${APPDATA_DIR}"
-        rm -rf "${APPDATA_DIR}"
-    fi
+    remove_baked_workdirs "$@"
 }
 
+function profile_has_no_mounts()
+{
+    local MOUNTS
+    MOUNTS="$(findmnt -rn -o TARGET,OPTIONS)" || {
+        println "WARNING: cannot inspect mounts; cleanup refused" >&2
+        return 1
+    }
+    [[ "$MOUNTS" != *"$1"* ]]
+}
 
 function clear_baked_app_data()
 {
-    REASON="$1"
+    local REASON="$1" DIR BASE
     shift
-
-    if [[ "${LEPTON_NO_CLEANUP:-false}" != "false" ]]; then
-        println "Skipping clearing baked app data due to env LEPTON_NO_CLEANUP"
-    else
-        println "Clearing baked app data due to ${REASON}"
-
-        prepare_baked_data_for_removal $@
-        rm -rf "$(get_baked_app_data_dir $@)"
+    [[ "${LEPTON_RESET_APP_DATA:-false}" == true ]] || {
+        println "ERROR: refusing profile deletion without LEPTON_RESET_APP_DATA=true" >&2
+        return 1
+    }
+    [[ $# == 0 && -n "${STEAM_COMPAT_DATA_PATH:-}" ]] || return 1
+    BASE="$(realpath -e -- "${STEAM_COMPAT_DATA_PATH}")" || return 1
+    DIR="$(get_baked_app_data_dir)"
+    [[ "$BASE" != / && "$BASE" != "$HOME" && "$DIR" == "${STEAM_COMPAT_DATA_PATH}/baked" && ! -L "$DIR" ]] || return 1
+    [[ "$(realpath -m -- "$DIR")" == "$BASE/baked" ]] || return 1
+    # Fail closed if Podman cannot establish that this profile is inactive.
+    local STATE
+    STATE="$(podman container inspect -f '{{.State.Running}}' "lepton-${LEPTON_CONTEXT}" 2>/dev/null)" || {
+        local EXISTS_STATUS=0
+        podman container exists "lepton-${LEPTON_CONTEXT}" || EXISTS_STATUS=$?
+        [[ $EXISTS_STATUS == 1 ]] || return 1
+        STATE=false
+    }
+    [[ "$STATE" == false ]] || { println "ERROR: stop the game before resetting" >&2; return 1; }
+    podman rm "lepton-${LEPTON_CONTEXT}" >/dev/null 2>&1 || true
+    local REMAINING_STATUS=0
+    podman container exists "lepton-${LEPTON_CONTEXT}" || REMAINING_STATUS=$?
+    [[ $REMAINING_STATUS == 1 ]] || {
+        println "ERROR: container removal unverified; reset refused" >&2
+        return 1
+    }
+    if ! profile_has_no_mounts "$BASE"; then
+        println "ERROR: profile still mounted; reset refused" >&2
+        return 1
     fi
+    println "Explicit reset: ${REASON}; Android baked profile only: $DIR; external and internal retained"
+    podman unshare rm -rf --one-file-system -- "$DIR" || {
+        println "ERROR: partial reset at $DIR; preserved remaining files; do not launch" >&2
+        return 1
+    }
+    [[ ! -e "$DIR" && ! -L "$DIR" ]] || return 1
 }
 
-# x86_64 port: keep a Steam-launched game's Android data (installed app and
-# its internal storage) between launches, instead of reinstalling into a fresh
-# /data every time. LEPTON_KEEP_APP_DATA=false restores the upstream behaviour.
 function should_keep_app_data()
 {
-    is_steamlaunch && is_app && [[ -n "${STEAM_COMPAT_DATA_PATH:-}" ]] &&
-        [[ "${LEPTON_KEEP_APP_DATA:-true}" != false ]]
+    # Legacy opt-out must never silently erase an existing profile.
+    return 0
 }
 
-# Overlay work directories are scratch space; drop them but keep the data.
 function remove_baked_workdirs()
 {
-    local DIR
-    for DIR in "$(data_workdir "$@")" "$(app_workdir "$@")"; do
-        if [[ -d "${DIR}" ]]; then
-            chmod -R 700 "${DIR}"
-            rm -rf "${DIR}"
+    # A stopped container can still own mounted overlays. Retain workdirs until
+    # its removal has succeeded; do not chmod any persistent data.
+    local DIR BASE
+    BASE="$(get_baked_app_data_dir "$@")"
+    [[ ! -L "$BASE" ]] || return 0
+    if podman container exists "lepton-${LEPTON_CONTEXT}"; then
+        println "Retaining overlay workdirs: container still exists"
+        return 0
+    else
+        [[ $? == 1 ]] || { println "WARNING: cannot verify overlay inactivity; workdirs retained" >&2; return 0; }
+    fi
+    for DIR in "$BASE/data_workdir" "$BASE/app_workdir"; do
+        [[ -d "$DIR" && ! -L "$DIR" && "$(realpath -m -- "$DIR")" == "$(realpath -m -- "$BASE")/"* ]] || continue
+        if ! profile_has_no_mounts "$BASE"; then
+            println "WARNING: overlay still mounted; workdirs retained" >&2
+            return 0
         fi
+        podman unshare rm -rf --one-file-system -- "$DIR" || println "WARNING: could not remove scratch directory $DIR" >&2
     done
 }
 
-# Identifies the Android image the kept data was created with: system and
-# framework build plus the baked system data the /data overlay sits on.
+# Keep the legacy digest format so identical released images remain compatible.
 function lepton_runtime_fingerprint()
 {
-    local ROOTFS="${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}"
-    cat "${ROOTFS}/system/build.prop" "${ROOTFS}/vendor/build.prop" \
-        "${ROOTFS}/system/framework/services.jar" \
-        "${BAKED_SYSTEM_DATA_DIR}/system/packages.xml" 2>/dev/null | sha256sum | cut -d' ' -f1
+    local ROOTFS="${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}" FILE
+    for FILE in "$ROOTFS/system/build.prop" "$ROOTFS/vendor/build.prop" \
+        "$ROOTFS/system/framework/services.jar" "$BAKED_SYSTEM_DATA_DIR/system/packages.xml"; do
+        [[ -r "$FILE" ]] || { println "ERROR: fingerprint input unreadable: $FILE" >&2; return 1; }
+    done
+    cat "$ROOTFS/system/build.prop" "$ROOTFS/vendor/build.prop" \
+        "$ROOTFS/system/framework/services.jar" "$BAKED_SYSTEM_DATA_DIR/system/packages.xml" | sha256sum | cut -d' ' -f1
 }
 
-# Before mounting: clear kept data on request or if the Android image changed
-# (another bundle/tool version), then record the current image.
+function existing_app_profile()
+{
+    local DIR="$(get_baked_app_data_dir)" ENTRY
+    [[ ! -L "$DIR" ]] || return 0
+    [[ -d "$DIR" ]] || return 1
+    [[ -r "$DIR" && -x "$DIR" ]] || return 0
+    # Even incomplete/unknown state is valuable. Empty scratch directories are
+    # harmless, but their contents are not grounds to assume a fresh profile.
+    for ENTRY in "$DIR"/* "$DIR"/.[!.]* "$DIR"/..?*; do
+        [[ -e "$ENTRY" || -L "$ENTRY" ]] || continue
+        [[ "$ENTRY" == "$DIR/lepton-runtime-fingerprint" ]] || return 0
+    done
+    return 1
+}
+
 function check_kept_app_data()
 {
-    should_keep_app_data || return 0
+    is_sysbake && return 0
     local DIR FINGERPRINT_FILE CURRENT STORED
     DIR="$(get_baked_app_data_dir)"
-    FINGERPRINT_FILE="${DIR}/lepton-runtime-fingerprint"
-    CURRENT="$(lepton_runtime_fingerprint)"
-    if [[ "${LEPTON_RESET_APP_DATA:-false}" == true ]]; then
-        clear_baked_app_data "LEPTON_RESET_APP_DATA=true (game data reset requested)"
-    elif [[ -d "$(data_mount_path)" ]]; then
-        STORED="$(cat "${FINGERPRINT_FILE}" 2>/dev/null || true)"
-        if [[ "${STORED}" != "${CURRENT}" ]]; then
-            clear_baked_app_data "Android runtime changed since this game's data was kept; reinstalling fresh"
-        fi
+    FINGERPRINT_FILE="$DIR/lepton-runtime-fingerprint"
+    if [[ -L "$DIR" || -L "$DIR/data_overlay" || -L "$DIR/app_overlay" ]]; then
+        println "ERROR: unexpected profile symlink; profile preserved but not mounted: $DIR" >&2
+        return 1
     fi
-    mkdir -p "${DIR}"
-    print "${CURRENT}" > "${FINGERPRINT_FILE}"
+    println "Profile: Steam AppID=${SteamAppId:-unknown}; package=$(get_app_id); tool=${LEPTON_ENTRYPOINT:-$LEPTON_DIR}; data=$DIR"
+    [[ "${LEPTON_KEEP_APP_DATA:-true}" != false ]] || println "WARNING: LEPTON_KEEP_APP_DATA=false ignored; use an explicit per-game reset"
+    if [[ "${LEPTON_RESET_APP_DATA:-false}" == true ]]; then
+        clear_baked_app_data "LEPTON_RESET_APP_DATA=true" || return 1
+    fi
+    CURRENT="$(lepton_runtime_fingerprint)" || return 1
+    if existing_app_profile; then
+        println "Existing profile detected: yes"
+        STORED="$(cat "$FINGERPRINT_FILE" 2>/dev/null || true)"
+        if [[ -z "$STORED" || "$STORED" != "$CURRENT" ]]; then
+            println "ERROR: previous fingerprint=${STORED:-unknown}; runtime fingerprint mismatch/unknown; profile preserved but not mounted: $DIR. Select the original Android runtime and sysbake; back up before diagnosing compatibility." >&2
+            return 1
+        fi
+        println "Runtime fingerprint match; previous fingerprint known"
+        if is_app && ! is_app_baked; then
+            println "ERROR: installation validation failed; profile preserved but not mounted. Restore the original APK or diagnose the installed code/metadata after backup. Automatic repair is not yet validated for this overlay." >&2
+            return 1
+        fi
+        println "Existing profile validated for reuse"
+    else
+        println "Existing profile detected: no; creating new profile; runtime fingerprint=$CURRENT"
+        mkdir -p "$DIR"
+        print "$CURRENT" > "$FINGERPRINT_FILE"
+    fi
 }
 
 function remove_prefix()
 {
     if [[ -n "${LEPTON_PREFIX:-}" ]]; then
-        if should_keep_app_data; then
-            remove_baked_workdirs
+        remove_baked_workdirs
+        # Only delete launcher-created temporary directories, never an arbitrary
+        # inherited path or a symlink (including a parent symlink).
+        if [[ ! -L "$LEPTON_PREFIX" && "$(realpath -m -- "$LEPTON_PREFIX")" == "$LEPTON_PREFIX" && "$LEPTON_PREFIX" =~ ^/tmp/lepton-context\.[A-Za-z0-9]+$ ]]; then
+            rm -rf --one-file-system -- "$LEPTON_PREFIX" || println "WARNING: temporary prefix cleanup failed" >&2
         else
-            prepare_baked_data_for_removal
+            println "WARNING: retaining unrecognised prefix: $LEPTON_PREFIX" >&2
         fi
-
-        # clear the whole prefix
-        rm -rf "${LEPTON_PREFIX}"
     fi
 }
 
@@ -202,7 +248,7 @@ function setup_container()
     if google_signin_mode && ! rootfs_has_google_services; then
         die "Google sign-in needs a Lepton tool with Google services (a GApps bundle)."
     fi
-    check_kept_app_data
+    check_kept_app_data || die "Profile safety check failed; existing data preserved"
     cleanup_container
 
     # Mount in vulkan layers, if requested by certain environment variables
@@ -685,9 +731,8 @@ function install_app()
             export LEPTON_DUMP_LOGCAT=1
             kill_container "${LEPTON_CONTEXT}"
 
-            # Also clear the baked app data, since we need to appbake
-            # again if we want to try again.
-            clear_baked_app_data "app installation failure"
+            # Installation failure never authorises deleting the profile.
+            println "Installation failed; existing profile preserved; no data reset performed"
             ret=1
         fi
         # Can't leave processes around, otherwise we'd break closing the app.
@@ -754,12 +799,11 @@ function container_running()
 
 # x86_64 port: CHANGE TO VALVE'S STOP SEQUENCE (check when merging Valve's
 # kill_container). Valve runs `reboot -p` and then `podman stop -t 0` straight
-# away. `reboot -p` returns at once and init only sends SIGTERM to apps, so a
-# game killed by Steam's Stop never gets onPause/onStop: settings and sign-ins
-# it writes there (SharedPreferences apply(), Roblox's login without Play
-# services, 2048's KorgeNativeStorage.xml) are lost. Before stopping we send
-# HOME so the game goes to the background and saves, then let Android finish
-# its own shutdown, and only then fall back to Valve's instant stop.
+# away. `reboot -p` returns at once, leaving little opportunity for games
+# that save on backgrounding to finish. Send HOME first, allow Android to
+# shut down, then use Valve's instant-stop fallback. Each game controls its
+# save triggers: 2048 needs an in-game save (Exit or going back through moves)
+# to commit new progress; HOME does not guarantee that it writes a save.
 #   LEPTON_STOP_SAVE_WAIT=<s>      wait after HOME (default 3; 0 skips HOME)
 #   LEPTON_STOP_SHUTDOWN_WAIT=<s>  wait for Android to power off (default 5)
 # Both 0 gives Valve's behaviour. sysbake keeps Valve's behaviour unchanged.
@@ -771,7 +815,10 @@ function graceful_stop_container()
     [[ "${SAVE_WAIT}" =~ ^[0-9]+$ ]] || SAVE_WAIT=3
     [[ "${SHUTDOWN_WAIT}" =~ ^[0-9]+$ ]] || SHUTDOWN_WAIT=5
 
-    if [[ "${CONTEXT}" == sysbake ]] || ! container_running "${CONTEXT}"; then
+    if [[ "${CONTEXT}" == sysbake ]]; then
+        return 0
+    elif ! container_running "${CONTEXT}"; then
+        println "Stopping ${CONTEXT}: container already stopped"
         return 0
     fi
 
@@ -829,21 +876,29 @@ function kill_all()
 
 function dump_logcat()
 {
-    # If the context isn't live, we can't dump logcat.
-    if is_context_live; then
-        local OUTPUT_DIR="${1}"
-        mkdir -p "${OUTPUT_DIR}"
-
-        # Dump logcat buffers in parallel
-        LOGCAT_PIDS=()
-        for BUFFER_NAME in main system kernel crash radio; do
-            (podman_attach /bin/logcat -b ${BUFFER_NAME} -d | tee "${OUTPUT_DIR}/logcat-${BUFFER_NAME}.log" >/dev/null) &
-            LOGCAT_PIDS+=( $! )
-        done
-        for PID in "${LOGCAT_PIDS[@]}"; do
-            wait "${PID}" 2>/dev/null >/dev/null
-        done
+    if ! container_running "${LEPTON_CONTEXT}"; then
+        println "Logcat unavailable: ${LEPTON_CONTEXT} is no longer running"
+        return 0
     fi
+    local OUTPUT_DIR="$1" BUFFER_NAME PID
+    local -a LOGCAT_PIDS=()
+    mkdir -p "$OUTPUT_DIR" || return 1
+    # No TTY: Steam shutdown diagnostics run without an interactive terminal.
+    # All five captures run concurrently, bounded to 2s plus a 1s kill grace.
+    for BUFFER_NAME in main system kernel crash radio; do
+        (
+            if ! timeout --kill-after=1 2 podman exec -i "lepton-${LEPTON_CONTEXT}" \
+                /system/bin/logcat -b "$BUFFER_NAME" -d \
+                > "$OUTPUT_DIR/logcat-${BUFFER_NAME}.log" \
+                2> "$OUTPUT_DIR/logcat-${BUFFER_NAME}.stderr"; then
+                println "WARNING: logcat $BUFFER_NAME capture incomplete (timeout or container stopped); partial log retained"
+            fi
+        ) &
+        LOGCAT_PIDS+=( "$!" )
+    done
+    for PID in "${LOGCAT_PIDS[@]}"; do
+        wait "$PID" || true
+    done
 }
 
 function list_android_games()
@@ -941,60 +996,32 @@ function cleanup_container()
 {
     local CONTEXT="${1:-${LEPTON_CONTEXT}}"
 
-    # Need to do this before cleaning the container, otherwise the variable
-    # won't be available anymore.
-    OTHER_STEAM_COMPAT_DATA_PATH="$(podman inspect -f '{{ index .Config.Labels "STEAM_COMPAT_DATA_PATH" }}' "lepton-${CONTEXT}" 2>/dev/null || true)"
-
-    # Kill the container
+    local EXISTS_STATUS=0 REMOVE_OUTPUT
+    podman container exists "lepton-${CONTEXT}" || EXISTS_STATUS=$?
+    case "$EXISTS_STATUS" in
+        0) ;;
+        1) println "Container already absent: lepton-${CONTEXT}"; return 0 ;;
+        *) println "WARNING: cannot inspect lepton-${CONTEXT}; container and profile retained" >&2; return 0 ;;
+    esac
     kill_container "${CONTEXT}"
 
-    if [[ -n "${OTHER_STEAM_COMPAT_DATA_PATH}" && "${LEPTON_NO_CLEANUP:-false}" == false ]]; then
-        rm -f "${OTHER_STEAM_COMPAT_DATA_PATH}"/baked/data_overlay/system/users/0/settings_global.xml || true
-        rm -f "${OTHER_STEAM_COMPAT_DATA_PATH}"/baked/data_overlay/system/users/0/settings_system.xml || true
-        rm -f "${OTHER_STEAM_COMPAT_DATA_PATH}"/baked/data_overlay/system/users/0/settings_secure.xml || true
+    # Removing the stopped container releases its overlay mounts. Android's
+    # Settings provider state belongs to the profile and must remain intact.
+    if REMOVE_OUTPUT="$(podman rm "lepton-${CONTEXT}" 2>&1)"; then
+        println "Stopped container removed: lepton-${CONTEXT}; profile retained"
+    else
+        println "WARNING: stopped container retained: lepton-${CONTEXT}: ${REMOVE_OUTPUT}" >&2
     fi
 }
 
 function cleanup_all()
 {
-    echo "Cleaning up all contexts and stored state..."
-
-    # In case there are legacy workdirs, we need to also chmod them.
-    chmod -R 700 "${LEPTON_DATA_DIR}" || true
-
-    # Stop/cleanup all contexts
+    println "Cleaning stopped containers; all Android profiles are retained"
+    local CONTEXT
     for CONTEXT in $(list_contexts); do
-        cleanup_container "${CONTEXT}"
-
-        STEAM_COMPAT_DATA_PATH="$(podman inspect -f '{{ index .Config.Labels "STEAM_COMPAT_DATA_PATH" }}' "lepton-${CONTEXT}" 2>/dev/null || true)"
-        if [[ -n "${STEAM_COMPAT_DATA_PATH}" ]] && [[ -d "${STEAM_COMPAT_DATA_PATH}" ]]; then
-            clear_baked_app_data "cleanup all" "${CONTEXT}" "${STEAM_COMPAT_DATA_PATH}"
-        fi
-
-        podman rm -fi "lepton-${CONTEXT}" || true
+        cleanup_container "$CONTEXT"
     done
-
-    for CONTEXT in "${LEPTON_DATA_DIR}"/*; do
-        [[ -e "$CONTEXT" ]] || break
-
-        CONTEXT="$(lepton_basename "${CONTEXT}")"
-        cleanup_container "${CONTEXT}"
-
-        STEAM_COMPAT_DATA_PATH="${LEPTON_DATA_DIR}/${CONTEXT}"
-        if [[ -n "${STEAM_COMPAT_DATA_PATH}" ]] && [[ -d "${STEAM_COMPAT_DATA_PATH}" ]]; then
-            clear_baked_app_data "cleanup all for non steamlaunch container" "${CONTEXT}" "${STEAM_COMPAT_DATA_PATH}"
-        fi
-
-        # This may already have been removed
-        podman rm -fi "lepton-${CONTEXT}" 2>/dev/null >/dev/null || true
-    done
-
-    # Now that the contexts dir does not contain any contexts anymore
-    # and thus no files that can't be rm'd due to chmod 0000, we can finally
-    # remove all temporary contexts.
-    rm -rf "${LEPTON_DATA_DIR}"/*
-
-    if [[ " $@ " != " --keep-logcats " ]]; then
+    if [[ " $* " != *" --keep-logcats "* ]]; then
         logcat_debug_clear_all
     fi
 }
