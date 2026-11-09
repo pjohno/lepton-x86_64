@@ -56,6 +56,11 @@ echo 'board=2048;level=7' > "$save"
 echo shared > "$STEAM_COMPAT_DATA_PATH/external/save"
 printf 'ABX\0\x2fR%s/\x00' "$code" > "$baked/data_overlay/system/packages.xml"
 cp "$work/game.apk" "$baked/app_overlay/base.apk"
+# Single-APK installs overlay the game's whole folder, rename its APK to base.apk
+# and delete the other APKs, leaving overlay whiteouts (0:0 character devices)
+# in app_overlay, as on the Deck. They are not installed code.
+mknod "$baked/app_overlay/game.apk" c 0 0
+mknod "$baked/app_overlay/OtherGame-arm64.apk" c 0 0
 extract_app_hash > "$baked/app_hash"
 touch "$baked/app_install_complete"
 assert_saved() { [[ "$(cat "$save")" == 'board=2048;level=7' && "$(cat "$STEAM_COMPAT_DATA_PATH/external/save")" == shared ]]; }

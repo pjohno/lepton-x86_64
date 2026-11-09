@@ -113,6 +113,13 @@ function app_apk_set_matches()
     for SRC in "$INSTALLED"/*.apk; do
         [[ -e "$SRC" || -L "$SRC" ]] || continue
         NAME="${SRC##*/}"
+        # Single-APK installs overlay the game's folder, then rename/delete its
+        # APKs; deletions leave overlay whiteouts (0:0 character devices). They
+        # hide files from Android and are not code. Selected names were already
+        # required to be regular files above, so a whiteout never replaces code.
+        if [[ -c "$SRC" && ! -L "$SRC" && "$(stat -c '%t:%T' -- "$SRC" 2>/dev/null)" == 0:0 ]]; then
+            continue
+        fi
         [[ -n "${SOURCES[$NAME]+present}" ]] || {
             println "APK split set changed: installed APK absent from selected source: $NAME" >&2; return 1;
         }

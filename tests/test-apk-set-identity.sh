@@ -54,6 +54,20 @@ ln -s "$LEPTON_APKM_DIR/split_config.x86_64.apk" "$work/baked/app_overlay/split_
 rm "$work/baked/app_overlay/split_config.x86_64.apk"
 mv "$work/split" "$work/baked/app_overlay/split_config.x86_64.apk"
 is_app_baked
+# Overlay whiteouts record APKs removed from the merged view; Android cannot
+# load them. Ignore them as extras, but never accept one in place of real code.
+mknod "$work/baked/app_overlay/OtherGame-arm64.apk" c 0 0
+mknod "$work/baked/app_overlay/original-name.apk" c 0 0
+is_app_baked
+mv "$work/baked/app_overlay/split_config.x86_64.apk" "$work/split"
+mknod "$work/baked/app_overlay/split_config.x86_64.apk" c 0 0; refuses
+rm "$work/baked/app_overlay/split_config.x86_64.apk"
+mv "$work/split" "$work/baked/app_overlay/split_config.x86_64.apk"
+mv "$work/baked/app_overlay/base.apk" "$work/base"
+mknod "$work/baked/app_overlay/base.apk" c 0 0; refuses
+rm "$work/baked/app_overlay/base.apk"
+mv "$work/base" "$work/baked/app_overlay/base.apk"
+is_app_baked
 rm "$work/baked/app_install_complete"; refuses
 [[ ! -e "$work/baked/app_hash" ]]
 # An interrupted first unpack leaves <key>.tmp; only that scratch copy is
@@ -78,4 +92,4 @@ prepare_apkm "$work/game.apkm"
 [[ "$LEPTON_APKM_DIR" == "$STEAM_COMPAT_DATA_PATH/lepton-apkm/$key" && ! -e "$LEPTON_APKM_DIR.tmp" ]]
 [[ "$(cat "$LEPTON_APKM_DIR/base.apk")" == base-binary && -f "$LEPTON_APKM_DIR/split_config.x86_64.apk" && ! -e "$LEPTON_APKM_DIR/split_config.arm64_v8a.apk" ]]
 [[ "$(cat "$STEAM_COMPAT_DATA_PATH/lepton-apkm/0123456789abcdef/base.apk")" == older-installed ]]
-echo 'PASS: legacy base/archive/stale metadata verified against complete APK set; base/split changes, missing/extra/symlink code refused; interrupted APKM unpack recovered; data, metadata and other caches preserved'
+echo 'PASS: legacy base/archive/stale metadata verified against complete APK set; base/split changes, missing/extra/symlink code refused; overlay whiteouts ignored but never accepted as code; interrupted APKM unpack recovered; data, metadata and other caches preserved'
