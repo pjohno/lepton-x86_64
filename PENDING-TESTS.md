@@ -6,14 +6,9 @@ Delete this file when the branch is merged into `main`.
 
 Automated tests cover the logic. These need a real Steam Deck and GitHub:
 
-1. **Dolphin and downloaded installers.**
-   - On the Deck, download the three release files with the browser.
-   - Confirm that double-clicking the `.install.sh` opens it as text, since the
-     downloaded file isn't executable.
-   - Confirm that **Open Terminal Here** + `bash …install.sh` works.
-   - Confirm that **Properties > Permissions > Is executable**, then
-     double-click and **Execute**, opens Konsole and installs. Note the exact
-     wording Dolphin shows.
+1. ~~**Dolphin and downloaded installers.**~~ Done 2026-11-09: double-click
+   after **Is executable** asks "Launch this program as an executable";
+   **Launch** / **Yes** runs it.
 2. **A real draft and publish** with `publish-release.sh` and a real `gh`, on a
    test version such as `v0.0.1-alpha.test`.
    - The repository must be **public** for users and the release manager to see
