@@ -178,10 +178,8 @@ function lepton_tool_for_fingerprint()
 }
 
 # A refused profile otherwise only shows in the log: the game seems to do
-# nothing. Tell the player why and what they can do: the Gamescope bridge
-# passes LEPTON_MESSAGE_FILE and shows its contents as a popup once Lepton
-# exits (on Steam's display in Gaming Mode, as a window on the desktop).
-# It only explains; nothing is deleted.
+# nothing. Tell the player why and what they can do (lepton_tell_player: a
+# popup from the Gamescope bridge). It only explains; nothing is deleted.
 function lepton_profile_refused()
 {
     local REASON="$1" STORED="${2:-}" GAME TOOL MESSAGE
@@ -223,11 +221,9 @@ To keep your data, put back the original APK.
 $RESET" ;;
         *)
             MESSAGE="$GAME can't start: its Lepton data folder is not in the expected form.
-Nothing has been deleted. Details are in ~/.steam/steam/logs/." ;;
+Nothing has been deleted." ;;
     esac
-    if [[ -n "${LEPTON_MESSAGE_FILE:-}" && -f "$LEPTON_MESSAGE_FILE" && ! -L "$LEPTON_MESSAGE_FILE" ]]; then
-        printf '%s\n' "$MESSAGE" > "$LEPTON_MESSAGE_FILE" || true
-    fi
+    lepton_tell_player "$MESSAGE"
 }
 
 function check_kept_app_data()

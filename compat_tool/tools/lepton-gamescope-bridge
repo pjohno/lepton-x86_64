@@ -75,7 +75,8 @@ Lepton will not install or load kernel modules."
 message_file=""
 show_launch_message() {
     [[ -n "$message_file" && -s "$message_file" ]] || return 0
-    lepton_dialog "Lepton: game could not start" "$(cat "$message_file")" 180s
+    lepton_dialog "Lepton: game could not start" "$(cat "$message_file")
+Details: ~/.steam/steam/logs/lepton-steamlaunch-$app_id.log" 180s
 }
 cleanup_message_file() { [[ -z "$message_file" ]] || rm -f -- "$message_file"; }
 

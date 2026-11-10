@@ -107,6 +107,7 @@ run "${kde[@]}" KSCREEN_JSON="$deck"
 # Desktop: a regular Wayland dialog.
 run "${kde[@]}" KSCREEN_JSON="$deck" FAKE_MESSAGE='com.example.game cannot start. Nothing has been deleted.'
 "$real_grep" -qx 'kdialog QT=wayland SCALE= DISPLAY= --title Lepton: game could not start --error com.example.game cannot start. Nothing has been deleted.' "$work/log" || fail 'desktop popup missing'
+"$real_grep" -qx 'Details: ~/.steam/steam/logs/lepton-steamlaunch-123.log' "$work/log" || fail 'popup lacks the log location'
 [[ -z "$(find "$work" -maxdepth 1 -name 'lepton-message.*')" ]] || fail 'message file left behind'
 # Gaming Mode: scaled X11 dialog on Steam's display, tagged so Steam shows it.
 run "${gaming[@]}" FAKE_MESSAGE='com.example.game cannot start.'

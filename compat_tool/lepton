@@ -142,8 +142,9 @@ case "${COMMAND}" in
 
         if is_steamlaunch || [[ "${LEPTON_CONTEXT}" == *.apk ]]; then
             if [[ -z "${APP_PACKAGE_ID}" ]]; then
-                println "No package id found. Maybe it's not an apk?"
-                exit 1
+                die "This file doesn't look like an Android app (no package name found):" \
+                    "${APP_PATH:-${3:-unknown}}" \
+                    "Check that the game's Steam shortcut points to an .apk or .apkm file."
             fi
         fi
 
@@ -158,7 +159,7 @@ case "${COMMAND}" in
         if is_app; then
             if [[ -z "$(get_app_id)" ]] || [[ -z "$(get_app_activity)" ]]; then
                 println "Early-exit due to malformed .apk metadata" >&2
-                exit 1
+                die "Android can't start ${APP_PACKAGE_ID:-this game}: its APK names no app to launch (no launcher activity)."
             fi
         fi
 
@@ -299,6 +300,15 @@ case "${COMMAND}" in
                 # If the app is not baked yet, the container will wait for a
                 # property.
                 continue_boot_after_bake
+            else
+                # x86_64 port: Android would wait for the app forever (a black
+                # screen until Stop). End the launch and say why; the profile
+                # is kept.
+                println "ERROR: app installation failed; launch stopped, profile preserved" >&2
+                lepton_tell_player "Android couldn't install $(get_app_id), so the game can't start." \
+                    "The APK may be damaged, or not made for this device. Nothing has been deleted."
+                teardown
+                exit 1
             fi
         fi
 
