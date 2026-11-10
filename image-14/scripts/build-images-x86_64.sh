@@ -108,6 +108,9 @@ fi
 [[ -f "$TARGET/.lepton-clean14-owner" ]] ||
   fail "Checkout is not owned by the preparation workflow"
 
+[[ ! -e "$STATE/reset.started" ]] ||
+  fail "Interrupted source reset detected; run prepare-x86_64.sh --reset"
+
 for marker in sync.done vendor.done patches.done; do
   [[ -f "$STATE/$marker" ]] ||
     fail "Missing preparation checkpoint: $marker"
