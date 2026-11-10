@@ -39,13 +39,14 @@ kde=(XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE WAYLAND_DISPLAY=wayland-0 
 gaming=(DISPLAY=:0 GAMESCOPE_WAYLAND_DISPLAY=gamescope-0)
 run() { rm -f "$work/log" "$work/gamescope.pid"; "${base[@]}" "$@" "$bridge" direct-game > "$work/out" 2> "$work/err" || fail "bridge failed: $* ($(cat "$work/err"))"; }
 expect() { local got; got="$("$real_grep" '^gamescope ' "$work/log")"; [[ "$got" == "gamescope $1" ]] || fail "expected 'gamescope $1', got '$got'"; }
-desktop_cmd() { echo "--backend wayland --expose-wayland ${2:+-f }-W ${1%x*} -H ${1#*x} -w ${1%x*} -h ${1#*x} --default-touch-mode 4"; }
-gaming_cmd() { echo "--backend sdl --expose-wayland -f -W ${1%x*} -H ${1#*x} -w ${1%x*} -h ${1#*x} --default-touch-mode 4"; }
+desktop_cmd() { echo "--backend wayland --expose-wayland ${2:+-f }-W ${1%x*} -H ${1#*x} -w ${1%x*} -h ${1#*x} --default-touch-mode ${3:-1}"; }
+gaming_cmd() { echo "--backend sdl --expose-wayland -f -W ${1%x*} -H ${1#*x} -w ${1%x*} -h ${1#*x} --default-touch-mode ${2:-4}"; }
 no_tagging() { ! "$real_grep" -q STEAM_GAME "$work/log" || fail 'desktop window tagged as a Steam X11 window'; }
 
 # Desktop Mode default on a Steam Deck (panel 800x1280, rotated): 1024x640 window.
 run "${kde[@]}" KSCREEN_JSON="$deck"
 expect "$(desktop_cmd 1024x640)"; no_tagging
+"$real_grep" -qx 'Lepton Desktop Mode touch mode: 1 (--default-touch-mode 1)' "$work/out"
 "$real_grep" -q 'mode: desktop; resolution: 1024x640; windowed' "$work/out"
 "$real_grep" -qx 'env SDL_VIDEODRIVER= ENABLE_GAMESCOPE_WSI=0' "$work/log"
 # Size unknown (no kscreen-doctor answer): same safe window.
@@ -57,6 +58,28 @@ run "${kde[@]}" KSCREEN_JSON="$(monitor 2560 1440 1.5)"; expect "$(desktop_cmd 1
 run "${kde[@]}" KSCREEN_JSON="$(monitor 2560 1600 1)"; expect "$(desktop_cmd 2048x1280)"
 # The old opt-in is now the default and still accepted.
 run "${kde[@]}" KSCREEN_JSON="$deck" LEPTON_DESKTOP_WINDOWED=1; expect "$(desktop_cmd 1024x640)"
+
+# Every supported Gamescope touch mode is accepted explicitly on the desktop.
+# In particular, touchscreen testing can restore passthrough (4).
+for touch_mode in 0 1 4; do
+    run "${kde[@]}" LEPTON_DESKTOP_TOUCH_MODE="$touch_mode"
+    expect "$(desktop_cmd 1024x640 '' "$touch_mode")"; no_tagging
+    "$real_grep" -qx "Lepton Desktop Mode touch mode: $touch_mode (--default-touch-mode $touch_mode)" "$work/out"
+done
+run "${kde[@]}" KSCREEN_JSON="$deck" LEPTON_DESKTOP_FULLSCREEN=1 LEPTON_DESKTOP_TOUCH_MODE=4
+expect "$(desktop_cmd 1280x800 -f 4)"
+# Empty, out-of-range and non-integer values fail before Gamescope starts.
+for touch_mode in '' -1 2 3 5 6 7 99 hover 04 1.0 '0 4' '--help' $'0\n4'; do
+    rm -f "$work/log" "$work/gamescope.pid"
+    if "${base[@]}" "${kde[@]}" LEPTON_DESKTOP_TOUCH_MODE="$touch_mode" "$bridge" direct-game > "$work/out" 2> "$work/err"; then
+        fail "accepted invalid LEPTON_DESKTOP_TOUCH_MODE: $touch_mode"
+    else
+        result=$?
+    fi
+    [[ "$result" == 2 ]] || fail "invalid touch mode returned $result instead of 2"
+    "$real_grep" -q 'Invalid LEPTON_DESKTOP_TOUCH_MODE:.*expected 0 (hover), 1 (left-click, default), or 4' "$work/err" || fail 'touch mode diagnostic missing'
+    [[ ! -e "$work/log" && ! -e "$work/gamescope.pid" ]] || fail 'invalid touch mode launched a command'
+done
 
 # Explicit fullscreen: the main screen's real size, rotation applied.
 run "${kde[@]}" KSCREEN_JSON="$deck" LEPTON_DESKTOP_FULLSCREEN=1
@@ -78,14 +101,48 @@ run "${kde[@]}" KSCREEN_JSON="$deck" LEPTON_RESOLUTION=huge; expect "$(desktop_c
 for extra in "" LEPTON_DESKTOP_FULLSCREEN=1 LEPTON_DESKTOP_WINDOWED=1; do
     run "${gaming[@]}" ${extra:+"$extra"}
     expect "$(gaming_cmd 1280x800)"
+    "$real_grep" -qx 'Lepton Gaming Mode touch mode: 4' "$work/out"
     "$real_grep" -qx 'env SDL_VIDEODRIVER=x11 ENABLE_GAMESCOPE_WSI=0' "$work/log"
     "$real_grep" -qx 'xprop -id 0x400001 -f STEAM_GAME 32c -set STEAM_GAME 123' "$work/log" || fail 'Gaming Mode window not tagged'
     "$real_grep" -q 'mode: gaming; resolution: 1280x800; fullscreen' "$work/out"
 done
 run "${gaming[@]}" LEPTON_RESOLUTION=1920x1080; expect "$(gaming_cmd 1920x1080)"
 run "${gaming[@]}" LEPTON_RESOLUTION=huge; expect "$(gaming_cmd 1280x800)"
+# Experimental Gaming Mode overrides change only the touch argument.
+for touch_mode in 0 1 4; do
+    run "${gaming[@]}" LEPTON_GAMING_TOUCH_MODE="$touch_mode" LEPTON_DESKTOP_TOUCH_MODE=invalid LEPTON_RESOLUTION=1920x1080
+    expect "$(gaming_cmd 1920x1080 "$touch_mode")"
+    "$real_grep" -qx "Lepton Gaming Mode touch mode: $touch_mode" "$work/out"
+    "$real_grep" -qx 'env SDL_VIDEODRIVER=x11 ENABLE_GAMESCOPE_WSI=0' "$work/log"
+    "$real_grep" -qx 'xprop -id 0x400001 -f STEAM_GAME 32c -set STEAM_GAME 123' "$work/log"
+done
+for touch_mode in '' -1 2 3 5 6 7 99 hover 04 1.0 '0 4' '--help' $'0\n4'; do
+    rm -f "$work/log" "$work/gamescope.pid"
+    if "${base[@]}" "${gaming[@]}" LEPTON_GAMING_TOUCH_MODE="$touch_mode" "$bridge" direct-game > "$work/out" 2> "$work/err"; then
+        fail "accepted invalid LEPTON_GAMING_TOUCH_MODE: $touch_mode"
+    else
+        result=$?
+    fi
+    [[ "$result" == 2 ]] || fail "invalid Gaming Mode touch mode returned $result instead of 2"
+    "$real_grep" -q 'Invalid LEPTON_GAMING_TOUCH_MODE:.*expected 0 (hover), 1 (left-click), or 4' "$work/err" || fail 'Gaming Mode touch diagnostic missing'
+    [[ ! -e "$work/log" && ! -e "$work/gamescope.pid" ]] || fail 'invalid Gaming Mode touch mode launched a command'
+done
+# Gaming overrides, including invalid values, never affect nested Desktop Mode.
+for touch_mode in 0 1 4 '' invalid; do
+    run "${kde[@]}" LEPTON_GAMING_TOUCH_MODE="$touch_mode"
+    expect "$(desktop_cmd 1024x640)"; no_tagging
+    run "${kde[@]}" KSCREEN_JSON="$deck" LEPTON_GAMING_TOUCH_MODE="$touch_mode" LEPTON_DESKTOP_TOUCH_MODE=4 LEPTON_DESKTOP_FULLSCREEN=1
+    expect "$(desktop_cmd 1280x800 -f 4)"; no_tagging
+done
+# Desktop touch overrides (even invalid ones) never affect Gaming Mode.
+for touch_mode in 0 4 6 '' invalid; do
+    run "${gaming[@]}" LEPTON_DESKTOP_TOUCH_MODE="$touch_mode"
+    expect "$(gaming_cmd 1280x800)"
+    "$real_grep" -qx 'env SDL_VIDEODRIVER=x11 ENABLE_GAMESCOPE_WSI=0' "$work/log"
+    "$real_grep" -qx 'xprop -id 0x400001 -f STEAM_GAME 32c -set STEAM_GAME 123' "$work/log"
+done
 # Explicit mode overrides detection.
-run "${kde[@]}" "${gaming[@]}" LEPTON_DISPLAY_MODE=gaming; expect "$(gaming_cmd 1280x800)"
+run "${kde[@]}" "${gaming[@]}" LEPTON_DISPLAY_MODE=gaming LEPTON_DESKTOP_TOUCH_MODE=invalid; expect "$(gaming_cmd 1280x800)"
 
 # Uncertain detection never picks Gaming Mode's fullscreen on a Wayland desktop.
 run WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$work" DISPLAY=:0
@@ -96,9 +153,11 @@ run "${gaming[@]}" WAYLAND_DISPLAY=gamescope-0 XDG_RUNTIME_DIR="$work"; expect "
 run DISPLAY=:0; expect "$(gaming_cmd 1280x800)"; "$real_grep" -q 'no Wayland display' "$work/err"
 
 # Experimental direct desktop path stays opt-in and unchanged: no Gamescope.
-run "${kde[@]}" LEPTON_DESKTOP_DIRECT=1
-! "$real_grep" -q '^gamescope' "$work/log" || fail 'LEPTON_DESKTOP_DIRECT started Gamescope'
-"$real_grep" -qx 'direct GAMESCOPE_WAYLAND_DISPLAY=wayland-0' "$work/log"
+for extra in '' LEPTON_DESKTOP_TOUCH_MODE=4 LEPTON_DESKTOP_TOUCH_MODE=invalid LEPTON_GAMING_TOUCH_MODE=1 LEPTON_GAMING_TOUCH_MODE=invalid; do
+    run "${kde[@]}" LEPTON_DESKTOP_DIRECT=1 ${extra:+"$extra"}
+    ! "$real_grep" -q '^gamescope' "$work/log" || fail 'LEPTON_DESKTOP_DIRECT started Gamescope'
+    "$real_grep" -qx 'direct GAMESCOPE_WAYLAND_DISPLAY=wayland-0' "$work/log"
+done
 
 # Normal launches show no popup and leave no message file behind.
 run "${kde[@]}" KSCREEN_JSON="$deck"
@@ -126,4 +185,4 @@ done
 
 # The bridge never asks Gamescope for a borderless window.
 ! "$real_grep" -qE -- '(^|[[:space:]])(-b|--borderless)([[:space:]]|$)' "$bridge" || fail 'bridge passes --borderless'
-echo 'PASS: gamescope bridge: desktop window by default (1024x640 on a Deck), fullscreen on request, custom resolution, Gaming Mode unchanged, uncertain detection stays windowed, refused launches and missing Binder shown as popups'
+echo 'PASS: gamescope bridge: desktop default 1, Gaming Mode default 4 and experimental overrides 0/1/4, scoped validation and logging, window/fullscreen sizing and Steam tagging, direct Wayland unchanged, refused launches and missing Binder shown as popups'

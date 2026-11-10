@@ -95,14 +95,18 @@ Properties > Launch Options, followed by `%command%`:
 | `LEPTON_STOP_SAVE_WAIT=<s>`, `LEPTON_STOP_SHUTDOWN_WAIT=<s>` | Time given to the game to save at Stop (default 3 s) and to Android to shut down (default 5 s); `0` and `0` stop instantly |
 | `LEPTON_NDK_TRANSLATION_MODE=light-translate-or-interpret` | ARM64 games on an NDK bundle: slower, most compatible translation |
 | `LEPTON_DESKTOP_FULLSCREEN=1` | Desktop Mode: fill the screen instead of a movable window ([Desktop Mode](INSTALL-STEAM-DECK.md#desktop-mode-and-gaming-mode)) |
+| `LEPTON_DESKTOP_TOUCH_MODE=1` | Desktop Mode: `1` mouse and single-touch emulation (default, no native multitouch), `0` pointer-only compatibility, `4` native multitouch with a known mouse-motion issue ([modes and caveats](INSTALL-STEAM-DECK.md#desktop-mode-and-gaming-mode)) |
+| `LEPTON_GAMING_TOUCH_MODE=1` | Experimental Gaming Mode touch override: `0` hover, `1` touch as left-click, `4` passthrough (default); [hardware testing and caveats](INSTALL-STEAM-DECK.md#gaming-mode-touch-experiments) |
+| `LEPTON_DESKTOP_DIRECT=1` | Experimental: use direct Wayland instead of nested Gamescope on the desktop |
 | `LEPTON_RESOLUTION=WIDTHxHEIGHT` | Android's screen size; in Desktop Mode also the window's size |
 
 ## What works
 
 - Android 14 games launched from Steam in Gaming Mode and Desktop Mode on the
   Steam Deck, with AMD hardware graphics (ANGLE on Vulkan, Mesa RADV).
-- The Deck's touchscreen, its built-in controls, and Bluetooth controllers
-  connected before the game starts, each as a separate Android controller.
+- The Deck's touchscreen in Gaming Mode, its built-in controls, and Bluetooth
+  controllers connected before the game starts, each as a separate Android
+  controller.
 - Saves kept between launches.
 - Audio and video playback (for example YouTube up to 1080p).
 - Optional, in bundles you build yourself: Google Play services, ARM64
@@ -116,8 +120,11 @@ Compatibility varies from game to game.
 - **Release bundles are base bundles:** no Google Play services and no ARM64
   translation. Games that need either must be built with
   [GApps and NDK](GAPPS.md) yourself.
-- **Mouse and keyboard** don't reach games on desktop PCs yet, and a USB mouse
-  on the Deck may interfere with touch.
+- **Desktop input:** Fedora KDE Wayland testing confirmed mouse and keyboard
+  input with the desktop touch-mode fix; older bundles may still leave mouse
+  coordinates at `(0,0)`. Desktop Mode now defaults to mode 1 for mouse and
+  single-touch emulation; native multitouch requires mode 4, which has a known
+  mouse-motion issue. Fedora mode-1 testing confirmed mouse, keyboard, focus and game interaction.
 - **Controller hotplug** (`LEPTON_GAMEPAD_HOTPLUG=true`) gives Android read
   access to *all* the computer's input devices, not just controllers. Leave it
   off unless you need it.
