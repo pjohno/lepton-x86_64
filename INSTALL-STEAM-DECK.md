@@ -351,6 +351,30 @@ once. Optional per-game settings still go in the launch options, for example
 `LEPTON_GAMEPAD_HOTPLUG=true %command%`. `LEPTON_NO_BRIDGE=true %command%`
 starts without the nested Gamescope (for debugging).
 
+### Desktop Mode and Gaming Mode
+
+Both modes run the game inside a nested Gamescope.
+
+- **Gaming Mode:** the game fills the screen, as before.
+- **Desktop Mode:** the game opens in a normal window with Plasma's title bar,
+  so you can move, minimise and close it, and the desktop and panel stay
+  reachable. The Steam button doesn't work as an escape in Desktop Mode, so a
+  fullscreen game could leave the Deck looking stuck. The window is 80% of the
+  desktop at 16:10: 1024×640 on a Steam Deck.
+
+Launch options for Desktop Mode:
+
+| Option | Effect |
+| --- | --- |
+| `LEPTON_DESKTOP_FULLSCREEN=1` | Fill the main screen instead. Close the game with Alt+F4 or from Steam. |
+| `LEPTON_RESOLUTION=WIDTHxHEIGHT` | Android's screen size: the window's size, or the size scaled to fill the screen with `LEPTON_DESKTOP_FULLSCREEN=1`. In Gaming Mode it sets Android's size and the game still fills the screen. |
+| `LEPTON_DISPLAY_MODE=desktop` or `gaming` | Override detection (see below). |
+
+Lepton treats a session as Gaming Mode only when Steam's Gamescope session is
+detected. If it can't tell which mode it's in and a Wayland desktop is
+available, it opens a window and logs a warning. `LEPTON_DESKTOP_WINDOWED=1`
+is accepted but no longer needed.
+
 ARM64-only games (with an NDK bundle) are prepared for the translator's faster
 mode from their second launch, which removes most stutter; if one misbehaves,
 `LEPTON_NDK_TRANSLATION_MODE=light-translate-or-interpret %command%` forces the
@@ -419,5 +443,6 @@ instead of `--deck-ip`.
 | Installer: `No AMD GPU found` | Only AMD GPUs are supported. |
 | GPU check reports SwiftShader | `LEPTON_FORCE_SOFTWARE` is set, or `/dev/dri` is not accessible to your user. |
 | Game shows no touch input | Touchscreen Native Support (step 5). |
+| Desktop Mode: game too large, or fullscreen when it shouldn't be | Remove `LEPTON_DESKTOP_FULLSCREEN` / `LEPTON_RESOLUTION` from the launch options. Alt+F4 closes a fullscreen game. |
 | Lepton missing in Steam's compatibility list | Restart Steam after installing. |
 | Logs | `~/.steam/steam/logs/lepton-*.log`; GPU-check logs are listed at the end of its output. |
