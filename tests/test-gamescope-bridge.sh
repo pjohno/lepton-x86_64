@@ -18,14 +18,18 @@ fake gamescope 'args=(); for a in "$@"; do [[ "$a" == -- ]] && break; args+=("$a
 echo "$$" > "$WORK/gamescope.pid"
 echo "gamescope ${args[*]}" >> "$LOG"
 echo "env SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-} ENABLE_GAMESCOPE_WSI=${ENABLE_GAMESCOPE_WSI:-}" >> "$LOG"
+# Like Lepton refusing a profile: leave a message for the bridge to show.
+[[ -z "${FAKE_MESSAGE:-}" ]] || printf "%s\n" "$FAKE_MESSAGE" > "$LEPTON_MESSAGE_FILE"
 [[ "${SDL_VIDEODRIVER:-}" != x11 ]] || sleep 0.6'
 fake kscreen-doctor '[[ -n "${KSCREEN_JSON:-}" ]] || exit 1; printf "%s\n" "$KSCREEN_JSON"'
 fake xdpyinfo 'echo "  dimensions:    1280x800 pixels (338x211 millimeters)"'
-fake xwininfo 'echo "     0x400001 \"gamescope\": (\"gamescope\" \"gamescope\")  1280x800+0+0  +0+0"'
+fake xwininfo 'echo "     0x400001 \"gamescope\": (\"gamescope\" \"gamescope\")  1280x800+0+0  +0+0"
+echo "     0x500002 \"Lepton: game could not start\": (\"kdialog\")  600x300+0+0  +0+0"
+echo "     0x500003 \"Lepton Binder Unavailable\": (\"kdialog\")  600x300+0+0  +0+0"'
 fake xprop 'if [[ "$*" == *_NET_WM_PID* ]]; then echo "_NET_WM_PID(CARDINAL) = $(cat "$WORK/gamescope.pid" 2>/dev/null)"; else echo "xprop $*" >> "$LOG"; fi'
-fake kdialog 'echo "kdialog $*" >> "$LOG"'
+fake kdialog 'echo "kdialog QT=${QT_QPA_PLATFORM:-} SCALE=${QT_SCALE_FACTOR:-} DISPLAY=${DISPLAY:-} $*" >> "$LOG"; [[ "${QT_QPA_PLATFORM:-}" != xcb ]] || sleep 0.5'
 # Binder present: the bridge's preflight reads /proc/filesystems with grep.
-fake grep "[[ \"\${!#}\" == /proc/filesystems ]] && exit 0; exec '$real_grep' \"\$@\""
+fake grep "[[ \"\${!#}\" == /proc/filesystems ]] && exit \${FAKE_NO_BINDER:-0}; exec '$real_grep' \"\$@\""
 fake direct-game 'echo "direct GAMESCOPE_WAYLAND_DISPLAY=${GAMESCOPE_WAYLAND_DISPLAY:-}" >> "$LOG"'
 
 deck='{"outputs":[{"enabled":true,"priority":0,"rotation":8,"scale":1,"currentModeId":"1","modes":[{"id":"1","size":{"width":800,"height":1280}}]}]}'
@@ -96,6 +100,29 @@ run "${kde[@]}" LEPTON_DESKTOP_DIRECT=1
 ! "$real_grep" -q '^gamescope' "$work/log" || fail 'LEPTON_DESKTOP_DIRECT started Gamescope'
 "$real_grep" -qx 'direct GAMESCOPE_WAYLAND_DISPLAY=wayland-0' "$work/log"
 
+# Normal launches show no popup and leave no message file behind.
+run "${kde[@]}" KSCREEN_JSON="$deck"
+! "$real_grep" -q '^kdialog' "$work/log" || fail 'popup without a message'
+# A launch Lepton refused: its message as a popup once Gamescope exits.
+# Desktop: a regular Wayland dialog.
+run "${kde[@]}" KSCREEN_JSON="$deck" FAKE_MESSAGE='com.example.game cannot start. Nothing has been deleted.'
+"$real_grep" -qx 'kdialog QT=wayland SCALE= DISPLAY= --title Lepton: game could not start --error com.example.game cannot start. Nothing has been deleted.' "$work/log" || fail 'desktop popup missing'
+[[ -z "$(find "$work" -maxdepth 1 -name 'lepton-message.*')" ]] || fail 'message file left behind'
+# Gaming Mode: scaled X11 dialog on Steam's display, tagged so Steam shows it.
+run "${gaming[@]}" FAKE_MESSAGE='com.example.game cannot start.'
+"$real_grep" -qx 'kdialog QT=xcb SCALE=2 DISPLAY=:0 --title Lepton: game could not start --error com.example.game cannot start.' "$work/log" || fail 'Gaming Mode popup missing'
+"$real_grep" -qx 'xprop -id 0x500002 -f STEAM_GAME 32c -set STEAM_GAME 123' "$work/log" || fail 'Gaming Mode popup not tagged'
+"$real_grep" -qx 'xprop -id 0x400001 -f STEAM_GAME 32c -set STEAM_GAME 123' "$work/log"
+# Binder preflight uses the same popup, before any Gamescope starts.
+for mode in kde gaming; do
+    declare -n envs="$mode"; rm -f "$work/log"
+    if "${base[@]}" "${envs[@]}" FAKE_NO_BINDER=1 "$bridge" direct-game > "$work/out" 2> "$work/err"; then fail 'started without Binder'; fi
+    "$real_grep" -q -- '--title Lepton Binder Unavailable --error Android Binder kernel support is unavailable.' "$work/log" || fail "$mode Binder popup missing"
+    ! "$real_grep" -q '^gamescope' "$work/log" || fail 'Gamescope started without Binder'
+    unset -n envs
+done
+"$real_grep" -qx 'xprop -id 0x500003 -f STEAM_GAME 32c -set STEAM_GAME 123' "$work/log" || fail 'Binder popup not tagged'
+
 # The bridge never asks Gamescope for a borderless window.
 ! "$real_grep" -qE -- '(^|[[:space:]])(-b|--borderless)([[:space:]]|$)' "$bridge" || fail 'bridge passes --borderless'
-echo 'PASS: gamescope bridge: desktop window by default (1024x640 on a Deck), fullscreen on request, custom resolution, Gaming Mode unchanged, uncertain detection stays windowed'
+echo 'PASS: gamescope bridge: desktop window by default (1024x640 on a Deck), fullscreen on request, custom resolution, Gaming Mode unchanged, uncertain detection stays windowed, refused launches and missing Binder shown as popups'

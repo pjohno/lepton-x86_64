@@ -158,6 +158,78 @@ function existing_app_profile()
     return 1
 }
 
+# Prints the display name of an installed Lepton tool whose Android runtime
+# has fingerprint $1 (the tool that created a refused profile), if any.
+function lepton_tool_for_fingerprint()
+{
+    local WANT="$1" ROOT SUM
+    [[ "$WANT" =~ ^[0-9a-f]{64}$ ]] || return 1
+    for ROOT in "${XDG_DATA_HOME:-$HOME/.local/share}"/*/; do
+        [[ -f "${ROOT}BUNDLE.json" && -d "${ROOT}compat_tool/sysbake" ]] || continue
+        SUM="$(LEPTON_TEST_ROOTFS="${ROOT}compat_tool/images/rootfs" \
+               BAKED_SYSTEM_DATA_DIR="${ROOT}compat_tool/sysbake" \
+               lepton_runtime_fingerprint 2>/dev/null)" || continue
+        [[ "$SUM" == "$WANT" ]] || continue
+        python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["display_name"])' \
+            "${ROOT}BUNDLE.json" 2>/dev/null || basename -- "$ROOT"
+        return 0
+    done
+    return 1
+}
+
+# A refused profile otherwise only shows in the log: the game seems to do
+# nothing. Tell the player why and what they can do: the Gamescope bridge
+# passes LEPTON_MESSAGE_FILE and shows its contents as a popup once Lepton
+# exits (on Steam's display in Gaming Mode, as a window on the desktop).
+# It only explains; nothing is deleted.
+function lepton_profile_refused()
+{
+    local REASON="$1" STORED="${2:-}" GAME TOOL MESSAGE
+    GAME="$(get_app_id)"
+    local RESET="To use this tool instead, reset the game's data: add
+LEPTON_RESET_APP_DATA=true %command%
+to its launch options (Properties > General), launch it once, then remove
+the option. This permanently deletes the game's Android data (saves, logins,
+settings) and installs the game again. Shared storage is kept."
+    case "$REASON" in
+        fingerprint)
+            if TOOL="$(lepton_tool_for_fingerprint "$STORED")"; then
+                println "Profile was created by installed tool: $TOOL"
+                MESSAGE="$GAME can't start with this Lepton tool. Nothing has been deleted.
+
+Its Android data was created by another Lepton tool:
+$TOOL
+
+To keep your data, select that tool in the game's Properties > Compatibility.
+
+$RESET"
+            else
+                println "Profile's runtime is not provided by any installed tool"
+                MESSAGE="$GAME can't start with this Lepton tool. Nothing has been deleted.
+
+Its Android data was created by a different Lepton Android build, which is not
+installed. To keep your data, reinstall that Lepton version and select it in
+the game's Properties > Compatibility.
+
+$RESET"
+            fi ;;
+        installation)
+            MESSAGE="$GAME can't start: its APK no longer matches the copy installed in its
+Android data, for example because the game was updated. Lepton can't update an
+installed game yet. Nothing has been deleted.
+
+To keep your data, put back the original APK.
+
+$RESET" ;;
+        *)
+            MESSAGE="$GAME can't start: its Lepton data folder is not in the expected form.
+Nothing has been deleted. Details are in ~/.steam/steam/logs/." ;;
+    esac
+    if [[ -n "${LEPTON_MESSAGE_FILE:-}" && -f "$LEPTON_MESSAGE_FILE" && ! -L "$LEPTON_MESSAGE_FILE" ]]; then
+        printf '%s\n' "$MESSAGE" > "$LEPTON_MESSAGE_FILE" || true
+    fi
+}
+
 function check_kept_app_data()
 {
     is_sysbake && return 0
@@ -167,6 +239,7 @@ function check_kept_app_data()
     APP_REUSE_VALIDATED=""
     if [[ -L "$DIR" || -L "$DIR/data_overlay" || -L "$DIR/app_overlay" ]]; then
         println "ERROR: unexpected profile symlink; profile preserved but not mounted: $DIR" >&2
+        lepton_profile_refused layout
         return 1
     fi
     println "Profile: Steam AppID=${SteamAppId:-unknown}; package=$(get_app_id); tool=${LEPTON_ENTRYPOINT:-$LEPTON_DIR}; data=$DIR"
@@ -180,11 +253,13 @@ function check_kept_app_data()
         STORED="$(cat "$FINGERPRINT_FILE" 2>/dev/null || true)"
         if [[ -z "$STORED" || "$STORED" != "$CURRENT" ]]; then
             println "ERROR: previous fingerprint=${STORED:-unknown}; runtime fingerprint mismatch/unknown; profile preserved but not mounted: $DIR. Select the original Android runtime and sysbake; back up before diagnosing compatibility." >&2
+            lepton_profile_refused fingerprint "$STORED"
             return 1
         fi
         println "Runtime fingerprint match; previous fingerprint known"
         if is_app && ! is_app_baked; then
             println "ERROR: installation validation failed; profile preserved but not mounted. Restore the original APK or diagnose the installed code/metadata after backup. Automatic repair is not yet validated for this overlay." >&2
+            lepton_profile_refused installation
             return 1
         fi
         println "Existing profile validated for reuse"

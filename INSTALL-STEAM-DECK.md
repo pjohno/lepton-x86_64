@@ -394,7 +394,10 @@ profile. Use the original Android image and sysbake. An incomplete installation
 or changed APK also stops launch with a diagnostic; automatic in-place repair
 is pending validation of Lepton's APK overlay. Back up the profile before
 investigating metadata or installing an update. Do not reset to resolve an error
-unless you intend to discard the Android profile.
+unless you intend to discard the Android profile. When Lepton refuses a profile, a
+popup says why, in Gaming Mode and Desktop Mode. If the profile was created by
+another installed Lepton tool, the message names that tool. It also explains
+how to reset, and that resetting deletes the game's Android data.
 
 To explicitly discard **only the selected game's `baked/` Android profile**,
 stop the game, back it up, then launch once with
@@ -443,6 +446,7 @@ instead of `--deck-ip`.
 | Installer: `No AMD GPU found` | Only AMD GPUs are supported. |
 | GPU check reports SwiftShader | `LEPTON_FORCE_SOFTWARE` is set, or `/dev/dri` is not accessible to your user. |
 | Game shows no touch input | Touchscreen Native Support (step 5). |
+| Game won't start; Lepton says it can't start with this tool | Its data came from another Lepton tool or Android build: select the tool the message names, or reset the game's data (see [Game data between launches](#game-data-between-launches)). |
 | Desktop Mode: game too large, or fullscreen when it shouldn't be | Remove `LEPTON_DESKTOP_FULLSCREEN` / `LEPTON_RESOLUTION` from the launch options. Alt+F4 closes a fullscreen game. |
 | Lepton missing in Steam's compatibility list | Restart Steam after installing. |
 | Logs | `~/.steam/steam/logs/lepton-*.log`; GPU-check logs are listed at the end of its output. |
