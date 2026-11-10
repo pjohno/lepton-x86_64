@@ -10,9 +10,20 @@ function print()
     printf '%s' "$@"
 }
 
+# x86_64 port: during a game launch the Gamescope bridge passes
+# LEPTON_MESSAGE_FILE and shows its contents as a popup once Lepton exits,
+# so failures are not silent. The first (most specific) message wins.
+function lepton_tell_player()
+{
+    [[ -n "${LEPTON_MESSAGE_FILE:-}" && -f "$LEPTON_MESSAGE_FILE" && ! -L "$LEPTON_MESSAGE_FILE" &&
+       ! -s "$LEPTON_MESSAGE_FILE" ]] || return 0
+    printf '%s\n' "$@" > "$LEPTON_MESSAGE_FILE" 2>/dev/null || true
+}
+
 function die()
 {
     printf '%s\n' "$@" >&2
+    lepton_tell_player "$@"
     exit 1
 }
 

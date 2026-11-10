@@ -162,8 +162,8 @@ function app_install_needed()
 function autobake()
 {
     if ! is_system_baked; then
-        echo "Lepton system is not baked. Please verify the files of Lepton in Settings->Properties->Installed files"
-        exit 1
+        die "This Lepton tool's files are incomplete (no prepared Android system)." \
+            "Reinstall or repair it with \"Lepton: Install / Update / Repair\" in Desktop Mode."
     else
         # The depot does not contain xattrs, so we need to restore them from a
         # file. We perform this always in case someone interrupted the process.

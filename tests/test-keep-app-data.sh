@@ -5,7 +5,8 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"; [[ -z "${LEPTON_PREFIX:-}" ]] || rm -rf -- "$LEPTON_PREFIX"' EXIT
 for fn in profile_has_no_mounts should_keep_app_data remove_baked_workdirs lepton_runtime_fingerprint existing_app_profile check_kept_app_data \
-          remove_prefix clear_baked_app_data prepare_baked_data_for_removal data_mount_path data_workdir app_workdir app_datadir cleanup_container install_app; do
+          remove_prefix clear_baked_app_data prepare_baked_data_for_removal data_mount_path data_workdir app_workdir app_datadir cleanup_container install_app \
+          lepton_tool_for_fingerprint lepton_profile_refused; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/liblepton.sh")"
 done
 for fn in get_baked_app_data_dir app_install_complete_path app_apk_set_matches is_app_baked app_install_needed; do
@@ -14,10 +15,17 @@ done
 for fn in extract_app_mount_dir extract_app_hash; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/app_metadata.sh")"
 done
+eval "$(sed -n "/^function lepton_tell_player()/,/^}/p" "$repo/compat_tool/liblepton/utils.sh")"
 for fn in safe_storage_link continue_boot_after_bake; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/mounting.sh")"
 done
 print() { printf '%s' "$*"; }
+# Never scan the real installed tools. Refusal messages go to the file the
+# Gamescope bridge would pass (LEPTON_MESSAGE_FILE), only when a test sets it.
+unset LEPTON_MESSAGE_FILE
+mkdir -p "$work/data"
+export XDG_DATA_HOME="$work/data"
+msg() { : > "$work/dialog"; LEPTON_MESSAGE_FILE="$work/dialog" "$@"; }
 println() { printf '%s\n' "$*" >> "$work/messages"; }
 is_app() { true; }
 is_sysbake() { return 1; }
@@ -122,6 +130,41 @@ mv "$work/fingerprint" "$baked/lepton-runtime-fingerprint"
 echo different >> "$LEPTON_TEST_ROOTFS/system/build.prop"; refuses
 [[ "$(cat "$baked/lepton-runtime-fingerprint")" == "$stored" ]]
 sed -i '$d' "$LEPTON_TEST_ROOTFS/system/build.prop"; check_kept_app_data
+# A refusal tells the player why, inside the game's window, and what to do.
+# Another installed tool with the profile's runtime is named; nothing deleted.
+old_tool="$work/data/lepton_x86_64_v0_1_0_alpha"
+mkdir -p "$old_tool/compat_tool/images/rootfs" "$old_tool/compat_tool/sysbake/system"
+cp -a "$LEPTON_TEST_ROOTFS/." "$old_tool/compat_tool/images/rootfs/"
+cp "$BAKED_SYSTEM_DATA_DIR/system/packages.xml" "$old_tool/compat_tool/sysbake/system/"
+echo '{"display_name": "Lepton x86_64 (community) - v0.1.0-alpha"}' > "$old_tool/BUNDLE.json"
+mkdir -p "$work/data/unrelated/compat_tool"; echo '{}' > "$work/data/unrelated/BUNDLE.json"
+echo different >> "$LEPTON_TEST_ROOTFS/system/build.prop"
+rm -f "$work/dialog"; refuses; [[ ! -e "$work/dialog" ]]   # no bridge: log only
+msg refuses
+grep -q 'com.example.game can.t start with this Lepton tool. Nothing has been deleted.' "$work/dialog"
+grep -qx 'Lepton x86_64 (community) - v0.1.0-alpha' "$work/dialog"
+grep -q "select that tool in the game's Properties > Compatibility" "$work/dialog"
+grep -qx 'LEPTON_RESET_APP_DATA=true %command%' "$work/dialog"
+grep -q 'permanently deletes' "$work/dialog"
+grep -q 'Profile was created by installed tool: Lepton x86_64 (community) - v0.1.0-alpha' "$work/messages"
+[[ "$(cat "$baked/lepton-runtime-fingerprint")" == "$stored" && -d "$old_tool/compat_tool/sysbake" ]]
+# The creating tool is not installed: reinstall it, or reset (with the warning).
+rm -rf "$old_tool"
+msg refuses
+grep -q 'different Lepton Android build, which is not' "$work/dialog"
+if grep -q 'another Lepton tool' "$work/dialog"; then echo 'FAIL: uninstalled tool named'; exit 1; fi
+grep -q 'permanently deletes' "$work/dialog"
+# Only a regular file is written, never through a symlink.
+ln -s "$work/elsewhere" "$work/dialog-link"
+LEPTON_MESSAGE_FILE="$work/dialog-link" refuses; [[ ! -e "$work/elsewhere" ]]; rm "$work/dialog-link"
+sed -i '$d' "$LEPTON_TEST_ROOTFS/system/build.prop"; check_kept_app_data
+# Changed APK: explains the mismatch and the same two choices.
+echo update >> "$work/game.apk"
+msg refuses
+grep -q 'its APK no longer matches the copy installed' "$work/dialog"
+grep -q 'put back the original APK' "$work/dialog" && grep -q 'permanently deletes' "$work/dialog"
+sed -i '$d' "$work/game.apk"
+msg check_kept_app_data; [[ ! -s "$work/dialog" ]]   # valid profile: no message
 cp "$BAKED_SYSTEM_DATA_DIR/system/packages.xml" "$work/sys-packages"
 echo new-sysbake > "$BAKED_SYSTEM_DATA_DIR/system/packages.xml"; refuses
 cp "$work/sys-packages" "$BAKED_SYSTEM_DATA_DIR/system/packages.xml"; check_kept_app_data
@@ -180,4 +223,4 @@ LEPTON_RESET_APP_DATA=true check_kept_app_data
 # Source invariant: a single deletion caller, solely under explicit reset.
 [[ "$(rg -c 'clear_baked_app_data "' "$repo/compat_tool/liblepton/liblepton.sh")" == 1 ]]
 ! rg -q 'clear_baked_app_data|rm -rf /data/data' "$repo/compat_tool/lepton" "$repo/compat_tool/liblepton/mounting.sh"
-echo 'PASS: preservation, validation refusal, timestamp/version independence, failed install, fingerprint switch-back, storage paths, settings, explicit reset isolation'
+echo 'PASS: preservation, validation refusal explained to the player (installed original tool named; reset warning), timestamp/version independence, failed install, fingerprint switch-back, storage paths, settings, explicit reset isolation'

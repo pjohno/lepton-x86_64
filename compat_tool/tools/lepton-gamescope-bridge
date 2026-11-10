@@ -4,37 +4,27 @@ set -euo pipefail
 # Tells lepton-x86_64-entry (inside the nested Gamescope) not to add another bridge.
 export LEPTON_BRIDGE_ACTIVE=1
 
-# Lepton BinderFS preflight. Never load or install kernel modules.
-lepton_check_binder() {
-    grep -qw binder /proc/filesystems 2>/dev/null && return 0
-
-    local message
-    message="Android Binder kernel support is unavailable.
-
-Lepton requires BinderFS, provided by rust_binder, binder_linux,
-or another compatible kernel implementation.
-
-Please initialize Binder support and launch the game again.
-
-Lepton will not install or load kernel modules."
-
-    printf 'ERROR: %s\n' "$message" >&2
+# Error popup for the player: TITLE MESSAGE [TIMEOUT]. Gaming Mode only shows
+# windows tagged with the running game's AppID, so there it is a scaled Qt
+# dialog on Steam's X11 display, tagged STEAM_GAME; on the desktop a regular
+# Wayland dialog.
+lepton_dialog() {
+    local title="$1" message="$2" limit="${3:-60s}"
 
     # Desktop Wayland has no outer X11 window to tag; show a regular dialog.
     if [[ "$display_mode" == desktop ]]; then
         if command -v kdialog >/dev/null 2>&1; then
-            QT_QPA_PLATFORM=wayland timeout 60s kdialog \
-                --title "Lepton Binder Unavailable" --error "$message" || true
+            QT_QPA_PLATFORM=wayland timeout "$limit" kdialog \
+                --title "$title" --error "$message" || true
         fi
-        return 1
+        return 0
     fi
 
     # Show a scaled Qt dialog through X11, tagged for Steam Gamescope.
-    local title="Lepton Binder Unavailable"
     local win="" dialog_pid
 
     DISPLAY="$outer_display" QT_QPA_PLATFORM=xcb QT_SCALE_FACTOR=2 \
-        timeout 60s kdialog \
+        timeout "$limit" kdialog \
         --title "$title" --error "$message" &
     dialog_pid=$!
 
@@ -59,8 +49,36 @@ Lepton will not install or load kernel modules."
     fi
 
     wait "$dialog_pid" 2>/dev/null || true
+}
+
+# Lepton BinderFS preflight. Never load or install kernel modules.
+lepton_check_binder() {
+    grep -qw binder /proc/filesystems 2>/dev/null && return 0
+
+    local message
+    message="Android Binder kernel support is unavailable.
+
+Lepton requires BinderFS, provided by rust_binder, binder_linux,
+or another compatible kernel implementation.
+
+Please initialize Binder support and launch the game again.
+
+Lepton will not install or load kernel modules."
+
+    printf 'ERROR: %s\n' "$message" >&2
+    lepton_dialog "Lepton Binder Unavailable" "$message"
     return 1
 }
+
+# Lepton writes why a game could not start (for example a refused profile) to
+# LEPTON_MESSAGE_FILE; show it once Lepton and the nested Gamescope have exited.
+message_file=""
+show_launch_message() {
+    [[ -n "$message_file" && -s "$message_file" ]] || return 0
+    lepton_dialog "Lepton: game could not start" "$(cat "$message_file")
+Details: ~/.steam/steam/logs/lepton-steamlaunch-$app_id.log" 180s
+}
+cleanup_message_file() { [[ -z "$message_file" ]] || rm -f -- "$message_file"; }
 
 app_id="${SteamAppId:-}"
 if [[ ! "$app_id" =~ ^[1-9][0-9]*$ && "${SteamGameId:-}" =~ ^[0-9]+$ ]]; then
@@ -206,6 +224,10 @@ echo "Lepton Gamescope mode: $display_mode; resolution: ${width}x${height}; $win
 
 lepton_check_binder || exit 1
 
+message_file="$(mktemp "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/lepton-message.XXXXXX" 2>/dev/null)" || message_file=""
+[[ -z "$message_file" ]] || export LEPTON_MESSAGE_FILE="$message_file"
+trap cleanup_message_file EXIT
+
 if [[ "$display_mode" == desktop ]]; then
     # A movable KDE window (fullscreen only on request), no X11 Steam window
     # tagging. Never --borderless: Plasma's title bar is the way out.
@@ -213,8 +235,9 @@ if [[ "$display_mode" == desktop ]]; then
     ENABLE_GAMESCOPE_WSI=0 gamescope --backend wayland --expose-wayland "${desktop_fullscreen[@]}" \
         -W "$width" -H "$height" -w "$width" -h "$height" \
         --default-touch-mode 4 \
-        -- sh -c 'export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"; exec "$@"' sh "$@"
-    exit $?
+        -- sh -c 'export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"; exec "$@"' sh "$@" || status=$?
+    show_launch_message
+    exit "${status:-0}"
 fi
 
 # Preserve the previously tested Gaming Mode path unchanged.
@@ -254,4 +277,6 @@ for ((i=0; i<120; i++)); do
 done
 
 (( tagged )) || echo "WARNING: Gamescope window was not identified" >&2
-wait "$child"
+wait "$child" || status=$?
+show_launch_message
+exit "${status:-0}"
