@@ -42,6 +42,7 @@ STATE="$TARGET/.lepton-clean14-state"
    -f "$STATE/sync.done" &&
    -f "$STATE/vendor.done" &&
    -f "$STATE/patches.done" &&
+   ! -e "$STATE/reset.started" &&
    ! -e "$STATE/patches.started" ]] ||
   fail "Android source preparation is not complete"
 

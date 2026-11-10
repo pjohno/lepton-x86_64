@@ -75,6 +75,12 @@ grep -q 'Damaged build files: 6 found' "$work/scan.log" || { cat "$work/scan.log
 [[ -f "$obj/inquiry.o" ]]
 if python3 -B "$fake/image-14/scripts/internal/check-build-outputs.py" "$aosp" > /dev/null 2>&1; then fail 'accepted a non-out folder'; fi
 
+# A reset interrupted with old successful stage markers must never build.
+touch "$state/reset.started"
+if build --check; then fail 'accepted an interrupted source reset'; fi
+grep -q 'Interrupted source reset' "$work/out.log"
+rm "$state/reset.started"
+
 # A build cut off an hour ago (marker left behind) wrote the damaged files.
 echo 'Started earlier' > "$state/build.running"; touch -d '1 hour ago' "$state/build.running"
 build --check || fail 'check failed'

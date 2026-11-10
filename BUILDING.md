@@ -257,7 +257,54 @@ bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id base-YYYY
   rebuild (no new download; several hours).
 - A failed **prepare** during patching refuses to continue automatically, so
   that a half-patched tree is never built. Run `prepare-x86_64.sh --reset` to
-  start the patching from clean sources.
+  start the patching from clean sources. An interrupted **reset** must also
+  be retried with `--reset`; resume and build refuse its `reset.started`
+  checkpoint. Existing vendor/patch checkpoints remain as evidence until
+  project reset and `m installclean` both succeed. Reset then vendors and
+  patches again. It keeps the pinned manifest and compiled intermediates;
+  it neither downloads sources nor recreates the Android checkout.
+- **Git index locks after an interrupted prepare.** `--reset` inventories
+  managed projects using `.repo/project.list` and resolves their actual
+  `index.lock` locations through Git, including gitfiles and repo worktrees.
+  It also checks the manifest/repo Git checkouts when present. Host Python 3
+  inspects Linux `/proc` before the builder starts, so host and rootless
+  container processes are visible. Only regular, user-owned index locks
+  with one hard link, at least 60 seconds old, with no detected operation or
+  open file holder, qualify for automatic removal. Every candidate is
+  validated before any removal; process activity and file identity are
+  checked again immediately before removing each exact file.
+
+  Recovery deliberately refuses **any** visible Git/repo operation, even in
+  another checkout: working directories alone cannot identify operations
+  using `git -C`, `GIT_DIR`, shared stores or child editors. It also refuses
+  fresh, changing, symlinked or externally located locks and inaccessible
+  process information. No Git/repo process is killed and no other lock type
+  is removed. Keep all Git/repo work stopped throughout reset: inspection
+  cannot prevent an independently started command from racing it. Concurrent
+  preparation through this workflow is serialized with `flock`.
+
+  If recovery stops, the log identifies the project, revision, operation and
+  lock path. Inspect `ps -ef` on the host and `podman top CONTAINER` for any
+  remaining builder; let verified operations finish, or stop only the exact
+  operation yourself. For a fresh lock, wait at least 60 seconds and retry.
+  Restore host `/proc` visibility if restricted; do not run recovery from
+  inside a PID-isolated container. Git directories outside the managed tree
+  require manual inspection. To inspect the reported project manually:
+
+  ```bash
+  source .build-env
+  PROJECT="${LEPTON_AOSP_DIR:-$LEPTON_OUTPUT_DIR/aosp}/prebuilts/clang/host/linux-x86"
+  git -C "$PROJECT" rev-parse --path-format=absolute --git-path index.lock
+  # Only after confirming all operations have stopped and this exact lock is stale:
+  rm -- /exact/verified/path/to/index.lock
+  bash image-14/scripts/prepare-x86_64.sh --reset
+  ```
+
+  Never delete `*.lock` or use `pkill`/`killall`. Do not delete preparation
+  checkpoints to bypass recovery. A Git error during reset now retains Git's
+  stderr and prints the precise failing operation, project, manifest revision
+  and index lock path. Other lock types or repository corruption need manual
+  repair; this recovery does not diagnose Soong module errors.
 - A failed **make-deck-bundle** leaves its stage behind. Delete it, or simply
   use a new bundle ID.
 

@@ -232,6 +232,10 @@ if [[ "$MODE" == existing || "$MODE" == full ]]; then
         fail "Missing clean-build ownership marker"
     fi
 
+    if [[ -e "$state/reset.started" ]]; then
+        fail "Interrupted source reset; run prepare-x86_64.sh --reset"
+    fi
+
     for marker in sync.done vendor.done patches.done; do
         if [[ -f "$state/$marker" ]]; then
             pass "Preparation checkpoint: $marker"

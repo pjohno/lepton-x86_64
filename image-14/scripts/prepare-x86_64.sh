@@ -16,7 +16,10 @@ Usage: prepare-x86_64.sh --check | --sync-only | --resume-sync | --vendor-only |
   --reset        Existing synced checkout: discard every change to the Android
                  sources (back to the pinned manifest; no download), remove
                  installed build outputs (m installclean), then vendor and
-                 patch again. Use after editing patches or to rebuild cleanly.
+                 patch again. Retry --reset after any interrupted reset.
+                 Recovers old, verified-idle Git index locks automatically;
+                 active/ambiguous locks stop with manual recovery guidance.
+                 Keep other Git/repo operations stopped during reset.
 Configuration: repository-root .build-env (copy .build-env.example and customize).
 HELP
 }
@@ -91,7 +94,7 @@ done
 
 SUBMODULES=(image-14/android_hardware_waydroid image-14/android_vendor_waydroid)
 MANIFESTS="$IMAGE/android_vendor_valve/manifest_scripts/manifests-34"
-for tool in git podman realpath df awk findmnt rsync cmp; do
+for tool in git podman realpath df awk findmnt rsync cmp python3 flock; do
   command -v "$tool" >/dev/null || err "Missing host tool: $tool"
 done
 [[ -d "$MANIFESTS" ]] || err 'Missing manifests directory'
@@ -148,6 +151,7 @@ elif [[ "$ACTION" == --reset ]]; then
 elif [[ "$ACTION" == --resume || "$ACTION" == --resume-sync || "$ACTION" == --vendor-only || "$ACTION" == --patch-only ]]; then
   [[ -f "$MARKER" && -d "$STATE" ]] || err 'No owned checkout state to resume'
   [[ "$(cat "$MARKER")" == "$owner_content" ]] || err 'Checkout belongs to a different repository commit'
+  [[ ! -e "$STATE/reset.started" ]] || err 'Reset was interrupted: rerun --reset before resuming'
   [[ ! -e "$STATE/patches.started" || -e "$STATE/patches.done" ]] || \
     err 'Inherited/custom patching was interrupted: inspect manually; auto-resume is disabled'
 fi
@@ -165,6 +169,16 @@ if [[ "$ACTION" == --check ]]; then
   fi
   info '[PASS] Read-only preparation inspection completed; no downloads started'
   exit 0
+fi
+
+# A stable file outside project clean paths; never unlink this lock file.
+# flock is released by the kernel after the last workflow/container child exits.
+mkdir -p -- "$LOG_DIR"
+exec {PREPARE_LOCK}>"$LOG_DIR/prepare.lock"
+flock -n "$PREPARE_LOCK" || err 'Another preparation operation is running; wait before retrying'
+# Recheck after acquiring the workflow lock (a prior reset may have just failed).
+if [[ "$ACTION" != --reset && -e "$STATE/reset.started" ]]; then
+  err 'Reset was interrupted: rerun --reset before resuming'
 fi
 
 # Log preparation outside the AOSP directory so logs remain after failed stages.
@@ -195,7 +209,13 @@ run_in_builder() {
   local started=$SECONDS heartbeat_pid result=0
   # A heartbeat is an elapsed-time indicator, not proof of network activity.
   (
-    while sleep 60; do
+    sleeper=''
+    trap '[[ -z "$sleeper" ]] || kill "$sleeper" 2>/dev/null || true' EXIT
+    trap 'exit 0' TERM INT
+    while :; do
+      sleep 60 &
+      sleeper=$!
+      wait "$sleeper" || exit 0
       printf '[%s] [HEARTBEAT] Container stage running for %dm; log: %s\n' \
         "$(date -u +%H:%M:%SZ)" "$(( (SECONDS-started)/60 ))" "$LOG_FILE"
     done
@@ -229,42 +249,16 @@ run_in_builder() {
 
 if [[ "$ACTION" == --reset ]]; then
   info "[$(date -u +%H:%M:%SZ)] [START] Reset: Android sources back to the pinned manifest"
-  rm -f -- "$STATE/vendor.done" "$STATE/patches.done" "$STATE/patches.started"
+  # Keep old stage evidence until reset AND installclean succeed. All source
+  # consumers reject reset.started, including after SIGKILL/power loss.
+  touch "$STATE/reset.started"
+  python3 -B "$IMAGE/scripts/internal/recover-source-locks.py" "$TARGET"
   run_in_builder <<'INNER'
 set -Eeuo pipefail
-cd /workspace/output
-[[ -f .repo/manifest.xml && -f build/envsetup.sh ]] || { echo 'Missing synced AOSP checkout'; exit 1; }
-# Projects whose .git link was overwritten (older vendoring copied a
-# submodule's .git file over hardware/waydroid): check them out again from
-# the local .repo store, without any download.
-broken=()
-while read -r path; do
-  git -C "$path" rev-parse --git-dir >/dev/null 2>&1 || broken+=("$path")
-done < <(.repo/repo/repo list -p)
-if (( ${#broken[@]} )); then
-  echo "Repairing git checkouts: ${broken[*]}"
-  rm -rf -- "${broken[@]}"
-  .repo/repo/repo sync -q -l -d "${broken[@]}"
-fi
-# Every project: abandon interrupted patch series, return to the manifest
-# revision and delete untracked files (vendored copies, patch-added files).
-.repo/repo/repo forall -c '
-  git am --abort >/dev/null 2>&1 || true
-  git reset -q --hard "$REPO_LREV" || { echo "RESET FAILED: $REPO_PATH (revision $REPO_LREV)"; exit 1; }
-  git clean -q -fdx || { echo "CLEAN FAILED: $REPO_PATH"; exit 1; }
-'
-# Vendored Valve tree (not a repo project); recreated by the vendoring stage.
-rm -rf -- vendor/extra
-dirty=$(.repo/repo/repo forall -q -c 'test -z "$(git status --porcelain)" || echo "$REPO_PATH"')
-[[ -z "$dirty" ]] || { echo "Projects still modified after reset:"; echo "$dirty"; exit 1; }
-echo '[PASS] All Android projects match the pinned manifest'
-# Installed build outputs may hold files from the previous sources.
-set +u
-source build/envsetup.sh >/dev/null
-lunch aosp_lepton_x86_64-ap2a-userdebug >/dev/null
-m installclean
-echo '[PASS] Installed build outputs removed (intermediates kept for speed)'
+bash /workspace/scripts/internal/reset-sources.sh
 INNER
+  rm -f -- "$STATE/vendor.done" "$STATE/patches.done" "$STATE/patches.started"
+  rm -- "$STATE/reset.started"
   info "[$(date -u +%H:%M:%SZ)] [PASS] Reset complete; vendoring and patching again"
   printf '%s\n' "$owner_content" > "$MARKER"
 fi
