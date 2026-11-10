@@ -18,6 +18,16 @@ Store local test APKs in the Git-ignored `apks/` directory. No APKs, Google
 translator binaries, Android images or generated compatibility libraries are
 committed to this repository.
 
+## Local desktop direct Wayland
+
+Tools installed through `install-local.sh` now carry a persistent local profile
+and bypass nested Gamescope by default. Use `%command%` for the direct test or
+`LEPTON_LOCAL_USE_GAMESCOPE=1 %command%` for the windowed fallback. Existing
+unmarked tools keep their previous routing until explicitly upgraded/marked.
+See [profile, deployment, rollback and geometry limitations](compat_tool/LOCAL-DESKTOP.md).
+Direct routing is a new Fedora test version; rendering, redraw, scaling, pointer
+alignment, focus and exit/relaunch need manual validation before release.
+
 ## Testing the Steam Gamescope bridge
 
 The desktop mouse fix changes the bridge script only; an existing installed

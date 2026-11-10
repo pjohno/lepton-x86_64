@@ -284,11 +284,17 @@ for helper in run-apk.sh unpack-apkm.py read-gsf-id.py; do
 done
 install -m 644 "$repo/tests/runtime/README.md" "$tmp/payload/tests/runtime/README.md"
 install -m 644 "$repo/tests/runtime/STEAM-DECK-GAPPS.md" "$tmp/payload/tests/runtime/STEAM-DECK-GAPPS.md"
+# Installation profiles are host-local and must never travel in bundles.
+rm -f -- "$tmp/payload/compat_tool/install-profile"
 # These launch helpers must track the checked-out Fedora source, not an
 # older stage snapshot. Do not touch the staged Android rootfs.
 install -m 755 "$repo/compat_tool/lepton" "$tmp/payload/compat_tool/lepton"
 install -m 755 "$repo/compat_tool/tools/lepton-gamescope-bridge" \
     "$tmp/payload/compat_tool/tools/lepton-gamescope-bridge"
+install -m 755 "$repo/compat_tool/tools/lepton-direct-wayland" \
+    "$tmp/payload/compat_tool/tools/lepton-direct-wayland"
+install -m 644 "$repo/compat_tool/tools/lepton-display-common.sh" \
+    "$tmp/payload/compat_tool/tools/lepton-display-common.sh"
 install -m 755 "$repo/compat_tool/tools/lepton-controller-hotplug-experiment" \
     "$tmp/payload/compat_tool/tools/lepton-controller-hotplug-experiment"
 install -m 755 "$repo/compat_tool/tools/lepton-add-game" \

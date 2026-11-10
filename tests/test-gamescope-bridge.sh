@@ -37,6 +37,11 @@ monitor() { printf '{"outputs":[{"enabled":true,"priority":1,"rotation":1,"scale
 base=(env -i PATH="$work/bin:/usr/bin:/bin" HOME="$work" WORK="$work" LOG="$work/log" SteamAppId=123)
 kde=(XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$work")
 gaming=(DISPLAY=:0 GAMESCOPE_WAYLAND_DISPLAY=gamescope-0)
+python3 - "$work/wayland-0" <<'PY'
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.bind(sys.argv[1])
+PY
 run() { rm -f "$work/log" "$work/gamescope.pid"; "${base[@]}" "$@" "$bridge" direct-game > "$work/out" 2> "$work/err" || fail "bridge failed: $* ($(cat "$work/err"))"; }
 expect() { local got; got="$("$real_grep" '^gamescope ' "$work/log")"; [[ "$got" == "gamescope $1" ]] || fail "expected 'gamescope $1', got '$got'"; }
 desktop_cmd() { echo "--backend wayland --expose-wayland ${2:+-f }-W ${1%x*} -H ${1#*x} -w ${1%x*} -h ${1#*x} --default-touch-mode ${3:-1}"; }

@@ -25,6 +25,8 @@ printf 'test-radv\n' > "$stage/compat_tool/images/rootfs/vendor/lib64/hw/vulkan.
 printf '#!/bin/sh\n' > "$stage/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure"
 chmod +x "$stage/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure"
 printf '<packages/>\n' > "$stage/compat_tool/sysbake/system/packages.xml"
+# A host-local marker in a reused stage must not leak into a Deck bundle.
+printf '%s\n' local-desktop > "$stage/compat_tool/install-profile"
 printf '# file: sysbake/system/packages.xml\nuser.fake=0x31\n' > "$stage/compat_tool/sysbake.xattrs"
 printf '#!/bin/sh\n' > "$stage/tools/platform-tools/adb"
 printf '#!/bin/sh\n' > "$stage/tools/bin/inotifywait"
@@ -72,6 +74,9 @@ local_install --execute || { cat "$work/out"; fail 'install failed'; }
 grep -q 'Using existing bundle' "$work/out"
 "$dest/tools/platform-tools/adb" version | grep -qx 'Version 37.0.1-15733141'
 [[ -f "$out/lepton-x86_64-steamdeck-local.tar.gz" && -x "$dest/compat_tool/lepton" ]]
+grep -qx local-desktop "$dest/compat_tool/install-profile"
+[[ -x "$dest/compat_tool/tools/lepton-direct-wayland" ]]
+! tar -tzf "$out/lepton-x86_64-steamdeck-local.tar.gz" | grep -q '/install-profile$'
 grep -Fq "\"$dest/compat_tool\"" "$home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_local.vdf"
 grep -Fqx "Exec=\"$home/.local/bin/lepton-add-game-gui\"" "$home/.local/share/applications/lepton-x86_64-add-game.desktop"
 # The existing bundle is reused; installing again needs --replace.
@@ -83,6 +88,12 @@ touch "$dest/marker"
 local_install --execute --replace --adb-zip "$FAKE_ADB_ZIP" || { cat "$work/out"; fail 'replace failed'; }
 [[ ! -s "$FAKE_CURL_LOG" ]] || fail 'downloaded despite --adb-zip'
 [[ ! -e "$dest/marker" && -x "$dest/compat_tool/lepton" ]]
+grep -qx local-desktop "$dest/compat_tool/install-profile"
+# An ordinary bundle replacement also preserves this installation's profile.
+env -u DISPLAY -u WAYLAND_DISPLAY HOME="$home" PATH="$work/bin:$PATH" \
+    LEPTON_SKIP_HOST_CHECK=1 LEPTON_NO_DIALOGS=1 \
+    bash "$installer" --replace --adb-zip "$FAKE_ADB_ZIP" > "$work/out" 2>&1 || { cat "$work/out"; fail 'ordinary replacement failed'; }
+grep -qx local-desktop "$dest/compat_tool/install-profile"
 # Nothing to install from.
 rm -rf "$stage" "$out"
 if local_install --execute; then fail 'accepted a missing bundle and stage'; fi

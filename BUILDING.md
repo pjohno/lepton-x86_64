@@ -168,9 +168,16 @@ To update an existing install in place instead (its games keep working), add
 
 ## Or install on this computer (experimental)
 
-A bundle can also be installed on the build computer itself, with the same
-installer a Deck uses: it registers the Steam compatibility tool and adds
+A bundle can also be installed on the build computer itself. The local wrapper
+uses the Deck installer with a persistent `local-desktop` installation profile: it registers the Steam compatibility tool and adds
 **Lepton: Add Android game** to the application menu.
+
+Local installs now launch directly through host Wayland by default, without
+nested Gamescope. Geometry is unchanged in this phase; fullscreen and physical
+resolution are not yet implemented. Use `LEPTON_LOCAL_USE_GAMESCOPE=1 %command%`
+for the existing windowed Gamescope fallback. Normal Deck installs keep their
+existing paths. See [local desktop routing](compat_tool/LOCAL-DESKTOP.md) for
+profile persistence, upgrades, limitations and launcher-only deployment.
 
 **Lepton targets the Steam Deck.** Desktop PCs remain experimental. Fedora KDE
 Wayland testing confirmed mouse and keyboard input with the desktop touch-mode

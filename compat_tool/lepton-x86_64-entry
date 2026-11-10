@@ -7,7 +7,8 @@
 #   - LEPTON_ADB and PATH point at this install's tools/ (unless already set);
 #   - APP_WANTS_FLATSCREEN defaults to true (flatscreen-only port);
 #   - game launches (waitforexitandrun) run inside this install's
-#     lepton-gamescope-bridge, unless already inside a bridge (e.g. an older
+#     direct Wayland for a local-desktop profile, otherwise Gamescope, unless
+#     already inside a display launcher (e.g. an older
 #     shortcut whose launch options still start one).
 # Every other verb goes straight to Valve's unchanged ./lepton script.
 set -euo pipefail
@@ -53,6 +54,22 @@ Select a Lepton GApps tool in the game's Properties > Compatibility."
 fi
 
 if [[ "${1:-}" == waitforexitandrun && "${LEPTON_NO_BRIDGE:-false}" != true ]] && ! inside_bridge; then
+    # Read data, never shell code. Unmarked/older tools keep the Deck path.
+    profile=""
+    [[ ! -f "$TOOL/install-profile" ]] || profile="$(cat "$TOOL/install-profile")"
+    # A copied local installation must not change SteamOS's default routing.
+    steamos=false
+    if [[ -r /etc/os-release ]] && grep -Eq '^ID=("steamos"|steamos)$' /etc/os-release; then
+        steamos=true
+    fi
+    if [[ "$profile" == local-desktop && "$steamos" == false ]]; then
+        if [[ "${LEPTON_LOCAL_USE_GAMESCOPE:-0}" == 1 ]]; then
+            # The local fallback is always a safe desktop window by default.
+            export LEPTON_DISPLAY_MODE=desktop LEPTON_DESKTOP_DIRECT=0
+        else
+            exec "$TOOL/tools/lepton-direct-wayland" "$TOOL/lepton" "$@"
+        fi
+    fi
     exec "$TOOL/tools/lepton-gamescope-bridge" "$TOOL/lepton" "$@"
 fi
 exec "$TOOL/lepton" "$@"

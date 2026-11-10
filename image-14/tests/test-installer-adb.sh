@@ -90,6 +90,7 @@ grep -q 'ADB 37.0.1-15733141 verified (SHA256 and version)' "$work/install.log"
 [[ $(wc -l < "$work/curl.log") == 1 ]]
 grep -Fq -- "--proto =https --proto-redir =https --tlsv1.2" "$work/curl.log"
 grep -Fq -- "-- https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip" "$work/curl.log"
+[[ ! -e "$dest/compat_tool/install-profile" ]] || fail 'ordinary Deck install acquired a local profile'
 adb="$dest/tools/platform-tools/adb"
 [[ -f "$adb" && -x "$adb" && ! -L "$adb" ]]
 [[ "$(sha256sum "$adb" | awk '{print $1}')" == "$good_sha" ]]

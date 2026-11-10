@@ -26,6 +26,7 @@ ADB_ZIP=''
 
 # Packaging substitutes the archive name; an explicit ARCHIVE argument wins.
 DEFAULT_ARCHIVE=''
+INSTALL_PROFILE=''
 ORIG_ARGS=("$@")
 MODE=execute
 PAUSE=false
@@ -44,6 +45,8 @@ usage() {
     sed -n '3,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     cat <<'HELP'
 Options:
+  --install-profile local-desktop
+                   Mark this installation for direct host Wayland (local installer)
   --check          Verify the archive and destination; change nothing
   --replace        Overwrite an existing install of this bundle's own tool ID
   --new            Install as a new tool without asking (fails if this bundle's
@@ -97,6 +100,7 @@ trap finish EXIT
 
 while (($#)); do
     case "$1" in
+        --install-profile) INSTALL_PROFILE="${2:?--install-profile needs local-desktop}"; [[ "$INSTALL_PROFILE" == local-desktop ]] || fail "Unknown installation profile: $INSTALL_PROFILE"; shift 2 ;;
         --check) MODE=check; shift ;;
         --replace) REPLACE=true; shift ;;
         --new) NEW=true; shift ;;
@@ -252,6 +256,23 @@ fi
 registration="$STEAM_TOOLS/$TOOL_ID.vdf"
 if [[ -f "$registration" ]] && ! grep -Fq "\"$DEST/compat_tool\"" "$registration"; then
     fail "Steam tool ID $TOOL_ID is already registered for another directory: $registration"
+fi
+
+# Preserve an existing local profile on --replace/--into, but never trust a
+# profile embedded in a transferable archive. Write it before replacing DEST.
+if [[ -z "$INSTALL_PROFILE" && -f "$DEST/compat_tool/install-profile" &&
+      "$(cat "$DEST/compat_tool/install-profile")" == local-desktop ]]; then
+    INSTALL_PROFILE=local-desktop
+fi
+rm -f -- "$TEMP/compat_tool/install-profile"
+if [[ "$INSTALL_PROFILE" == local-desktop ]]; then
+    if [[ ! -x "$TEMP/compat_tool/tools/lepton-direct-wayland" ||
+          ! -f "$TEMP/compat_tool/tools/lepton-display-common.sh" ]] ||
+       ! grep -q 'TOOL/install-profile' "$TEMP/compat_tool/lepton-x86_64-entry"; then
+        fail 'Bundle lacks local-desktop launcher support; repackage with updated launcher scripts (no Android rebuild required)'
+    fi
+    printf '%s\n' local-desktop > "$TEMP/compat_tool/install-profile"
+    info 'Installation profile: local-desktop (direct Wayland)'
 fi
 
 if [[ "$MODE" == check ]]; then

@@ -19,7 +19,9 @@ Usage: bash image-14/scripts/install-local.sh --check|--execute --bundle-id ID [
 
 Installs the bundle ID on this computer: the same installer a Steam Deck uses,
 so it registers a Steam compatibility tool and adds the "Lepton: Add Android
-game" menu entry. Make the bundle (or at least its stage) first with
+game" menu entry. This installation uses direct host Wayland by default;
+Steam Deck installations keep their normal Gamescope path.
+Make the bundle (or at least its stage) first with
 make-deck-bundle-x86_64.sh; a stage without a bundle is packaged here.
 
 Options:
@@ -91,7 +93,8 @@ fi
 
 step 'Install on this computer'
 # The bundled installer re-checks this computer with its own copy of the check.
-installer_args=("${INSTALL_ARGS[@]}")
+grep -q -- '--install-profile' "$INSTALLER" || fail 'Bundle installer lacks local-desktop support; repackage with updated launcher scripts'
+installer_args=(--install-profile local-desktop "${INSTALL_ARGS[@]}")
 [[ "$MODE" == --execute ]] || installer_args+=(--check)
 LEPTON_INSTALL_IN_TERMINAL=1 bash "$INSTALLER" "${installer_args[@]}"
 if [[ "$MODE" == --check ]]; then
