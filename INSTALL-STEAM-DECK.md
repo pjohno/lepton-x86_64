@@ -24,8 +24,9 @@ Google's `NOTICE.txt` (see [Google ADB](#google-adb)).
 about 3 GiB free in your home directory per install.
 
 **Lepton supports the Steam Deck only.** Desktop PCs with an AMD GPU can
-install it, but that is experimental: games start and draw, but mouse and
-keyboard do not reach them yet
+install it, but that is experimental. Fedora KDE Wayland testing confirmed
+mouse and keyboard input with the desktop touch-mode fix below; older bundles
+may still have the nested Gamescope mouse failure
 ([issue #9](https://github.com/pjohno/lepton-x86_64/issues/9)). Other GPUs are
 not supported (the image only contains AMD RADV/radeonsi drivers).
 
@@ -362,11 +363,36 @@ Both modes run the game inside a nested Gamescope.
   fullscreen game could leave the Deck looking stuck. The window is 80% of the
   desktop at 16:10: 1024×640 on a Steam Deck.
 
+Desktop Mode's Wayland Gamescope backend defaults to **touch mode 1
+(left-click emulation)** on all platforms. It supports mouse movement and
+single-touch taps/drags, without native multitouch. Mode 4 has a known
+mouse-motion problem: Fedora testing found mouse buttons reached Android
+while coordinates stayed at `(0,0)`. Mode 0 restored mouse movement; subsequent
+Steam Deck testing confirmed mode 1 also supports mouse and single-touch input.
+Manual Fedora testing of the mode-1 desktop default confirmed mouse movement,
+clicking, keyboard input, window focus and 2048 interaction without failures.
+This validates physical mouse and keyboard input, not a physical Fedora touchscreen.
+
+Gaming Mode continues to default to **mode 4 (native touch passthrough)** to
+preserve native multitouch. This default applies to the existing Gaming Mode
+path generally; no Steam Deck hardware detection is introduced. Its SDL/X11
+backend and other launch behavior are unchanged.
+
+Set either touch override per game through Steam Launch Options. Mode 0 remains
+available for pointer-only compatibility, mode 1 trades native multitouch for
+mouse and single-touch emulation, and mode 4 preserves native multitouch with
+the known mouse-motion issue. Gamescope builds lacking upstream
+[nested Wayland touch support](https://github.com/ValveSoftware/gamescope/pull/2104)
+can also drop physical touch. Keep
+[issue #9](https://github.com/pjohno/lepton-x86_64/issues/9) open during validation.
+
 Launch options for Desktop Mode:
 
 | Option | Effect |
 | --- | --- |
 | `LEPTON_DESKTOP_FULLSCREEN=1` | Fill the main screen instead. Close the game with Alt+F4 or from Steam. |
+| `LEPTON_DESKTOP_TOUCH_MODE=1` | Nested Desktop Mode only: `0` hover, `1` left-click (default), `4` passthrough. Invalid or empty values stop launch with an error. Gaming Mode ignores this setting. |
+| `LEPTON_DESKTOP_DIRECT=1` | Experimental: bypass nested Gamescope on the desktop and connect Android directly to Wayland. The desktop touch-mode setting does not apply. |
 | `LEPTON_RESOLUTION=WIDTHxHEIGHT` | Android's screen size: the window's size, or the size scaled to fill the screen with `LEPTON_DESKTOP_FULLSCREEN=1`. In Gaming Mode it sets Android's size and the game still fills the screen. |
 | `LEPTON_DISPLAY_MODE=desktop` or `gaming` | Override detection (see below). |
 
@@ -375,10 +401,70 @@ detected. If it can't tell which mode it's in and a Wayland desktop is
 available, it opens a window and logs a warning. `LEPTON_DESKTOP_WINDOWED=1`
 is accepted but no longer needed.
 
+Direct Wayland remains an experimental opt-in. It worked for mouse, keyboard
+and refocusing in the Fedora 2048 test, but window sizing, fractional scaling
+and physical touch need further testing before making it the desktop default.
+See [testing a bridge change](FEDORA-DEBUGGING.md#testing-the-steam-gamescope-bridge)
+to try repository code with an existing installed Android runtime.
+
 ARM64-only games (with an NDK bundle) are prepared for the translator's faster
 mode from their second launch, which removes most stutter; if one misbehaves,
 `LEPTON_NDK_TRANSLATION_MODE=light-translate-or-interpret %command%` forces the
 slower, most compatible mode (see `compat_tool/liblepton/ndk_auxv/README.md`).
+
+#### Gaming Mode touch experiments
+
+`LEPTON_GAMING_TOUCH_MODE` changes only Gaming Mode's nested Gamescope touch
+argument. Its SDL/X11 backend, fullscreen sizing and Steam window tagging are
+unchanged. Desktop Mode ignores this variable and keeps its separate default
+and override. Only `0`, `1` and `4` are accepted; invalid or empty values stop
+launch before Gamescope starts. The selected mode appears in the launch log as
+`Lepton Gaming Mode touch mode: N`.
+
+Steam Deck hardware testing produced these results:
+
+| Input | Mode 0 | Mode 1 | Mode 4 |
+| --- | --- | --- | --- |
+| Physical mouse | Works | Works | Fails |
+| Steam Input mouse emulation | Works | Works | Fails |
+| Touchscreen taps | Fails | Works | Works |
+| Touchscreen dragging | Fails | Works | Works |
+| Native multitouch | Fails | Fails | Works |
+
+These are observed Deck results, not a guarantee for every Gamescope version
+or game. Fedora mode-1 mouse, keyboard and focus testing also passed.
+Gaming Mode keeps mode 4 for
+native multitouch; select mode 1 per game when mouse/single-touch compatibility
+is preferred.
+
+In the game's Steam Properties → Launch Options, compare these settings:
+
+**Mode 0 — Hover**
+
+```ini
+LEPTON_GAMING_TOUCH_MODE=0 %command%
+```
+
+**Mode 1 — Touch as left mouse click**
+
+```ini
+LEPTON_GAMING_TOUCH_MODE=1 %command%
+```
+
+**Mode 4 — Native touchscreen passthrough (default)**
+
+```ini
+LEPTON_GAMING_TOUCH_MODE=4 %command%
+```
+
+Removing the override also restores Gaming Mode's mode 4. Mode 1 does not
+provide native multitouch; mode 0 does not provide touchscreen taps/drags in
+the Deck tests. Keep the game, resolution, scaling and controller layout
+unchanged when comparing physical mouse, Steam Input mouse emulation,
+keyboard, finger taps/drags, multitouch and focus on your hardware.
+
+For a bridge-only update with backup and rollback, see
+[deploying the bridge on Steam Deck](FEDORA-DEBUGGING.md#replacing-only-the-installed-steam-deck-bridge).
 
 ## Game data between launches
 

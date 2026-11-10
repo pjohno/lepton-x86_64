@@ -172,9 +172,13 @@ A bundle can also be installed on the build computer itself, with the same
 installer a Deck uses: it registers the Steam compatibility tool and adds
 **Lepton: Add Android game** to the application menu.
 
-**Lepton targets the Steam Deck.** On a desktop PC games start and draw
-correctly, but **mouse and keyboard do not reach the game yet**, so this is
-for testing only. See README.md, "Desktop PCs".
+**Lepton targets the Steam Deck.** Desktop PCs remain experimental. Fedora KDE
+Wayland testing confirmed mouse and keyboard input with the desktop touch-mode
+fix; older bundles may still have the nested Gamescope mouse failure. Physical
+Fedora mode-1 testing confirmed mouse, keyboard, focus and game interaction; Steam Deck tests confirm mouse
+and single-touch compatibility in mode 1, with native multitouch requiring mode 4. See
+[testing a bridge change](FEDORA-DEBUGGING.md#testing-the-steam-gamescope-bridge)
+to use updated launcher code without rebuilding Android.
 
 ```bash
 bash image-14/scripts/install-local.sh --check --bundle-id base-20261104

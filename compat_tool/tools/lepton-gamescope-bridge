@@ -146,6 +146,33 @@ if [[ "$display_mode" == desktop && "${LEPTON_DESKTOP_DIRECT:-0}" == 1 ]]; then
     exec "$@"
 fi
 
+# Nested Wayland Gamescope routes absolute mouse motion through its touch
+# handler. Passthrough (4) can leave Android's mouse at (0,0); left-click
+# mode (1) supports mouse and single-touch emulation, without native multitouch. Each nested backend has its own touch override;
+# direct Wayland bypasses both.
+if [[ "$display_mode" == desktop ]]; then
+    desktop_touch_mode="${LEPTON_DESKTOP_TOUCH_MODE-1}"
+    case "$desktop_touch_mode" in
+        0|1|4) ;;
+        *)
+            printf 'ERROR: Invalid LEPTON_DESKTOP_TOUCH_MODE: %q; expected 0 (hover), 1 (left-click, default), or 4 (passthrough)\n' "$desktop_touch_mode" >&2
+            exit 2
+            ;;
+    esac
+    echo "Lepton Desktop Mode touch mode: $desktop_touch_mode (--default-touch-mode $desktop_touch_mode)"
+else
+    # Experimental Gaming Mode comparisons; preserve passthrough by default.
+    gaming_touch_mode="${LEPTON_GAMING_TOUCH_MODE-4}"
+    case "$gaming_touch_mode" in
+        0|1|4) ;;
+        *)
+            printf 'ERROR: Invalid LEPTON_GAMING_TOUCH_MODE: %q; expected 0 (hover), 1 (left-click), or 4 (passthrough, default)\n' "$gaming_touch_mode" >&2
+            exit 2
+            ;;
+    esac
+    echo "Lepton Gaming Mode touch mode: $gaming_touch_mode"
+fi
+
 # Android's screen size is fixed when it starts, so pick it now.
 # Desktop: a movable KDE window at 80% of the usable desktop, 16:10 (1024x640
 # on a Steam Deck, also the fallback), so the title bar and panel stay
@@ -234,17 +261,17 @@ if [[ "$display_mode" == desktop ]]; then
     # The inner gamescope sets WAYLAND_DISPLAY for the Lepton container.
     ENABLE_GAMESCOPE_WSI=0 gamescope --backend wayland --expose-wayland "${desktop_fullscreen[@]}" \
         -W "$width" -H "$height" -w "$width" -h "$height" \
-        --default-touch-mode 4 \
+        --default-touch-mode "$desktop_touch_mode" \
         -- sh -c 'export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"; exec "$@"' sh "$@" || status=$?
     show_launch_message
     exit "${status:-0}"
 fi
 
-# Preserve the previously tested Gaming Mode path unchanged.
+# Preserve Gaming Mode's SDL/X11 backend, fullscreen and Steam window tagging.
 SDL_VIDEODRIVER=x11 ENABLE_GAMESCOPE_WSI=0 \
 gamescope --backend sdl --expose-wayland -f \
     -W "$width" -H "$height" -w "$width" -h "$height" \
-    --default-touch-mode 4 \
+    --default-touch-mode "$gaming_touch_mode" \
     -- sh -c 'export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"; exec "$@"' sh "$@" &
 child=$!
 

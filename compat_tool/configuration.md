@@ -2,6 +2,10 @@
 
 * `LEPTON_NDK_COMPAT=auto` (default) automatically enables the CPU/timer shim for the reviewed Google API 34 r14 NDK bridge. Other rootfs versions are left unchanged. Use `false` for comparisons; `true` requires a supported bridge. New NDK deployments and bundles include the compiled shim. See [NDK compatibility](liblepton/ndk_auxv/README.md).
 
+* `LEPTON_DESKTOP_TOUCH_MODE` selects nested Desktop Mode's Gamescope touch mode: `0` hover (pointer-only compatibility), `1` touch as left mouse click (default: mouse and single-touch emulation, no native multitouch), or `4` native touch passthrough (known mouse-motion issue). Only `0`, `1` and `4` are accepted; invalid or empty values stop launch. Gaming Mode ignores this setting. The selected mode is logged. See [Desktop Mode](../INSTALL-STEAM-DECK.md#desktop-mode-and-gaming-mode).
+* `LEPTON_GAMING_TOUCH_MODE` selects Gaming Mode's Gamescope touch mode: `0`, `1` or `4`, with native multitouch passthrough (`4`) remaining the default on the existing Gaming Mode path on all hardware. Invalid or empty values stop launch. Desktop Mode (including direct Wayland) ignores this setting. The selected mode is logged. Set either override per game through Steam Launch Options, e.g. `LEPTON_GAMING_TOUCH_MODE=1 %command%`. See [touch-mode test results](../INSTALL-STEAM-DECK.md#gaming-mode-touch-experiments).
+* `LEPTON_DESKTOP_DIRECT=1` remains an experimental opt-in to bypass nested Gamescope on the desktop. The desktop touch-mode setting is ignored on this path.
+
 * ```LEPTON_KEEP_CONTEXT=true``` to keep a context after the container has exited, debug option.
 * ```LEPTON_STRACE=true``` to strace the application launched by the container.
 * ```LEPTON_DEBUG_LAUNCH=true``` to wait e.g. for gdb before continuing execution after forking, but before launching the app.

@@ -18,6 +18,169 @@ Store local test APKs in the Git-ignored `apks/` directory. No APKs, Google
 translator binaries, Android images or generated compatibility libraries are
 committed to this repository.
 
+## Testing the Steam Gamescope bridge
+
+The desktop mouse fix changes the bridge script only; an existing installed
+tool supplies the same Android rootfs, sysbake, ADB and game profile. The
+repository bridge may be newer than an installed bundle's bridge, including
+its window sizing and error dialogs. Use a per-launch override to test it
+without replacing installed files or rebuilding Android.
+
+On Fedora, save and stop the game, then run from this repository:
+
+```bash
+realpath compat_tool/tools/lepton-gamescope-bridge
+```
+
+In the existing Steam shortcut, keep the selected compatibility tool and
+replace its Launch Options with the printed absolute path in quotes, followed
+by `%command%`:
+
+```text
+"/absolute/path/to/lepton-x86_64/compat_tool/tools/lepton-gamescope-bridge" %command%
+```
+
+The candidate bridge sets `LEPTON_BRIDGE_ACTIVE=1`, so the installed tool's
+entry point runs inside it without starting a second bridge. Replace earlier
+diagnostic Launch Options rather than appending: remove any temporary
+Gamescope `PATH` wrapper and `LEPTON_ISSUE9_TOUCH_MODE`, which can mask the new
+bridge's arguments. An unset `LEPTON_DESKTOP_TOUCH_MODE` now uses mode 1 (left-click emulation).
+
+For a controlled 1280×800 window and touch-passthrough comparison, use:
+
+```text
+LEPTON_RESOLUTION=1280x800 LEPTON_DESKTOP_TOUCH_MODE=4 "/absolute/path/to/lepton-x86_64/compat_tool/tools/lepton-gamescope-bridge" %command%
+```
+
+Remove `LEPTON_DESKTOP_TOUCH_MODE=4` for the mode-1 default. Experimental direct
+Wayland remains available by setting `LEPTON_DESKTOP_DIRECT=1` before the
+candidate bridge path instead; it ignores the Gamescope touch-mode setting.
+
+For Steam Deck testing, copy only the candidate bridge to a separate file
+(substitute the Deck's SSH address):
+
+```bash
+scp compat_tool/tools/lepton-gamescope-bridge deck@DECK_IP:/home/deck/lepton-gamescope-bridge-issue9
+ssh deck@DECK_IP 'chmod 755 /home/deck/lepton-gamescope-bridge-issue9'
+```
+
+Use `/home/deck/lepton-gamescope-bridge-issue9 %command%` as the existing
+game's Launch Options. In Desktop Mode, compare default mode 1 against
+`LEPTON_DESKTOP_TOUCH_MODE=4 /home/deck/lepton-gamescope-bridge-issue9 %command%`.
+Keep the same game, window size, scaling, controller layout and Steam settings.
+Test physical mouse movement/clicks, keyboard, Alt-Tab/refocus, and separately
+the actual touchscreen's finger taps and drags. A touchpad acting as a mouse
+or Android-injected touch does not validate physical touchscreen forwarding.
+Deck tests confirm mode 1 supports mouse and single-touch taps/drags without
+native multitouch. Mode 0 provides pointer-only compatibility; mode 4 supports
+native multitouch but can reproduce the mouse failure. Gamescope's upstream
+nested Wayland touch support is another dependency; record the installed
+version and touch results rather than assuming they work.
+
+Also check Gaming Mode's existing touch/controller behavior with the candidate
+bridge: its SDL/X11 command defaults to touch mode 4 even if the desktop override
+is present. Keep issue #9 open for review and remaining compatibility testing. To undo candidate deployment, stop the game and restore the
+shortcut's previous Launch Options; the installed tool and game data have not
+been replaced. The separate candidate file can then be removed.
+
+### Fedora mode-1 validation
+
+On 2026-11-10, the installed `lepton_x86_64_v0_1_1_alpha` tool's bridge was
+updated for the existing 2048 Steam shortcut (AppID `2826395812`). Steam's
+`logs/console-linux.txt` recorded `--default-touch-mode 1` and a windowed
+1472×920 Desktop Mode launch at 14:59:04. Android also reported 1472×920.
+The user tested mouse movement/clicks, keyboard, window focus and game
+interaction and reported no failures. Physical Fedora touchscreen input and
+native multitouch were not validated by this test. Gaming Mode retains its
+mode-4 default; no rootfs, game data or Steam configuration was changed.
+
+### Replacing only the installed Steam Deck bridge
+
+Save and stop the game normally before replacing its bridge. This updates only
+one script: no Android rebuild, Gamescope package change, tool reinstallation,
+game-data reset or compatibility-prefix change is needed. The selected tool
+may differ from the repository version; verify its registration first. These
+commands do not change any Steam shortcut.
+
+From the repository on Fedora, copy the candidate (replace `DECK_IP`):
+
+```bash
+scp compat_tool/tools/lepton-gamescope-bridge deck@DECK_IP:/home/deck/lepton-gamescope-bridge-candidate
+```
+
+On the Deck, open Konsole in Desktop Mode. Check the game's selected
+compatibility tool in Steam Properties → Compatibility. List registrations
+and match its display name to the corresponding VDF file:
+
+```bash
+grep -H -E '"(display_name|install_path)"' "$HOME/.local/share/Steam/compatibilitytools.d/"*.vdf
+```
+
+Paste the matching VDF's absolute path when prompted below. The script reads
+its registered install path, verifies the entry point and bridge, validates the
+candidate, makes a unique backup preserving permissions, then replaces only
+the bridge using a temporary file in the same directory. An error stops the
+operation. Do not proceed if the displayed registration is not the selected
+tool. Nonstandard registrations need their actual path supplied instead.
+
+```bash
+(
+    set -euo pipefail
+    read -r -p 'Selected tool registration (absolute VDF path): ' REGISTRATION
+    cat -- "$REGISTRATION"
+    TOOL=$(python3 - "$REGISTRATION" <<'PYTHON'
+import json, re, sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text()
+paths = re.findall(r'"install_path"\s*("(?:[^"\\]|\\.)*")', text)
+if len(paths) != 1:
+    raise SystemExit('Expected exactly one registered install_path; inspect registration manually')
+print(json.loads(paths[0]))
+PYTHON
+    )
+    test -x "$TOOL/lepton-x86_64-entry"
+    BRIDGE="$TOOL/tools/lepton-gamescope-bridge"
+    test -f "$BRIDGE" && test -x "$BRIDGE" && test ! -L "$BRIDGE"
+    printf 'Bridge to replace: %s\n' "$BRIDGE"
+    read -r -p 'Does this match the selected Steam tool? Type yes: ' CONFIRM
+    test "$CONFIRM" = yes
+    CANDIDATE="$HOME/lepton-gamescope-bridge-candidate"
+    bash -n "$CANDIDATE"
+    grep -n 'LEPTON_GAMING_TOUCH_MODE' "$CANDIDATE"
+    BACKUP="${BRIDGE}.before-gaming-touch-$(date +%Y%m%dT%H%M%S)-$$"
+    cp -p -- "$BRIDGE" "$BACKUP"
+    cmp -- "$BRIDGE" "$BACKUP"
+    printf 'Backup for rollback: %s\n' "$BACKUP"
+    TEMP=$(mktemp "$TOOL/tools/.lepton-gamescope-bridge.XXXXXX")
+    trap 'rm -f -- "$TEMP"' EXIT
+    cat -- "$CANDIDATE" > "$TEMP"
+    chmod --reference="$BRIDGE" "$TEMP"
+    test -x "$TEMP"
+    bash -n "$TEMP"
+    mv -f -- "$TEMP" "$BRIDGE"
+    cmp -- "$CANDIDATE" "$BRIDGE"
+    printf 'Installed bridge: %s\n' "$BRIDGE"
+)
+```
+
+In Gaming Mode, use the [three launch options](INSTALL-STEAM-DECK.md#gaming-mode-touch-experiments)
+to compare the same installed game. Earlier candidate-path or Gamescope `PATH`
+wrappers in Launch Options would bypass or mask the installed bridge; use the
+listed option by itself for this comparison. Check the selected mode in
+`~/.steam/steam/logs/lepton-steamlaunch-APPID.log`. Test a physical mouse,
+Steam Input mouse emulation and the actual touchscreen separately. A touchpad
+emulating a mouse does not validate native touchscreen delivery.
+
+To roll back, stop the game and run the following with the two exact paths
+printed above; this restores the backed-up bridge and its executable mode:
+
+```bash
+cp -p -- '/absolute/path/printed/as/Backup for rollback' '/absolute/path/printed/as/Installed bridge'
+```
+
+The repository source and installed tool remain separate; later bundle updates
+may replace this local bridge patch. Keep the backup until testing is complete.
+
 ## Optional ARM64 translation
 
 NDK deployment is **opt-in**. Native x86_64 is the default because the translator
