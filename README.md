@@ -4,8 +4,9 @@ Run Android games from Steam on a Steam Deck.
 
 Lepton x86_64 is a community port of [Valve's Lepton](https://gitlab.steamos.cloud/frame-public/lepton)
 to x86_64 Linux. Each Android game becomes a normal Steam shortcut: you press
-Play, and Lepton starts Android 14 in a container, shows the game full screen
-with the Deck's controls and touchscreen, and keeps its saves between launches.
+Play, and Lepton starts Android 14 in a container, shows the game (full screen
+in Gaming Mode, in a window in Desktop Mode) with the Deck's controls and
+touchscreen, and keeps its saves between launches.
 
 > **Unofficial and experimental.** This project is not affiliated with,
 > supported by, or endorsed by Valve. It targets the Steam Deck; other
@@ -93,7 +94,8 @@ Properties > Launch Options, followed by `%command%`:
 | `LEPTON_GAMEPAD_PASSTHROUGH=false` | Don't pass controllers to Android |
 | `LEPTON_STOP_SAVE_WAIT=<s>`, `LEPTON_STOP_SHUTDOWN_WAIT=<s>` | Time given to the game to save at Stop (default 3 s) and to Android to shut down (default 5 s); `0` and `0` stop instantly |
 | `LEPTON_NDK_TRANSLATION_MODE=light-translate-or-interpret` | ARM64 games on an NDK bundle: slower, most compatible translation |
-| `LEPTON_DESKTOP_WINDOWED=1`, `LEPTON_RESOLUTION=WIDTHxHEIGHT` | Desktop Mode: a 1280×800 window, or a window of any size, instead of full screen |
+| `LEPTON_DESKTOP_FULLSCREEN=1` | Desktop Mode: fill the screen instead of a movable window ([Desktop Mode](INSTALL-STEAM-DECK.md#desktop-mode-and-gaming-mode)) |
+| `LEPTON_RESOLUTION=WIDTHxHEIGHT` | Android's screen size; in Desktop Mode also the window's size |
 
 ## What works
 

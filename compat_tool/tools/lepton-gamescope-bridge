@@ -77,6 +77,9 @@ export SteamAppId="$app_id"
 # Gaming Mode must keep its tested SDL/X11 fullscreen path. A KDE Plasma
 # Wayland desktop can instead use Gamescope's native Wayland window backend.
 # Wayland variables alone are not sufficient: Gaming Mode is also Wayland.
+# SteamOS's Gaming Mode session exports GAMESCOPE_WAYLAND_DISPLAY. Without that
+# or a KDE session, prefer a desktop window: a fullscreen Gaming Mode window on
+# a desktop has no way out on a Steam Deck.
 display_mode="${LEPTON_DISPLAY_MODE:-auto}"
 case "$display_mode" in
     auto)
@@ -85,7 +88,13 @@ case "$display_mode" in
         if [[ "${XDG_SESSION_TYPE:-}" == wayland &&
               " $session_hint " =~ (kde|plasma) ]]; then
             display_mode=desktop
+        elif [[ -n "${GAMESCOPE_WAYLAND_DISPLAY:-}" ]]; then
+            display_mode=gaming
+        elif [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+            echo "WARNING: display mode uncertain (no KDE or Gamescope session found); using a desktop window. Set LEPTON_DISPLAY_MODE=gaming to override." >&2
+            display_mode=desktop
         else
+            echo "WARNING: display mode uncertain and no Wayland display; using the Gaming Mode (X11) path. Set LEPTON_DISPLAY_MODE to override." >&2
             display_mode=gaming
         fi
         ;;
@@ -119,10 +128,16 @@ if [[ "$display_mode" == desktop && "${LEPTON_DESKTOP_DIRECT:-0}" == 1 ]]; then
     exec "$@"
 fi
 
-# Android's screen size is fixed when it starts, so pick it now. On the
-# desktop, as in Gaming Mode, use the main screen's real size and go
-# fullscreen. LEPTON_DESKTOP_WINDOWED=1 keeps a movable 1280x800 window;
-# LEPTON_RESOLUTION=WxH sets any size (windowed on the desktop).
+# Android's screen size is fixed when it starts, so pick it now.
+# Desktop: a movable KDE window at 80% of the usable desktop, 16:10 (1024x640
+# on a Steam Deck, also the fallback), so the title bar and panel stay
+# reachable. LEPTON_DESKTOP_FULLSCREEN=1 fills the main screen instead.
+# LEPTON_RESOLUTION=WxH sets Android's size in either case (the window's size
+# when windowed). LEPTON_DESKTOP_WINDOWED=1 is the default and still accepted.
+# Gaming Mode: unchanged; the screen's size, or LEPTON_RESOLUTION, fullscreen.
+#
+# Prints the main screen as "physical_w physical_h logical_w logical_h", with
+# rotation applied (the Deck's panel is 800x1280, rotated) and scale for logical.
 desktop_screen_size() {
     command -v kscreen-doctor >/dev/null 2>&1 || return 1
     kscreen-doctor -j 2>/dev/null | python3 -c '
@@ -132,18 +147,44 @@ outputs.sort(key=lambda o: o.get("priority") or 99)  # 1 = main screen
 for o in outputs:
     mode = {m["id"]: m for m in o.get("modes", [])}.get(o.get("currentModeId"))
     if mode:
-        print("%dx%d" % (mode["size"]["width"], mode["size"]["height"]))
+        w, h = mode["size"]["width"], mode["size"]["height"]
+        if o.get("rotation") in (2, 8):  # left / right: portrait panel
+            w, h = h, w
+        scale = float(o.get("scale") or 1) or 1
+        print(w, h, int(w / scale), int(h / scale))
         break
 ' 2>/dev/null
 }
 resolution="${LEPTON_RESOLUTION:-}"
+if [[ "$display_mode" == desktop && -n "$resolution" && ! "$resolution" =~ ^[1-9][0-9]*x[1-9][0-9]*$ ]]; then
+    echo "WARNING: Invalid LEPTON_RESOLUTION: $resolution (expected WIDTHxHEIGHT); using the default" >&2
+    resolution=""
+fi
 desktop_fullscreen=()
-if [[ -z "$resolution" && "$display_mode" == desktop ]]; then
-    if [[ "${LEPTON_DESKTOP_WINDOWED:-0}" != 1 ]] &&
-       resolution="$(desktop_screen_size)" && [[ -n "$resolution" ]]; then
+if [[ "$display_mode" == desktop ]]; then
+    if [[ "${LEPTON_DESKTOP_FULLSCREEN:-0}" == 1 && "${LEPTON_DESKTOP_WINDOWED:-0}" == 1 ]]; then
+        echo "WARNING: LEPTON_DESKTOP_FULLSCREEN=1 and LEPTON_DESKTOP_WINDOWED=1 both set; using a window" >&2
+    elif [[ "${LEPTON_DESKTOP_FULLSCREEN:-0}" == 1 ]]; then
         desktop_fullscreen=(-f)
-    else
-        resolution=1280x800
+    fi
+    if [[ -z "$resolution" ]]; then
+        resolution=1024x640
+        if read -r phys_w phys_h logical_w logical_h < <(desktop_screen_size) &&
+           [[ "$phys_w $phys_h $logical_w $logical_h" =~ ^[1-9][0-9]*\ [1-9][0-9]*\ [1-9][0-9]*\ [1-9][0-9]*$ ]]; then
+            if (( ${#desktop_fullscreen[@]} )); then
+                resolution="${phys_w}x${phys_h}"
+            else
+                # 80% of the desktop, 16:10, even sizes.
+                width=$(( logical_w * 8 / 10 ))
+                height=$(( width * 10 / 16 ))
+                if (( height > logical_h * 8 / 10 )); then
+                    height=$(( logical_h * 8 / 10 ))
+                    width=$(( height * 16 / 10 ))
+                fi
+                (( width >= 320 && height >= 200 )) &&
+                    resolution="$(( width / 2 * 2 ))x$(( height / 2 * 2 ))"
+            fi
+        fi
     fi
 fi
 if [[ -z "$resolution" ]]; then
@@ -159,13 +200,15 @@ fi
 width="${resolution%x*}"
 height="${resolution#*x}"
 
-echo "Lepton Gamescope mode: $display_mode; resolution: ${width}x${height}"
+window=fullscreen
+[[ "$display_mode" != desktop || ${#desktop_fullscreen[@]} -gt 0 ]] || window=windowed
+echo "Lepton Gamescope mode: $display_mode; resolution: ${width}x${height}; $window"
 
 lepton_check_binder || exit 1
 
 if [[ "$display_mode" == desktop ]]; then
-    # A KDE window (fullscreen at the screen's size unless asked otherwise),
-    # no X11 Steam window tagging.
+    # A movable KDE window (fullscreen only on request), no X11 Steam window
+    # tagging. Never --borderless: Plasma's title bar is the way out.
     # The inner gamescope sets WAYLAND_DISPLAY for the Lepton container.
     ENABLE_GAMESCOPE_WSI=0 gamescope --backend wayland --expose-wayland "${desktop_fullscreen[@]}" \
         -W "$width" -H "$height" -w "$width" -h "$height" \
