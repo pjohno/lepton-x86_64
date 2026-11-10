@@ -148,18 +148,20 @@ See [RELEASING.md](RELEASING.md#trust-model).
 
 ### Game data when you change versions
 
-Each release (and each bundle someone builds) has its own Android image. Android
-app data made with one image can't be opened by another, because the images'
-system data and credentials differ.
+Launcher-only updates can reuse the same validated Android image and sysbake.
+Changing the Lepton release version or tool name does not reset game data.
+Existing profiles remain under the same Steam AppID's compatdata directory.
 
-**When a game changes to a different version** (an update, a downgrade, a
-replaced tool, or switching the game to another Lepton tool), Lepton starts it
-with fresh Android data on its next launch:
-- **reset:** installed apps, sign-ins, and saves kept only on the device;
-- **kept:** shared storage (`/sdcard`) and online or cloud saves.
+Independently built Android images or sysbakes can have incompatible system
+and credential state, even when built from the same source. If the recorded
+runtime fingerprint differs or is unknown, the fixed launcher preserves the
+profile and stops with a diagnostic. Select its original runtime to reuse it;
+do not force a different image to boot against it. Invalid installations and
+changed APK contents also preserve data and stop for diagnosis.
 
-Keeping the same Steam shortcut, AppID or tool ID doesn't keep this data.
-**Repairing the same version keeps it.**
+Older Lepton tools may still reset profiles automatically. Use a fixed tool
+when testing reuse, and see [Game data between launches](#game-data-between-launches)
+for explicit reset scope and compatibility checks.
 
 Separately, Steam's **Stop** button gives the game a few seconds to save before
 Android shuts down (see [Game data between launches](#game-data-between-launches)). A game that only
@@ -359,20 +361,38 @@ slower, most compatible mode (see `compat_tool/liblepton/ndk_auxv/README.md`).
 A game's Android data (the installed app and everything it saves internally) is
 kept between launches, so the APK is not reinstalled each time and progress
 stays. It lives in Steam's compatdata folder for that shortcut, not in the
-Lepton install, so it survives updating or replacing an install. It is reset
-automatically (with a message in the Lepton log) when the game would start on a
-different Android image, for example after switching the game to another Lepton
-tool or installing a bundle with a new Android build; data a game keeps in
-shared storage (`/sdcard`) is never reset. To reset one game by hand, launch it
-once with the launch option `LEPTON_RESET_APP_DATA=true %command%`, then remove
-the option. `LEPTON_KEEP_APP_DATA=false %command%` restores the old behaviour
-(fresh install on every launch).
+Lepton install, so it survives updating or replacing an install when Android
+and sysbake are identical. Launcher version changes and APK timestamps do not
+invalidate it. Short exits, crashes and failed installations never reset it.
+
+A missing or different runtime fingerprint stops launch and preserves the
+profile. Use the original Android image and sysbake. An incomplete installation
+or changed APK also stops launch with a diagnostic; automatic in-place repair
+is pending validation of Lepton's APK overlay. Back up the profile before
+investigating metadata or installing an update. Do not reset to resolve an error
+unless you intend to discard the Android profile.
+
+To explicitly discard **only the selected game's `baked/` Android profile**,
+stop the game, back it up, then launch once with
+`LEPTON_RESET_APP_DATA=true %command%` and remove that option immediately.
+This removes installed code, Android-private saves and Android system state in
+`baked/`. It retains `external/` shared storage and legacy `internal/` files;
+legacy data retained outside `baked/` is not a promise of automatic recovery.
+Reset refuses active profiles and reports deletion failures.
+`LEPTON_KEEP_APP_DATA=false` is now ignored with a warning: inherited launch
+options cannot authorise deletion. `cleanup_all` stops/removes containers and
+retains profiles. The separate Deck clean-slate utility remains an explicitly
+confirmed destructive administrative action; do not use it for persistence tests.
 
 When you press Stop in Steam, Lepton first sends the game to the background
 (as if you pressed Home) and waits 3 seconds so it can save, then lets Android
 shut down for up to 5 seconds before stopping it. Stop therefore takes a few
-seconds. Games that only save when paused or closed (for example sign-ins
-without Google Play services) keep that data. The waits can be changed with
+seconds. This gives games a chance to save; it cannot make a game write
+progress. **Save through the game before using Steam Stop.** In 2048, use the
+game's own Exit function to save the latest board. Going back through previous
+moves also triggers a save. Deck testing found that Steam Stop retained the
+previous saved board but did not save the latest moves by itself.
+The waits can be changed with
 `LEPTON_STOP_SAVE_WAIT=<seconds>` and `LEPTON_STOP_SHUTDOWN_WAIT=<seconds>`;
 setting both to `0` gives the old instant stop.
 

@@ -135,7 +135,13 @@ if [ "$?" = "0" ] && [ "$1" = "package" ] && { [ "$2" = "install" ] || [ "$2" = 
     if [[ "$(android_sdk_version)" == "30" ]]; then
         cmd_real package compile --compile-layouts ${APP_ID} | grep -v Success;
     fi
-    rm -rf /data/media/0/Android/obb/${APP_ID};
+    # OBB storage can contain user files. Preserve any real path and refuse
+    # to repoint an existing link to a different installed code directory.
+    local OBB_LINK="/data/media/0/Android/obb/${APP_ID}"
+    if [[ -e "$OBB_LINK" && ! -L "$OBB_LINK" ]]; then
+        echo "Existing OBB data preserved at $OBB_LINK; installation stopped" >&2
+        exit 1
+    fi
     mkdir -p /data/media/0/Android/obb
 
     APP_PATH="$(package_install_dir "$APP_ID")"
@@ -169,7 +175,14 @@ if [ "$?" = "0" ] && [ "$1" = "package" ] && { [ "$2" = "install" ] || [ "$2" = 
         PARENT_UID=0 PARENT_GID=0 /system/bin/mount -o rbind,rw "/data/steam_app/obb" "${APP_PATH}/obb"
     fi
 
-    ln -s "${OBB_INNER_PATH}" "/data/media/0/Android/obb/${APP_ID}"
+    if [[ -L "$OBB_LINK" ]]; then
+        [[ "$(readlink "$OBB_LINK")" == "$OBB_INNER_PATH" ]] || {
+            echo "Existing OBB link preserved at $OBB_LINK; installation stopped" >&2
+            exit 1
+        }
+    else
+        ln -s "$OBB_INNER_PATH" "$OBB_LINK" || exit 1
+    fi
 
     # Grep the runtime permissions path for a particular permission
     function all_permissions_granted()

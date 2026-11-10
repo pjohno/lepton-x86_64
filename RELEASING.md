@@ -15,7 +15,7 @@ A release of version `VERSION` contains exactly:
 
 | File | Made by |
 | --- | --- |
-| `lepton-x86_64-steamdeck-VERSION.tar.gz` | `make-deck-bundle-x86_64.sh --bundle-id VERSION` |
+| `lepton-x86_64-steamdeck-VERSION.tar.gz` | `make-deck-bundle-x86_64.sh --bundle-id VERSION` (standard release), or `deploy-compat-x86_64.sh --package-only` ([launcher-only release](#launcher-only-releases-using-a-validated-stage)) |
 | `lepton-x86_64-steamdeck-VERSION.tar.gz.sha256` | the same; SHA256 of the archive **and** the installer |
 | `lepton-x86_64-steamdeck-VERSION.install.sh` | the same (`compat_tool/tools/lepton-install-bundle`) |
 | `lepton-x86_64-steamdeck-VERSION.tar.gz.sha256.sig` | `publish-release.sh --execute`, when signing |
@@ -48,6 +48,47 @@ So `v0.1.0-alpha` < `v0.1.0-alpha.2` < `v0.1.0-alpha.10` < `v0.1.0-beta` <
 
 The publisher refuses an archive containing any of these. It also checks that
 the bundle's `BUNDLE.json` says `gapps: false` and `ndk: false`.
+
+## Launcher-only releases using a validated stage
+
+There are two kinds of release:
+
+| | Standard release | Launcher-only release |
+| --- | --- | --- |
+| Use when | The Android image, patches or image inputs changed | Only launcher scripts, injected hooks, tools or docs changed |
+| Android images | Built (step 2) | **Not built.** The previous release's images are reused |
+| Bundle | `make-deck-bundle-x86_64.sh` (step 3) | `deploy-compat-x86_64.sh --package-only` from the validated stage (replaces steps 2 and 3) |
+| sysbake | **New.** Existing game profiles stop with a fingerprint mismatch and need their original tool | **Unchanged.** Existing game profiles keep working |
+
+Steps 1 and 4–9 of the [release workflow](#release-workflow) apply to both.
+A launcher-only release must not run `build-images-x86_64.sh` or
+`make-deck-bundle-x86_64.sh`: the bundle pipeline creates a new sysbake, which
+existing profiles refuse.
+
+Launcher fixes can reuse the tested Android system and sysbake. Use one only
+when the image inputs are unchanged since the images were built: `git diff
+--stat IMAGE_COMMIT HEAD --` followed by the `LEPTON_IMAGE_INPUTS` paths in
+`image-14/scripts/lib/image-provenance.sh` must print nothing. Record full
+rootfs/sysbake manifests and compatibility-input hashes before packaging, then
+use the existing stage read-only, from a clean checkout of the merged release
+commit (the bundle records the commit and whether the tree was clean):
+
+```bash
+bash image-14/scripts/internal/deploy-compat-x86_64.sh --package-only --execute \
+  --stage-dir "$VALIDATED_STAGE" --bundle-dir "$RELEASE_BUNDLE_DIR" \
+  --bundle-id v0.1.1-alpha
+```
+
+This refreshes host runtime scripts and injected launcher hooks in a temporary
+payload. It does not prepare Android or regenerate sysbake. Compare the archive's
+complete Android contents against the baseline, recheck the source stage, and
+verify the packaged scripts against the reviewed checkout. Stop on unexplained
+Android differences. Check that the archive contains `tools/IMAGE-PROVENANCE.txt`
+(it is copied only when the images folder's `BUILD-INFO.txt` matches the
+stage's `build.prop`); the publisher refuses a bundle without it.
+Release/tool identity changes alone must not reset game profiles (see
+[Game data between launches](INSTALL-STEAM-DECK.md#game-data-between-launches)).
+The existing checksum/signing and approval requirements still apply.
 
 ## Release workflow
 

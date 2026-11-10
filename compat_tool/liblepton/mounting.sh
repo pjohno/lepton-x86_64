@@ -39,6 +39,21 @@ function android_sdk_version()
     cat "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/system/build.prop" | grep ro.build.version.sdk= | sed "s/.*=//g"
 }
 
+# Replace only a recognised symlink. A real directory/file is user data.
+function safe_storage_link()
+{
+    local TARGET="$1" LINK="$2"
+    if [[ -L "$LINK" ]]; then
+        [[ "$(readlink -- "$LINK")" == "$TARGET" ]] && return 0
+        println "ERROR: unexpected storage link retained: $LINK; inspect it before changing storage mapping" >&2
+        return 1
+    elif [[ -e "$LINK" ]]; then
+        println "ERROR: real storage path retained: $LINK; back it up and resolve the mapping manually" >&2
+        return 1
+    fi
+    ln -s -- "$TARGET" "$LINK"
+}
+
 function setup_mounts()
 {
     mkdir -p "$(data_mount_path)"
@@ -144,7 +159,6 @@ function setup_mounts()
         if [[ -d "$(data_mount_path)/media" ]]; then
             chmod u+rwx -- "$(data_mount_path)/media"
         fi
-        rm -rf "$(data_mount_path)/media/0"
         mkdir -p "$(data_mount_path)/media"
         local TARGET_PATH="$(data_mount_path)/media/0"
         if [[ -d "${STEAM_COMPAT_DATA_PATH:-}" ]]; then
@@ -153,16 +167,13 @@ function setup_mounts()
             mkdir -p "${TARGET_PATH}"
         fi
         if [[ -d "${HOME}/Documents" ]]; then
-            rm -rf "${TARGET_PATH}/Documents"
-            ln -s "${HOME}/Documents" "${TARGET_PATH}/Documents"
+            safe_storage_link "${HOME}/Documents" "${TARGET_PATH}/Documents" || die "Shared storage preserved; launch stopped"
         fi
         if [[ -d "${HOME}/Downloads" ]]; then
-            rm -rf "${TARGET_PATH}/Download"
-            ln -s "${HOME}/Downloads" "${TARGET_PATH}/Download"
+            safe_storage_link "${HOME}/Downloads" "${TARGET_PATH}/Download" || die "Shared storage preserved; launch stopped"
         fi
         if [[ -d "${HOME}/Videos" ]]; then
-            rm -rf "${TARGET_PATH}/Movies"
-            ln -s "${HOME}/Videos" "${TARGET_PATH}/Movies"
+            safe_storage_link "${HOME}/Videos" "${TARGET_PATH}/Movies" || die "Shared storage preserved; launch stopped"
         fi
         if [[ -d "${STEAM_COMPAT_DATA_PATH:-}" ]]; then
             local GUEST_EXTERNAL_PATH="${STEAM_COMPAT_DATA_PATH}/external"
@@ -173,7 +184,7 @@ function setup_mounts()
                 GUEST_EXTERNAL_PATH="$LEPTON_PROFILE_EXTERNAL_STORAGE"
                 podman_mount_entry "${STEAM_COMPAT_DATA_PATH}/external" "$GUEST_EXTERNAL_PATH" rw
             fi
-            ln -s "$GUEST_EXTERNAL_PATH" "$(data_mount_path)/media/0"
+            safe_storage_link "$GUEST_EXTERNAL_PATH" "$(data_mount_path)/media/0" || die "Shared storage preserved; launch stopped"
         fi
         podman_mount_entry_optional "${HOME}/Documents" "${HOME}/Documents" rw
         podman_mount_entry_optional "${HOME}/Videos" "${HOME}/Videos" rw
@@ -743,19 +754,8 @@ function ensure_permissions_ok()
             fi
         fi
 
-        if [[ -n "${STEAM_COMPAT_DATA_PATH:-}" ]]; then
-            COMPAT_DATA_PATH_STAT="$(stat --format "%u:%g" "${STEAM_COMPAT_DATA_PATH:-}" 2>/dev/null || true)"
-            if [[ -n "${COMPAT_DATA_PATH_STAT}" ]] && [[ "${COMPAT_DATA_PATH_STAT}" != "$(id -u):$(id -g)" ]]; then
-                # If it's a directory it may not be empty, so we can't rm it => move it.
-                mv "${STEAM_COMPAT_DATA_PATH:-}" "${STEAM_COMPAT_DATA_PATH:-}"-backup
-                MOVED_INACCESSIBLE+="${STEAM_COMPAT_DATA_PATH:-}-backup "
-            fi
-            for not_owned_by_us in $(find "${STEAM_COMPAT_DATA_PATH:-}" -maxdepth 1 -type d \( ! -uid "$(id -u)" -a ! -name "*-backup" \) 2>/dev/null || true); do
-                # If it's a directory it may not be empty, so we can't rm it => move it.
-                mv "${not_owned_by_us}" "${not_owned_by_us}"-backup
-                MOVED_INACCESSIBLE+="${not_owned_by_us}-backup "
-            done
-        fi
+        # Android-owned profile directories must keep their location and owner.
+        # Moving one aside can silently make a subsequent launch look empty.
         if [[ -n "${STEAM_COMPAT_SHADER_PATH:-}" ]]; then
             SHADER_PATH_STAT="$(stat --format "%u:%g" "${STEAM_COMPAT_SHADER_PATH:-}" 2>/dev/null || true)"
             if [[ -n "${SHADER_PATH_STAT}" ]] && [[ "${SHADER_PATH_STAT}" != "$(id -u):$(id -g)" ]]; then
@@ -777,12 +777,7 @@ function ensure_permissions_ok()
 
 function continue_boot_after_bake()
 {
-    # Allow the launch to proceed.
-    if is_app; then
-        podman_attach sh -c "rm -rf /data/data/$(get_app_id); \
-                             ln -s ${STEAM_COMPAT_DATA_PATH}/internal/$(get_app_id) /data/data/$(get_app_id); \
-                             setprop ro.lepton.app_baked 1"
-    else
-        podman_attach sh -c "setprop ro.lepton.app_baked 1"
-    fi
+    # Android's package manager owns app-private data. Never replace it with
+    # a fresh legacy host directory after installation or repair.
+    podman_attach sh -c "setprop ro.lepton.app_baked 1"
 }

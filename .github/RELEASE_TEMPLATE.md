@@ -55,12 +55,11 @@ for details, including installing by double-click.
 
 - **Game compatibility varies:** many games work, some don't, and some need
   Google services.
-- **Each release has its own Android image.** Android app data (installed apps,
-  sign-ins, saves stored only on the device) does not move between releases or
-  other independently built bundles. When a game switches to a different Lepton
-  tool, or its tool is updated or downgraded, the game starts with fresh Android
-  data. Shared storage (`/sdcard`) and online or cloud saves are kept.
-  **Repairing** the same version keeps the data.
+- **Android profile compatibility:** launcher-only releases can reuse data when
+  the Android runtime and sysbake are unchanged. Different or unknown runtime
+  fingerprints preserve the profile and stop launch; they never reset it
+  automatically. Independently generated sysbakes may be incompatible even
+  with identical Android sources. Older tools can still contain reset bugs.
 - **Steam's Stop button** gives the game a few seconds to save before Android
   shuts down, so Stop takes a few seconds. A game that only saves at certain
   points (for example at checkpoints) can still lose progress since its last

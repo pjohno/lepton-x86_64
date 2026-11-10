@@ -16,15 +16,15 @@ Everything the build makes goes into one folder, the **workspace**, set by
 build never writes elsewhere in your home folder (except Podman's builder
 image).
 
-| Folder | What it holds |
-| --- | --- |
-| `aosp/` | The **checkout**: the Android 14 (AOSP) sources and their build output (`aosp/out/`). |
-| `images/` | `system.img` and `vendor.img` from the latest build, with checksums and `BUILD-INFO.txt` (what they were built from). |
-| `rootfs/` | The **rootfs**: those images unpacked into one folder, ready for bundling. |
-| `stages/<ID>/` | One **stage** per bundle: the working folder in which `make-deck-bundle` assembles it. You never edit it, and can delete it once the bundle exists. |
-| `bundles/` | Finished **bundles**: `.tar.gz`, `.sha256` checksum and `.install.sh` installer. This is what goes to the Deck. |
-| `logs/` | Logs of every step. |
-| `google-inputs/` | Optional GApps, NDK and Widevine inputs, made from your Google zip. |
+| Folder             | What it holds                                                                                                                                               |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `aosp/`          | The **checkout**: the Android 14 (AOSP) sources and their build output (`aosp/out/`).                                                               |
+| `images/`        | `system.img` and `vendor.img` from the latest build, with checksums and `BUILD-INFO.txt` (what they were built from).                                 |
+| `rootfs/`        | The **rootfs**: those images unpacked into one folder, ready for bundling.                                                                            |
+| `stages/<ID>/`   | One **stage** per bundle: the working folder in which `make-deck-bundle` assembles it. You never edit it, and can delete it once the bundle exists. |
+| `bundles/`       | Finished **bundles**: `.tar.gz`, `.sha256` checksum and `.install.sh` installer. This is what goes to the Deck.                                 |
+| `logs/`          | Logs of every step.                                                                                                                                         |
+| `google-inputs/` | Optional GApps, NDK and Widevine inputs, made from your Google zip.                                                                                         |
 
 You only run the scripts in `image-14/scripts/` itself. The ones in
 `image-14/scripts/internal/` are building blocks those scripts call; you only
@@ -32,8 +32,7 @@ need them when debugging a failed step.
 
 ## Requirements
 
-- x86_64 Linux (tested on Fedora 44) with rootless Podman, and an AMD GPU if
-  you also want to test locally.
+- x86_64 Linux (tested on Fedora 44) with rootless Podman, and an AMD GPU if you also want to test locally.
 - About **350 GB** free for the workspace (sources about 265 GB, build output
   about 70 GB) plus a few GB for each bundle. `LEPTON_MIN_FREE_GIB` (default 200)
   is checked before each step.
@@ -46,8 +45,8 @@ need them when debugging a failed step.
 ## 0. One-time setup
 
 ```bash
-git clone --recurse-submodules <this repository> lepton86-public
-cd lepton86-public
+git clone --recurse-submodules https://github.com/pjohno/lepton-x86_64
+cd lepton-x86_64
 cp .build-env.example .build-env    # then edit it, see below
 podman build -t lepton-builder-ubuntu26:latest \
     -f image-14/.buildscripts_x86_64/Containerfile.ubuntu26 image-14/.buildscripts_x86_64
@@ -240,8 +239,7 @@ bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id base-YYYY
   the build had recorded them as finished. Just run the build again: it
   notices that the previous run did not finish ("The previous image build did
   not finish"), deletes the damaged files it finds and rebuilds only those.
-  If a build still fails with errors such as `neither ET_REL nor LLVM
-  bitcode`, `file format not recognized` or `file truncated` (the build then
+  If a build still fails with errors such as `neither ET_REL nor LLVM bitcode`, `file format not recognized` or `file truncated` (the build then
   prints a hint), check the whole output and continue:
 
   ```bash

@@ -70,6 +70,8 @@ function extract_app_activity()
 
 function extract_app_hash()
 {
+    # Keep the original meaning of app_hash: the base APK's content hash.
+    # Archive identity selects an extraction cache, not installed-code identity.
     sha256sum "${1:-$(get_apk_path)}" | awk '{print $1}'
 }
 
@@ -101,9 +103,7 @@ APP_MOUNT_DIR=""
 function get_app_mount_dir()
 {
     local DIR
-    DIR="$(cached_app_metadata APP_MOUNT_DIR extract_app_mount_dir)"
-    # x86_64 port: earlier runs could cache an empty value; read it again.
-    [[ -n "${DIR}" ]] || DIR="$(extract_app_mount_dir)"
+    DIR="$(extract_app_mount_dir)"
     print "${DIR}"
 }
 

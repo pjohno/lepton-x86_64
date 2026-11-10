@@ -49,12 +49,15 @@ function prepare_apkm()
 {
     local APKM="$1" KEY CACHE_ROOT CACHE ABI
     [[ -n "${STEAM_COMPAT_DATA_PATH:-}" ]] || die "Split-APK bundles (.apkm) need a Steam launch (STEAM_COMPAT_DATA_PATH)."
-    KEY="$(sha256sum "${APKM}" | cut -c1-16)" || die "Cannot read ${APKM}"
+    LEPTON_APKM_HASH="$(sha256sum "${APKM}" | cut -d' ' -f1)" || die "Cannot read ${APKM}"
+    export LEPTON_APKM_HASH
+    KEY="${LEPTON_APKM_HASH:0:16}"
     CACHE_ROOT="${STEAM_COMPAT_DATA_PATH}/lepton-apkm"
     CACHE="${CACHE_ROOT}/${KEY}"
     if [[ ! -f "${CACHE}/base.apk" ]]; then
-        rm -rf -- "${CACHE_ROOT}"
         mkdir -p -- "${CACHE_ROOT}"
+        # Only this key's unfinished scratch copy; completed caches are kept.
+        rm -rf -- "${CACHE}.tmp"
         python3 - "${APKM}" "${CACHE}.tmp" <<'PY' || die "Cannot unpack ${APKM} (expected an APKMirror-style bundle with base.apk)."
 import re, shutil, sys, zipfile
 from pathlib import Path
