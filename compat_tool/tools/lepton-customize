@@ -229,7 +229,8 @@ def retained(name):
                             'lepton-x86_64-entry', 'toolmanifest.vdf'} or (len(parts) == 2 and name.endswith('.md'))
     if parts[0] == 'tools':
         return len(parts) == 1 or parts[1] in {'bin', 'native', 'lib', 'licenses', 'customize'} or (len(parts) == 2 and name.endswith('.txt'))
-    return name in ('CUSTOMIZING.md', 'GAPPS.md') or name.startswith('tests/runtime/') and name.endswith(('.sh', '.py', '.md'))
+    return name in ('CUSTOMIZING.md', 'GAPPS.md', 'tests', 'tests/runtime') or \
+        name.startswith('tests/runtime/') and name.endswith(('.sh', '.py', '.md'))
 
 
 class Bundle:

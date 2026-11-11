@@ -406,6 +406,44 @@ def packaged(name, core):
     return core.retained(name)
 
 
+PRIVATE_NAMES = {'.git', '.ssh', '.aws', '__pycache__', 'podman-storage', 'compatdata', 'lepton-apkm',
+                 'app_overlay', 'data_overlay'}
+PRIVATE_PREFIXES = ('.runtime-profile', '.sysbake-', '.lepton-', '.STAGE.json')
+
+
+def stage_entries(root, generated, core):
+    """Packaged stage paths, parents first.
+
+    Each file is decided on its own path; a directory is packaged when it is
+    itself distributable or holds something that is (e.g. tests/runtime).
+    Android sockets are never archived, as with GNU tar. Private and work
+    areas are not entered; any other unreadable directory is an error.
+    """
+    def failed(error):
+        raise core.InvalidBundle(f'Cannot read stage directory {error.filename}: {error.strerror}')
+    included = set()
+    for parent, dirs, files in os.walk(root, onerror=failed, followlinks=False):
+        relative = Path(parent).relative_to(root).as_posix()
+        prefix = '' if relative == '.' else relative + '/'
+        dirs[:] = sorted(d for d in dirs if d not in PRIVATE_NAMES and not d.startswith(PRIVATE_PREFIXES)
+                         and not (prefix == '' and d == 'source-bundle'))
+        for item in dirs:
+            if packaged(prefix + item, core):
+                included.add(prefix + item)
+        for item in files:
+            name = prefix + item
+            if name in generated or not packaged(name, core):
+                continue
+            info = (root / name).lstat()
+            if stat.S_ISSOCK(info.st_mode) and name.startswith(L.SYSBAKE):
+                continue
+            core.require(stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode), f'Unsupported stage entry: {name}')
+            included.add(name)
+    for name in list(included):
+        included.update(parent.as_posix() for parent in Path(name).parents if str(parent) != '.')
+    return sorted(included)
+
+
 def safe_id(value, pattern, label, core, limit):
     core.require(isinstance(value, str) and len(value) <= limit and re.fullmatch(pattern, value), f'Invalid {label}: {value!r}')
     return value
@@ -600,27 +638,8 @@ def package_main(args, core):
     for file in generated:
         core.require(core.canonical(file) == file, f'Unsafe generated path: {file}')
 
-    entries = []
-    size = 0
-    for parent, dirs, files in os.walk(root, followlinks=False):
-        dirs.sort()
-        relative_parent = Path(parent).relative_to(root).as_posix()
-        for item in list(dirs):
-            name = item if relative_parent == '.' else f'{relative_parent}/{item}'
-            if not packaged(name, core):
-                dirs.remove(item)
-                continue
-            entries.append(name)
-        for item in sorted(files):
-            name = item if relative_parent == '.' else f'{relative_parent}/{item}'
-            if name in generated or not packaged(name, core):
-                continue
-            entries.append(name)
-            info = (root / name).lstat()
-            if stat.S_ISSOCK(info.st_mode) and name.startswith(L.SYSBAKE):
-                continue  # Android sockets are never archived (as with GNU tar).
-            core.require(stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode), f'Unsupported stage entry: {name}')
-            size += info.st_size
+    entries = stage_entries(root, generated, core)
+    size = sum((root / name).lstat().st_size for name in entries)
     for name in entries:
         core.require(not ADB_PATTERN.search(name) or name.startswith((L.ROOTFS, L.SYSBAKE)),
                      f'Refusing to package Google host adb: {name}')

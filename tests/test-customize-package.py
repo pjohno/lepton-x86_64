@@ -56,6 +56,8 @@ cp -- "$packages" sysbake/system/packages.xml
 printf 'keys\n' > sysbake/misc/keystore/user_0
 printf 'onboot\n' > sysbake/lepton-onboot
 ln -s /data/user/0 sysbake/user_de/current
+# Android leaves Unix sockets in /data/system; tar never archives them.
+python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' sysbake/system/ndebugsocket
 chmod 0700 sysbake/misc/keystore
 chmod 0600 sysbake/misc/keystore/user_0
 setfattr -n user.default -v 0x3001 sysbake/system
@@ -188,6 +190,10 @@ def extend_bundle(base, adb_sha):
     if M.ROOTFS + 'system/framework/services.jar' not in base.nodes:
         base.put(M.ROOTFS + 'system/framework/services.jar', b'framework', 0o644)
     base.put('GAPPS.md', b'GApps guide\n', 0o644)
+    # Runtime helpers the installer links (lepton-run-apk) and add-game uses.
+    for helper in ('run-apk.sh', 'unpack-apkm.py', 'read-gsf-id.py', 'README.md'):
+        base.put('tests/runtime/' + helper, (REPO / 'tests/runtime' / helper).read_bytes(),
+                 0o644 if helper.endswith('.md') else 0o755)
 
 
 class Harness:
@@ -381,6 +387,11 @@ class SysbakePackageTests(Harness, unittest.TestCase):
         self.assertTrue((dest / 'compat_tool/sysbake/system/packages.xml').is_file())
         self.assertTrue((home / '.local/share/Steam/compatibilitytools.d/lepton_custom_my_build.vdf').is_file())
         self.assertTrue((dest / 'tools/platform-tools/adb').is_file())
+        self.assertTrue((home / '.local/bin/lepton-run-apk').resolve().is_file(), 'lepton-run-apk must resolve')
+        for helper in ('run-apk.sh', 'unpack-apkm.py', 'read-gsf-id.py'):
+            self.assertIn('./tests/runtime/' + helper, members)
+        self.assertTrue((self.stage / 'compat_tool/sysbake/system/ndebugsocket').is_socket())
+        self.assertNotIn('./compat_tool/sysbake/system/ndebugsocket', members)
 
     def test_sysbake_failure_leaves_stage_unbaked(self):
         before = self.state(self.stage)
@@ -640,6 +651,11 @@ class RestoreTests(Harness, unittest.TestCase):
                         summary['sysbake_xattrs_identical'] and summary['fingerprint_inputs_identical'])
         self.assertTrue(summary['differences_confined_to_launcher_tooling_metadata'])
         self.assertIn('tools/platform-tools/adb', report['other_files']['removed'])
+        # Only ADB and private/local state may disappear in a repack.
+        allowed = re.compile(r'^(tools/platform-tools|\.runtime-profile|compat_tool/\.runtime-profile|compatdata|'
+                             r'compat_tool/install-profile|tools/\.ssh)')
+        unexpected = [n for n in report['other_files']['removed'] if not allowed.match(n)]
+        self.assertEqual(unexpected, [], 'repackaging dropped distributable files')
         before, after = scan(self.base.archive), scan(repacked)
         self.assertEqual(before.rootfs, after.rootfs)
         self.assertEqual(before.sysbake, after.sysbake)
