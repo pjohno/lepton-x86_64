@@ -13,13 +13,13 @@
 * ```LEPTON_DEBUG_LAUNCH=true``` to wait e.g. for gdb before continuing execution after forking, but before launching the app.
 * ```LEPTON_GDB_PORT``` to configure the port used by gdb/lldb.
 * ```WAYLAND_DISPLAY``` wayland display socket, used only in 2D app mode.
-* ```XDG_RUNTIME_DIR``` used to determine the pulseaudio socket.
+* ```XDG_RUNTIME_DIR``` used to determine the pulseaudio socket and the per-user launcher lock.
 * ```ENABLE_VULKAN_VALIDATION_LAYER```, ```ENABLE_VULKAN_FDM_INJECTION_LAYER```, ```ENABLE_VULKAN_GFXRECONSTRUCT_LAYER```, ```ENABLE_VULKAN_RPO_LAYER```, ```ENABLE_VULKAN_RENDERDOC_CAPTURE``` can be used to enable the corresponding vulkan layers.  ```ENABLE_VULKAN_VALIDATION_LAYER_LATE``` will perform validation on the application and any other enabled layers, as opposed to only the output from the application itself.
 * ```LEPTON_GFXRECON_*``` envvars are translated to their corresponding ```debug.gfxrecon.*``` Android system properties when the gfxreconstruct layer is enabled. Unprefixed ```GFXRECON_*``` envvars are not considered.
 * ```VK_INSTANCE_LAYERS``` can be a colon separated list containing vulkan layer names which should be enabled.
 * ```LEPTON_FORCE_SOFTWARE``` mostly for gitlab since gpu rendering is not available there.
 * ```LEPTON_NO_CONTEXT``` avoid clearing "baked" app data even if it would otherwise be required or recommended. Use with caution and only during development.
-* ```LEPTON_LOCK_TIMEOUT``` maximum time to wait for the lepton.lock. This is mostly a debugging/test option.
+* ```LEPTON_LOCK_TIMEOUT``` maximum time in seconds to wait for the per-user `lepton.lock` (default 10). Initial acquisition and later re-acquisitions stop the command on failure; a timeout of 0 makes acquisition nonblocking. See [lock paths and launcher-only deployment](../FEDORA-DEBUGGING.md#per-user-launcher-lock).
 * ```LEPTON_APP_LAUNCH_TIMEOUT``` maximum time to wait until an app is considered as failed to start.
 * ```LEPTON_APP_INSTALL_TIMEOUT``` maximum time in seconds to wait for app installation. Defaults to 600.
 * ```LEPTON_NO_PORT_FORWARDING``` disable automatic port forwarding. This is mostly a debugging/test option.

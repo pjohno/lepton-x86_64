@@ -166,7 +166,7 @@ p.write_text(s.replace(old, new, 1))
 PYPOLL
 
 # Patch only the disposable launcher copy: it must not manage the host's
-# podman.service, nor contend on the live Lepton /tmp/lepton.lock.
+# podman.service, nor contend on the live user's Lepton lock.
 python3 - "$WORK/compat_tool/lepton" <<'PY'
 from pathlib import Path
 import sys
@@ -175,13 +175,18 @@ s = p.read_text()
 replacements = [
     ('if systemctl --user is-system-running >/dev/null && [[ -z "${CATATONIT_PID}" ]]; then',
      'if [[ "${LEPTON_ISOLATED_SYSBAKE:-0}" != "1" ]] && systemctl --user is-system-running >/dev/null && [[ -z "${CATATONIT_PID}" ]]; then'),
-    ('exec {LEPTON_LOCKFD}>/tmp/lepton.lock',
-     'exec {LEPTON_LOCKFD}>"${LEPTON_LOCK_PATH:-/tmp/lepton.lock}"'),
 ]
 for old, new in replacements:
     if s.count(old) != 1:
         raise SystemExit(f'Refusing unsafe launcher modification: expected exactly one {old!r}')
     s = s.replace(old, new, 1)
+# Older stages still need a disposable-only lock-path migration. Current
+# launchers validate the private override directly; do not patch them twice.
+legacy_lock = 'exec {LEPTON_LOCKFD}>/tmp/lepton.lock'
+if s.count(legacy_lock) == 1:
+    s = s.replace(legacy_lock, 'exec {LEPTON_LOCKFD}>"${LEPTON_LOCK_PATH:?Isolated lock path required}"', 1)
+elif s.count('function lepton_open_lock()') != 1:
+    raise SystemExit('Unrecognized launcher lock implementation; refresh the stage launcher')
 p.write_text(s)
 PY
 bash -n "$WORK/compat_tool/lepton"

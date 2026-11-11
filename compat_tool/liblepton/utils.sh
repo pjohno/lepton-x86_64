@@ -166,13 +166,7 @@ function colon_path_list()
     println "$*"
 }
 
-function lock_lepton()
-{
-    if ! flock --timeout "${LEPTON_LOCK_TIMEOUT:-10}" "${LEPTON_LOCKFD}"; then
-        echo "WARNING: Failed to acquire the lepton lock."
-    fi
-}
-
+# lock_lepton is defined by the launcher alongside its initial acquisition.
 function unlock_lepton()
 {
     flock -u "${LEPTON_LOCKFD}"
