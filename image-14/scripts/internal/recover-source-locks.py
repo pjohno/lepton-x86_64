@@ -116,6 +116,18 @@ def check_processes(locks):
                              for a in args)
             if operation:
                 raise Unsafe(f'Active Git/repo operation PID {entry.name} ({comm}); inspect ps -fp {entry.name}')
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except PermissionError as exc:
+            # Without the command line, a Git/repo operation cannot be ruled out.
+            raise Unsafe(f'Cannot inspect host process {entry.name}: {exc}') from exc
+        # Open files only matter when there is a lock to look for. Non-dumpable
+        # processes (ssh-agent, gpg-agent, keyring daemons, programs with file
+        # capabilities) hide their fd lists even from their owner; they must not
+        # block a reset of a checkout that has no index locks at all.
+        if not identities:
+            continue
+        try:
             if entry.stat().st_uid != os.getuid():
                 continue
             if not args:  # kernel task or exited/zombie process
@@ -130,7 +142,8 @@ def check_processes(locks):
         except (FileNotFoundError, ProcessLookupError):
             continue
         except PermissionError as exc:
-            raise Unsafe(f'Cannot inspect host process {entry.name}: {exc}') from exc
+            raise Unsafe(f'Cannot inspect the open files of PID {entry.name} ({comm}) while index locks exist: {exc}. '
+                         f'Check it with: ps -fp {entry.name}') from exc
 
 
 def recover(root):

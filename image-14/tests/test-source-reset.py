@@ -259,6 +259,21 @@ fi
         self.assertIn('Not a regular', self.recover(False))
         self.assertEqual(outside.read_text(), 'keep')
 
+    def test_uninspectable_fds_block_only_when_locks_exist(self):
+        # Non-dumpable processes (ssh-agent, keyring daemons) hide /proc/PID/fd.
+        real_iterdir = recovery.Path.iterdir
+
+        def hidden_fds(path):
+            if path.name == 'fd' and path.parent.parent == recovery.Path('/proc'):
+                raise PermissionError(13, 'Permission denied', str(path))
+            return real_iterdir(path)
+        with patch.object(recovery.Path, 'iterdir', hidden_fds):
+            recovery.check_processes({})  # no locks: nothing to look for
+            lock = self.lock()
+            with self.assertRaisesRegex(recovery.Unsafe, 'open files of PID .* while index locks exist'):
+                recovery.recover(self.root)
+        self.assertTrue(lock.exists())
+
     def test_external_gitdir_and_unmarked_checkout_refused(self):
         project = self.root / self.projects[1]
         store = self.base / 'outside.git'
