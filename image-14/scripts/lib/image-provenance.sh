@@ -37,6 +37,7 @@ LEPTON_CUSTOM_PATCHES=(
     "frameworks/native|0007-eventhub-preserve-evdev-axes.patch"
     "frameworks/native|0008-inputreader-separate-steam-input-pads.patch"
     "hardware/waydroid|0009-hwc-local-wayland-fullscreen.patch"
+    "frameworks/native|0010-egl-hide-untranslatable-gl-extensions.patch"
 )
 
 # image_source_status REPO AOSP: verify copied source content and every patch.
