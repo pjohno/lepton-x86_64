@@ -29,6 +29,8 @@ WIDEVINE_DIR = 'vendor/apex/' + WIDEVINE_NAME
 WIDEVINE_FILES = ('apex_manifest.pb', 'bin/hw/android.hardware.drm-service.widevine',
                   f'etc/{WIDEVINE_NAME}.rc', f'etc/vintf/{WIDEVINE_NAME}.xml', 'lib64/libcrypto.so')
 COMPONENTS = ('gapps', 'ndk', 'widevine')
+# Packages GApps registers in packages.xml: Play services, Play Store, GSF.
+GAPPS_PACKAGES = ('com.google.android.gms', 'com.android.vending', 'com.google.android.gsf')
 # Components recorded in BUNDLE.json. Bundles made before widevine was
 # recorded lack the field; readers treat it as false (metadata_components).
 METADATA_COMPONENTS = COMPONENTS
@@ -332,7 +334,126 @@ def check_xattr_paths(entries, records):
     return missing
 
 
+# ---------------------------------------------------------------- packages.xml
+# Android Binary XML (ABX), as written by
+# frameworks/base/core/java/com/android/internal/util/BinaryXmlSerializer.java.
+# A token byte holds the event in its low nibble and the value type in its high
+# nibble. Strings are modified UTF-8 with a big-endian 16-bit length; interned
+# strings are a 16-bit table index, or 0xFFFF followed by a new string.
+_ABX_EVENTS = {0: 'start_document', 1: 'end_document', 2: 'start_tag', 3: 'end_tag', 4: 'text', 5: 'cdsect',
+               6: 'entity_ref', 7: 'ignorable_whitespace', 8: 'processing_instruction', 9: 'comment',
+               10: 'docdecl', 15: 'attribute'}
+_ABX_FIXED = {0x60: 4, 0x70: 4, 0x80: 8, 0x90: 8, 0xA0: 4, 0xB0: 8, 0xC0: 0, 0xD0: 0}
+
+
+class _AbxReader:
+    def __init__(self, data):
+        self.data, self.pos, self.interned = data, 4, []
+
+    def take(self, size):
+        require(self.pos + size <= len(self.data), 'Truncated Android binary XML (packages.xml)')
+        chunk = self.data[self.pos:self.pos + size]
+        self.pos += size
+        return chunk
+
+    def utf(self):
+        raw = self.take(int.from_bytes(self.take(2), 'big'))
+        # Modified UTF-8 encodes NUL as C0 80 and supplementary characters as surrogate pairs.
+        return raw.replace(b'\xc0\x80', b'\x00').decode('utf-8', 'surrogatepass')
+
+    def interned_utf(self):
+        index = int.from_bytes(self.take(2), 'big')
+        if index == 0xFFFF:
+            value = self.utf()
+            self.interned.append(value)
+            return value
+        require(index < len(self.interned), 'Invalid interned string in Android binary XML')
+        return self.interned[index]
+
+    def value(self, kind):
+        if kind == 0x10:
+            return None
+        if kind == 0x20:
+            return self.utf()
+        if kind == 0x30:
+            return self.interned_utf()
+        if kind in (0x40, 0x50):
+            return self.take(int.from_bytes(self.take(2), 'big'))
+        require(kind in _ABX_FIXED, f'Unknown Android binary XML value type 0x{kind:02x}')
+        return self.take(_ABX_FIXED[kind])
+
+
+def parse_abx(data):
+    """Parse ABX into (tag, attributes, children) trees under the document."""
+    require(data.startswith(b'ABX\x00'), 'Not Android binary XML')
+    reader = _AbxReader(data)
+    root = ('#document', {}, [])
+    stack = [root]
+    ended = False
+    while reader.pos < len(data):
+        require(not ended, 'Data after the end of the Android binary XML document')
+        token = reader.take(1)[0]
+        event, kind = _ABX_EVENTS.get(token & 0x0F), token & 0xF0
+        require(event is not None, f'Unknown Android binary XML event {token & 0x0F}')
+        if event == 'attribute':
+            require(len(stack) > 1, 'Android binary XML attribute outside an element')
+            name = reader.interned_utf()
+            stack[-1][1][name] = reader.value(kind)
+        elif event == 'start_tag':
+            require(kind == 0x30, 'Android binary XML element name is not interned')
+            element = (reader.interned_utf(), {}, [])
+            stack[-1][2].append(element)
+            stack.append(element)
+        elif event == 'end_tag':
+            require(kind == 0x30 and len(stack) > 1, 'Unbalanced Android binary XML end tag')
+            require(reader.interned_utf() == stack.pop()[0], 'Mismatched Android binary XML end tag')
+        elif event == 'end_document':
+            require(len(stack) == 1, 'Android binary XML ended inside an element')
+            ended = True
+        elif event != 'start_document':
+            reader.value(kind)  # text, comments and other content are not needed
+    require(ended and len(stack) == 1, 'Incomplete Android binary XML document')
+    return root
+
+
+def registered_packages(data):
+    """Package names registered in packages.xml (binary ABX or text XML).
+
+    Raises BundleError unless the file is a complete, well-formed package list.
+    """
+    if data.startswith(b'ABX\x00'):
+        document = parse_abx(data)
+        roots = [child for child in document[2] if child[0] == 'packages']
+        require(len(roots) == 1, 'packages.xml has no single <packages> root')
+        entries = [(child[0], child[1].get('name')) for child in roots[0][2]]
+    else:
+        import xml.etree.ElementTree as ElementTree
+        try:
+            element = ElementTree.fromstring(data)
+        except ElementTree.ParseError as exc:
+            raise BundleError(f'packages.xml is not well-formed XML: {exc}') from None
+        require(element.tag == 'packages', 'packages.xml has no <packages> root')
+        entries = [(child.tag, child.get('name')) for child in element]
+    names = {name for tag, name in entries if tag == 'package' and isinstance(name, str) and name}
+    require(names, 'packages.xml registers no packages')
+    return names
+
+
 # ---------------------------------------------------------------- components
+def check_registered_packages(data, gapps):
+    """packages.xml must be a complete package list with the framework, and
+    must register the GApps packages exactly when GApps are installed."""
+    names = registered_packages(data)
+    require('android' in names, 'packages.xml does not register the Android framework package')
+    present = sorted(name for name in GAPPS_PACKAGES if name in names)
+    if gapps:
+        require(len(present) == len(GAPPS_PACKAGES), 'packages.xml lacks GApps packages: ' +
+                ', '.join(sorted(set(GAPPS_PACKAGES) - set(present))))
+    else:
+        require(not present, 'packages.xml registers GApps packages without GApps: ' + ', '.join(present))
+    return names
+
+
 def detect_components(kind_of, read):
     """Optional components actually installed in a rootfs.
 

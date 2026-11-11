@@ -147,6 +147,21 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(report['sysbake']['permissions_changed'][0]['old'], '2770')
         self.assertTrue(report['sysbake_xattrs']['identical'])
 
+    def test_registered_package_changes_reported(self):
+        entries = base_entries()
+        entries[S + 'system/packages.xml'] = (b'<packages><package name="android"/></packages>', 0o640)
+        write(self.old, entries)
+        entries = dict(entries)
+        entries[S + 'system/packages.xml'] = (b'<packages><package name="android"/>'
+                                              b'<package name="com.google.android.gms"/></packages>', 0o640)
+        report = self.compare(entries, expect=1)
+        registered = report['sysbake']['registered_packages']
+        self.assertEqual((registered['old_count'], registered['new_count'], registered['added']),
+                         (1, 2, ['com.google.android.gms']))
+        # An unparseable packages.xml is reported, never silently treated as equal.
+        report = self.compare(base_entries(), expect=1)
+        self.assertIn('new', report['sysbake']['registered_packages']['problems'])
+
     def test_xattr_only_changes(self):
         entries = base_entries()
         entries['./compat_tool/sysbake.xattrs'] = (XATTRS.replace(b'user.default=0x01', b'user.default=0x02') +

@@ -50,9 +50,9 @@ function lepton_open_lock() { :; }
 [[ "${LEPTON_ISOLATED_SYSBAKE:-}" == 1 && "${LEPTON_FORCE_SOFTWARE:-}" == true ]] || exit 3
 [[ "${FAKE_SYSBAKE:-ok}" != fail ]] || { echo 'Android did not finish booting' >&2; exit 1; }
 mkdir -p sysbake/system sysbake/misc/keystore sysbake/user_de/0 sysbake/misc/ethernet
-packages='com.android.settings'
-[[ -z "${FAKE_SYSBAKE_GMS:-}" ]] || packages="$packages com.google.android.gms com.android.vending"
-printf 'ABX\0%s\n' "$packages" > sysbake/system/packages.xml
+packages="${FAKE_PACKAGES_BASE:?}"
+[[ -z "${FAKE_SYSBAKE_GMS:-}" ]] || packages="${FAKE_PACKAGES_GMS:?}"
+cp -- "$packages" sysbake/system/packages.xml
 printf 'keys\n' > sysbake/misc/keystore/user_0
 printf 'onboot\n' > sysbake/lepton-onboot
 ln -s /data/user/0 sysbake/user_de/current
@@ -98,6 +98,55 @@ esac
 REAL_TOOLS = ('bash rsync getfattr setfattr timeout flock realpath mktemp pkill sed grep tail cp mv rm mkdir '
               'chmod touch ln id uname cat sleep rmdir dirname basename tr cut awk find sort sha256sum xargs '
               'stty env date head wc cmp ls tar gzip').split()
+
+
+def abx(packages, permissions=()):
+    """Android binary XML (ABX) packages.xml, encoded as BinaryXmlSerializer does."""
+    out, table = bytearray(b'ABX\x00'), {}
+
+    def utf(text):
+        raw = text.encode()
+        out.extend(len(raw).to_bytes(2, 'big') + raw)
+
+    def interned(text):
+        if text in table:
+            out.extend(table[text].to_bytes(2, 'big'))
+        else:
+            out.extend(b'\xff\xff')
+            utf(text)
+            table[text] = len(table)
+
+    def tag(event, name):
+        out.append(0x30 | event)
+        interned(name)
+    out.append(0x10)                       # START_DOCUMENT
+    tag(2, 'packages')
+    for name in permissions:               # <permissions><item name=.../></permissions>
+        tag(2, 'permissions')
+        tag(2, 'item')
+        out.append(0x20 | 15)
+        interned('name')
+        utf(name)
+        tag(3, 'item')
+        tag(3, 'permissions')
+    for user, name in enumerate(packages, 10000):
+        tag(2, 'package')
+        out.append(0x20 | 15)              # name: TYPE_STRING
+        interned('name')
+        utf(name)
+        out.append(0x60 | 15)              # userId: TYPE_INT
+        interned('userId')
+        out.extend(user.to_bytes(4, 'big'))
+        out.append(0xC0 | 15)              # isOrphaned: TYPE_BOOLEAN_TRUE
+        interned('isOrphaned')
+        tag(3, 'package')
+    tag(3, 'packages')
+    out.append(0x11)                       # END_DOCUMENT
+    return bytes(out)
+
+
+BASE_PACKAGES = ('android', 'com.android.settings', 'com.android.systemui')
+GAPPS_PACKAGES = BASE_PACKAGES + ('com.google.android.gms', 'com.android.vending', 'com.google.android.gsf')
 
 
 def sha(data):
@@ -170,8 +219,12 @@ class Harness:
             (self.fakes / name).chmod(0o755)
         filesystems = root / 'filesystems'
         filesystems.write_text('nodev\tsysfs\nnodev\tbinder\n')
+        (root / 'packages-base.xml').write_bytes(abx(BASE_PACKAGES))
+        (root / 'packages-gms.xml').write_bytes(abx(GAPPS_PACKAGES))
         self.host_env = dict(env, PATH=f'{hosts}:{self.fakes}', XDG_RUNTIME_DIR=str(runtime),
-                             LEPTON_HOST_FILESYSTEMS=str(filesystems))
+                             LEPTON_HOST_FILESYSTEMS=str(filesystems),
+                             FAKE_PACKAGES_BASE=str(root / 'packages-base.xml'),
+                             FAKE_PACKAGES_GMS=str(root / 'packages-gms.xml'))
         self.host_env.pop('FAKE_SYSBAKE', None)
 
     def run_tool(self, stage, command, *args, ok=True, env=None):
@@ -264,8 +317,14 @@ class SysbakePackageTests(Harness, unittest.TestCase):
         before = tree(self.stage)
         env = dict(self.host_env, PATH=f'{self.root / "host-tools"}:{stripped}', LEPTON_HOST_FILESYSTEMS=str(empty),
                    FAKE_SYSTEMD_STATE='offline')
+        none = self.root / 'no-subids'
+        none.write_text('someone-else:100000:65536\n')
+        env.update(LEPTON_HOST_SUBUID=str(none), LEPTON_HOST_SUBGID=str(none),
+                   LEPTON_HOST_FUSE=str(self.root / 'no-fuse'), LEPTON_HOST_USERNS=str(self.root / 'userns'))
+        (self.root / 'userns').write_text('0\n')
         output = self.run_tool(self.stage, 'sysbake', '--check', '--stage-dir', str(self.stage), ok=False, env=env)
-        for text in ('Missing host command: podman', 'Missing host command: weston', 'Missing host command: getfattr',
+        for text in ('No subordinate UID range', 'No subordinate GID range', 'usermod --add-subuids',
+                     '/dev/fuse is missing', 'User namespaces are disabled', 'Missing host command: podman', 'Missing host command: weston', 'Missing host command: getfattr',
                      'Missing host command: setfattr', 'Missing host command: fuse-overlayfs', 'dnf install attr',
                      'BinderFS', 'systemd user session'):
             self.assertIn(text, output)
@@ -337,7 +396,7 @@ class SysbakePackageTests(Harness, unittest.TestCase):
         before = self.state(self.stage)
         # A base stage must not register Google Play services.
         output = self.sysbake(self.stage, ok=False, env=dict(self.host_env, FAKE_SYSBAKE_GMS='1'))
-        self.assertIn('Google Play services in a stage without GApps', output)
+        self.assertIn('registers GApps packages without GApps', output)
         self.assertEqual(self.state(self.stage), before)
         self.assertFalse((self.stage / 'compat_tool/sysbake').exists())
         rejected = list(self.stage.glob('.sysbake-rejected-*'))
@@ -430,6 +489,25 @@ class SysbakePackageTests(Harness, unittest.TestCase):
         names = self.members(self.bundles / 'lepton-x86_64-my-build.tar.gz')
         self.assertFalse([n for n in names if re.search(r'(^|/)adb$|platform-tools', n)])
 
+    def test_baked_packages_xml_is_parsed_not_searched(self):
+        # A base image may declare permissions whose names merely contain a
+        # GApps package name; only registered <package> entries count.
+        decoy = abx(BASE_PACKAGES, permissions=('com.google.android.gms.permission.AD_ID',))
+        self.assertIn(b'com.google.android.gms', decoy)
+        self.assertNotIn('com.google.android.gms', L.check_registered_packages(decoy, False))
+        complete = abx(GAPPS_PACKAGES)
+        for broken, message in ((complete[:-1], 'Incomplete|Truncated'), (complete[:-9], 'Truncated|Incomplete'),
+                                (complete[:4] + b'\x0b' + complete[5:], 'Unknown Android binary XML event'),
+                                (complete + b'\x10', 'after the end'),
+                                (abx(('com.android.settings',)), 'Android framework package'),
+                                (abx(GAPPS_PACKAGES[:-1]), 'lacks GApps packages: com.google.android.gsf'),
+                                (b'<?xml version="1.0"?><packages><package name="android"/>', 'not well-formed')):
+            with self.subTest(message):
+                with self.assertRaisesRegex(L.BundleError, message):
+                    L.check_registered_packages(broken, True)
+        self.assertEqual(L.check_registered_packages(b'<packages><package name="android"/></packages>', False), {'android'})
+        self.assertEqual(L.check_registered_packages(complete, True), set(GAPPS_PACKAGES))
+
     def test_adb_download_is_https_google_only(self):
         P = load('package_adb', self.stage / 'compat_tool/tools/lepton_customize_package.py')
         with self.assertRaisesRegex(M.InvalidBundle, 'Unexpected download URL'):
@@ -468,7 +546,7 @@ def complete_bundle(base):
     base.put('compat_tool/sysbake/system', b'', 0o775, ('directory', ''))
     base.put('compat_tool/sysbake/misc', b'', 0o2770, ('directory', ''))
     base.put('compat_tool/sysbake/user', b'', 0o711, ('directory', ''))
-    base.put('compat_tool/sysbake/system/packages.xml', b'ABX\x00com.android.settings', 0o640)
+    base.put('compat_tool/sysbake/system/packages.xml', abx(BASE_PACKAGES), 0o640)
     base.put('compat_tool/sysbake/misc/state', b'android state', 0o600)
     base.put('compat_tool/sysbake/user/current', b'', 0o777, ('symlink', '/data/user/0'))
     base.put('compat_tool/sysbake.xattrs', XATTRS, 0o644)
@@ -677,7 +755,7 @@ class CustomizedWorkflowTests(Harness, INJECT.InjectionTests):
 
     def test_gapps_widevine_stage_sysbake_package_install(self):
         self.customize(('gapps', 'widevine'))
-        self.assertIn('lacks Google Play services', self.sysbake(self.output, ok=False))
+        self.assertIn('lacks GApps packages', self.sysbake(self.output, ok=False))
         self.assertEqual(self.state(self.output)['state'], 'customized')
         self.sysbake(self.output, env=dict(self.host_env, FAKE_SYSBAKE_GMS='1'))
         state = self.state(self.output)
@@ -727,6 +805,22 @@ class CustomizedWorkflowTests(Harness, INJECT.InjectionTests):
         # A recorded flag never substitutes for the installed files.
         shutil.rmtree(apex)
         self.assertIn('does not match the stage record', self.package(self.output, mode='--check', ok=False))
+
+    def test_ndk_provenance_survives_packaging_restore_and_repackaging(self):
+        self.customize(('ndk',))
+        self.sysbake(self.output)
+        self.package(self.output, 'ndk-local')
+        archive = self.bundles / 'lepton-x86_64-ndk-local.tar.gz'
+        self.assertTrue(json.loads(self.read_member(archive, 'BUNDLE.json'))['ndk'])
+        self.assertIn('./compat_tool/ndk-provenance/SHA256SUMS', self.members(archive))
+        restored = self.root / 'restored'
+        self.run_tool(self.output, 'restore', '--execute', '--bundle', str(archive), '--checksum',
+                      str(archive) + '.sha256', '--stage-dir', str(restored))
+        self.assertTrue((restored / 'compat_tool/ndk-provenance/SHA256SUMS').is_file())
+        self.package(restored, 'ndk-local-2')
+        report = self.compare(archive, self.bundles / 'lepton-x86_64-ndk-local-2.tar.gz')
+        self.assertTrue(report['summary']['differences_confined_to_launcher_tooling_metadata'])
+        self.assertFalse([n for n in report['other_files']['removed'] if 'provenance' in n])
 
     def test_injected_component_tampering_blocks_packaging(self):
         self.customize(('gapps',))

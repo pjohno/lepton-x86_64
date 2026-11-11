@@ -121,6 +121,22 @@ def compare(old_path, new_path):
         for key in sorted(set(meta['old']) | set(meta['new'])):
             if meta['old'].get(key) != meta['new'].get(key):
                 bundle_changes[key] = [meta['old'].get(key), meta['new'].get(key)]
+    registered = {}
+    for side, scan in (('old', old), ('new', new)):
+        data = scan.files.get(L.SYSBAKE + 'system/packages.xml')
+        try:
+            registered[side] = sorted(L.registered_packages(data)) if data is not None else None
+        except L.BundleError as exc:
+            registered[side] = {'error': str(exc)}
+    packages = dict(old_count=None, new_count=None, added=[], removed=[], problems={})
+    for side in ('old', 'new'):
+        if isinstance(registered[side], dict):
+            packages['problems'][side] = registered[side]['error']
+        elif registered[side] is not None:
+            packages[side + '_count'] = len(registered[side])
+    if all(isinstance(registered[side], list) for side in ('old', 'new')):
+        packages['added'] = sorted(set(registered['new']) - set(registered['old']))
+        packages['removed'] = sorted(set(registered['old']) - set(registered['new']))
     fp_old, fp_new = old.fingerprint(), new.fingerprint()
     fingerprint = dict(old=fp_old['fingerprint'], new=fp_new['fingerprint'],
                        inputs={name[len('compat_tool/'):]: dict(old=fp_old['inputs'][name], new=fp_new['inputs'][name])
@@ -133,7 +149,7 @@ def compare(old_path, new_path):
         old=dict(archive=str(old_path), sha256=old.sha256, bundle=meta['old']),
         new=dict(archive=str(new_path), sha256=new.sha256, bundle=meta['new']),
         android_rootfs=compare_trees(old.rootfs, new.rootfs),
-        sysbake=compare_trees(old.sysbake, new.sysbake),
+        sysbake=dict(compare_trees(old.sysbake, new.sysbake), registered_packages=packages),
         sysbake_xattrs=compare_xattrs(old.files.get(L.XATTRS), new.files.get(L.XATTRS)),
         fingerprint=fingerprint,
         metadata=dict(components=components, installed_components=installed, bundle_json_changes=bundle_changes,
@@ -197,6 +213,15 @@ def human(report, limit):
     out.append('')
     out += tree_text('Android rootfs', report['android_rootfs'], limit)
     out += tree_text('Sysbake', report['sysbake'], limit)
+    reg = report['sysbake']['registered_packages']
+    if reg['old_count'] is not None and reg['new_count'] is not None:
+        line = f"      registered Android packages: {reg['old_count']} -> {reg['new_count']}"
+        line += '' if reg['added'] or reg['removed'] else ' (same set)'
+        out.append(line)
+        out += listing(reg['added'], limit, lambda n: '+ ' + n)
+        out += listing(reg['removed'], limit, lambda n: '- ' + n)
+    for side, problem in reg['problems'].items():
+        out.append(f'      WARNING ({side} packages.xml): {problem}')
     x = report['sysbake_xattrs']
     if not (x['present']['old'] and x['present']['new']) or 'paths' not in x:
         out.append('sysbake.xattrs: NOT COMPARED (' + '; '.join(

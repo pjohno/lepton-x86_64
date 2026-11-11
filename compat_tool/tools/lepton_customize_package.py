@@ -254,11 +254,47 @@ def host_problems(rendering):
         if session not in ('running', 'degraded'):
             problems.append(f'A systemd user session is required (systemctl --user is-system-running: {session or "no answer"}). '
                             'Log in normally (not with su/sudo), or enable lingering: loginctl enable-linger')
+    problems += rootless_problems()
     runtime = os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')
     if not (runtime.startswith('/run/user/') and os.path.isdir(runtime) and os.stat(runtime).st_uid == os.getuid()):
         problems.append(f'User runtime directory unavailable or unexpected: {runtime}')
     if rendering not in ('software', 'amd'):
         problems.append(f'Unknown rendering mode: {rendering}')
+    return problems
+
+
+def subordinate_ids(kind):
+    """True when the user has a subordinate UID ('u') or GID ('g') range."""
+    import pwd
+    user = pwd.getpwuid(os.getuid()).pw_name
+    override = os.environ.get('LEPTON_HOST_SUBUID' if kind == 'u' else 'LEPTON_HOST_SUBGID')
+    if not override and shutil.which('getsubids'):
+        # Also covers ranges from SSSD/LDAP rather than /etc/subuid.
+        result = subprocess.run(['getsubids', *(['-g'] if kind == 'g' else []), user],
+                                capture_output=True, text=True)
+        return result.returncode == 0 and bool(result.stdout.strip())
+    try:
+        lines = Path(override or ('/etc/subuid' if kind == 'u' else '/etc/subgid')).read_text().splitlines()
+    except OSError:
+        return False
+    return any(line.split(':')[0] in (user, str(os.getuid())) and len(line.split(':')) == 3 for line in lines)
+
+
+def rootless_problems():
+    """Rootless Podman prerequisites that otherwise fail late, inside sysbake."""
+    problems = []
+    for kind, label in (('u', 'UID'), ('g', 'GID')):
+        if not subordinate_ids(kind):
+            problems.append(f'No subordinate {label} range for this user (rootless Podman needs one). Add one with: '
+                            'sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$USER"')
+    if not Path(os.environ.get('LEPTON_HOST_FUSE', '/dev/fuse')).exists():
+        problems.append('/dev/fuse is missing (fuse-overlayfs needs the fuse kernel module)')
+    try:
+        namespaces = int(Path(os.environ.get('LEPTON_HOST_USERNS', '/proc/sys/user/max_user_namespaces')).read_text())
+    except (OSError, ValueError):
+        namespaces = None
+    if namespaces == 0:
+        problems.append('User namespaces are disabled (user.max_user_namespaces=0); rootless Podman cannot run')
     return problems
 
 
@@ -279,15 +315,9 @@ def validate_sysbake(root, state, core):
     baked = tool / 'sysbake'
     core.require(baked.is_dir() and not baked.is_symlink(), 'Sysbake produced no directory')
     packages = regular(root, L.SYSBAKE + 'system/packages.xml', core).read_bytes()
-    core.require(packages and packages.startswith((b'ABX\x00', b'<?xml', b'<packages')),
-                 'Baked system/packages.xml is empty or not Android XML')
     components = expected_components(state, core)
-    gms = b'com.google.android.gms' in packages
-    if components['gapps']:
-        core.require(gms and b'com.android.vending' in packages,
-                     'Baked packages.xml lacks Google Play services/Play Store although GApps were injected')
-    else:
-        core.require(not gms, 'Baked packages.xml registers Google Play services in a stage without GApps')
+    names = checked(core, L.check_registered_packages, packages, components['gapps'])
+    print(f'PASS: baked packages.xml registers {len(names)} packages', flush=True)
     for name in ('misc/ethernet/ipconfig.txt', 'misc/apexdata/com.android.tethering/misc/ethernet/ipconfig.txt',
                  'lepton-onboot', 'lepton-on-app-exit'):
         core.require(not (baked / name).exists(), f'Unexpected host state baked into Android data: {name}')
@@ -747,8 +777,7 @@ def validate_complete(bundle, core):
             core.require(not member.isreg(), f'User state found in rootfs: {name}')
         core.require(not (bundle.keep(name) and re.search(r'(^|/)(id_(rsa|ecdsa|ed25519)|signing-key[^/]*)$', name)),
                      f'Private key material in bundle: {name}')
-    packages = data[L.SYSBAKE + 'system/packages.xml']
-    core.require(packages.startswith((b'ABX\x00', b'<?xml', b'<packages')), 'Bundle sysbake packages.xml is not Android XML')
+    checked(core, L.check_registered_packages, data[L.SYSBAKE + 'system/packages.xml'], flags['gapps'])
     core.require(bundle.members.get('compat_tool/sysbake', tarfile.TarInfo()).isdir(), 'Bundle sysbake is not a directory')
     entries = checked(core, L.parse_xattrs, data[L.XATTRS])
     records = {}

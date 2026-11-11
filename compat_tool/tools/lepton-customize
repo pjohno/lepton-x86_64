@@ -225,7 +225,7 @@ def retained(name):
             return True
         if parts[1] == 'images':
             return len(parts) == 2 or parts[2] in {'rootfs', 'rootfs_overlay'}
-        return parts[1] in {'liblepton', 'tools', 'release-keys', 'provenance', 'lepton',
+        return parts[1] in {'liblepton', 'tools', 'release-keys', 'provenance', 'ndk-provenance', 'lepton',
                             'lepton-x86_64-entry', 'toolmanifest.vdf'} or (len(parts) == 2 and name.endswith('.md'))
     if parts[0] == 'tools':
         return len(parts) == 1 or parts[1] in {'bin', 'native', 'lib', 'licenses', 'customize'} or (len(parts) == 2 and name.endswith('.txt'))
