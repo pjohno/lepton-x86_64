@@ -314,15 +314,13 @@ class Capabilities:
                        'git podman rsync python3 util-linux coreutils', 'git podman rsync python3 util-linux coreutils')
         if bundle_selected:
             self.tools('bundle', common + ' cargo rustc cc make ar strip pkg-config getfattr setfattr weston ip fuse-overlayfs '
-                       'systemctl systemd-run newuidmap newgidmap unshare mount umount ldd curl unzip tar gzip fusermount3 mountpoint '
+                       'systemctl systemd-run newuidmap newgidmap unshare mount umount ldd readelf curl unzip tar gzip fusermount3 mountpoint '
                        'install cp mv rm chmod chgrp mkdir rmdir ln readlink cut sed sort touch cat sleep tail pgrep pkill ps env which seq basename stty',
                        'Bundle/native tools/sysbake host tools',
                        'sudo dnf install cargo rust gcc make pkgconf-pkg-config attr weston iproute fuse-overlayfs podman shadow-utils systemd util-linux curl unzip rsync binutils which procps-ng coreutils',
                        'sudo apt install cargo rustc build-essential pkg-config attr weston iproute2 fuse-overlayfs podman uidmap systemd dbus-user-session util-linux curl unzip rsync binutils debianutils procps coreutils')
             if self.args.with_gapps or self.args.with_widevine:
                 self.tools('bundle', 'debugfs', 'Optional Google image extraction', 'e2fsprogs', 'e2fsprogs')
-            if self.args.with_ndk:
-                self.tools('bundle', 'readelf', 'Optional NDK ELF inspection', 'binutils', 'binutils')
             if self.args.transfer:
                 self.tools('bundle', 'ssh', 'Optional bundle transfer', 'openssh-clients', 'openssh-client')
         if compile_selected or bundle_selected:

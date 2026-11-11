@@ -499,9 +499,11 @@ for Android x86_64, even for base bundles. It ships outside the rootfs at
 `compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so` and is validated with
 `readelf` before staging and packaging. It is not Google's translator: base
 metadata remains `gapps: false`, `ndk: false`, and it stays inactive until the
-existing runtime checks recognize a compatible translator. Future client-side
-customisation can reuse the binary without AOSP; that workflow is not yet
-implemented. See [shim details](compat_tool/liblepton/ndk_auxv/README.md).
+existing runtime checks recognize a compatible translator. Each stage compiles
+its own copy directly into the stage; a shim built in the checkout for local
+testing is never copied into a stage or bundle. Client-side customisation
+reuses the bundled binary without AOSP ([CUSTOMIZING.md](CUSTOMIZING.md)). See
+[shim details](compat_tool/liblepton/ndk_auxv/README.md).
 
 ### Create a customisation stage from a downloaded base bundle
 

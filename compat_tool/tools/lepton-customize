@@ -100,28 +100,50 @@ def verify_release(args, archive):
     signature = read_small(signature_path) if signature_path.exists() else None
     require(args.signature is None or signature is not None, 'Supplied signature file is missing')
     # Same installed trust roots, identity and namespace as lepton-release-manager.
-    # Never trust allowed_signers read from the input archive.
-    keys = next((p for p in (HERE / 'allowed_signers', HERE.parent / 'release-keys/allowed_signers')
-                 if p.is_file() and any(line.strip() and not line.lstrip().startswith('#')
-                                        for line in p.read_text().splitlines())), None)
+    # Never trust allowed_signers read from the input archive. --trusted-signers
+    # replaces them with a file the user chose (e.g. a local test key).
+    if args.trusted_signers:
+        keys_data = read_small(args.trusted_signers)
+        require(has_signer(keys_data.decode('utf-8', errors='replace')),
+                f'No signer keys in --trusted-signers file: {args.trusted_signers}')
+        trust_root = 'trusted-signers option'
+    else:
+        installed = next((p for p in (HERE / 'allowed_signers', HERE.parent / 'release-keys/allowed_signers')
+                          if p.is_file() and has_signer(p.read_text())), None)
+        keys_data = installed.read_bytes() if installed else None
+        trust_root = 'installed release keys' if installed else None
     authenticated = False
-    if keys:
-        require(signature is not None, 'Trusted release keys are installed; a checksum signature (.sig) is required')
+    unsigned_override = False
+    if keys_data is not None and signature is None:
+        require(args.allow_unsigned,
+                'Trusted release keys are installed; a checksum signature (.sig) is required '
+                '(for your own unsigned local build, add --allow-unsigned)')
+        unsigned_override = True
+        print('WARNING: --allow-unsigned: no signature supplied; publisher authenticity is NOT verified. '
+              'Use only for a bundle you built yourself.', file=sys.stderr, flush=True)
+    elif keys_data is not None:
         require(shutil.which('ssh-keygen'), 'ssh-keygen is required to verify the release signature')
-        # Open the signature in memory too, to avoid changing it between reading
-        # and verifying. No temporary disk files are needed in --check mode.
-        with MemoryFile(signature) as fd:
-            result = subprocess.run(['ssh-keygen', '-Y', 'verify', '-f', str(keys),
+        # Keys and signature are read once and verified from memory, so neither
+        # can change between reading and verifying. No temporary disk files.
+        with MemoryFile(keys_data) as keys_fd, MemoryFile(signature) as fd:
+            result = subprocess.run(['ssh-keygen', '-Y', 'verify', '-f', f'/proc/self/fd/{keys_fd}',
                                      '-I', 'lepton-release', '-n', 'lepton-release',
                                      '-s', f'/proc/self/fd/{fd}'], input=manifest,
-                                    pass_fds=(fd,), capture_output=True)
+                                    pass_fds=(keys_fd, fd), capture_output=True)
         require(result.returncode == 0, 'Release signature is NOT valid: ' + result.stderr.decode(errors='replace').strip())
         authenticated = True
     else:
         require(signature is None, 'A signature is present but no trusted release keys are installed with this tool')
-    print('PASS: archive integrity (SHA256); ' + ('publisher signature verified' if authenticated else
-          'authenticity NOT verified (no trusted keys installed)'), flush=True)
-    return digest, manifest, signature, authenticated
+    print('PASS: archive integrity (SHA256); ' + (f'publisher signature verified ({trust_root})' if authenticated else
+          'authenticity NOT verified (' + ('unsigned override' if unsigned_override else 'no trusted keys installed') + ')'),
+          flush=True)
+    trust = dict(authenticated=authenticated, trust_root=trust_root if authenticated else None,
+                 unsigned_override=unsigned_override)
+    return digest, manifest, signature, trust
+
+
+def has_signer(text):
+    return any(line.strip() and not line.lstrip().startswith('#') for line in text.splitlines())
 
 
 class MemoryFile:
@@ -504,7 +526,7 @@ def run(args):
     require(args.bundle.is_file() and args.checksum.is_file(), 'Bundle and checksum must be regular files')
     temporary = None
     with args.bundle.open('rb') as archive:
-        digest, manifest, signature, authenticated = verify_release(args, archive)
+        digest, manifest, signature, trust = verify_release(args, archive)
         bundle = Bundle(archive)
         try:
             bundle.space(destination.parent)
@@ -528,7 +550,7 @@ def run(args):
                 if name in bundle.members:
                     (provenance / filename).write_bytes(bundle.read(name))
             (provenance / 'SOURCE.json').write_text(json.dumps(dict(
-                archive=args.bundle.name, sha256=digest, authenticated=authenticated), indent=2) + '\n')
+                archive=args.bundle.name, sha256=digest, **trust), indent=2) + '\n')
             (temporary / 'STAGE.json').write_text(json.dumps(dict(
                 format_version=1, state='prepared', sysbake_required=True,
                 source_bundle_id=metadata['bundle_id']), indent=2) + '\n')
@@ -554,6 +576,11 @@ def main():
     parser.add_argument('--bundle', required=True, type=Path, help='downloaded base release .tar.gz')
     parser.add_argument('--checksum', required=True, type=Path, help='release SHA256 manifest')
     parser.add_argument('--signature', type=Path, help='manifest SSH signature (default: CHECKSUM.sig when present)')
+    trust = parser.add_mutually_exclusive_group()
+    trust.add_argument('--trusted-signers', type=Path,
+                       help='allowed_signers file to verify against instead of the installed release keys')
+    trust.add_argument('--allow-unsigned', action='store_true',
+                       help='accept an unsigned manifest for a bundle you built yourself (integrity only)')
     parser.add_argument('--stage-dir', required=True, help='new stage; its parent must already exist')
     args = parser.parse_args()
     def interrupted(signum, frame):

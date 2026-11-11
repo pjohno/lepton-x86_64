@@ -202,8 +202,6 @@ if [[ -e "$STAGE_DIR" || -L "$STAGE_DIR" ]]; then
     fail "Stage already exists; refusing to overwrite: $STAGE_DIR"
 fi
 
-info 'Building standard Android x86_64 NDK compatibility shim'
-bash "$ROOT/compat_tool/liblepton/ndk_auxv/build.sh" --aosp "$LEPTON_AOSP_DIR"
 info 'Building native x86_64 APK extractor'
 make -C "$EXTRACTOR" install-native
 BIN="$EXTRACTOR/bin/apk-info-extractor"
@@ -220,10 +218,16 @@ cleanup() { [[ -z "${TEMP:-}" ]] || rm -rf -- "$TEMP"; }
 trap cleanup EXIT
 touch "$TEMP/.find-ignore"
 mkdir -p "$TEMP/compat_tool/images"
-# Never dereference existing compat_tool/images/rootfs symlinks.
+# Never dereference existing compat_tool/images/rootfs symlinks. A shim left
+# in the checkout by a developer build is never copied: each stage compiles its
+# own directly into the private temporary stage.
 rsync -a --no-owner --no-group --exclude='/images/rootfs' \
-    --exclude='/sysbake' --exclude='/sysbake.xattrs' --exclude='/liblepton/apk_extractor/target/' --exclude=__pycache__/ \
+    --exclude='/sysbake' --exclude='/sysbake.xattrs' --exclude='/liblepton/apk_extractor/target/' \
+    --exclude='/liblepton/ndk_auxv/bin/' --exclude=__pycache__/ \
     "$ROOT/compat_tool/" "$TEMP/compat_tool/"
+info 'Building standard Android x86_64 NDK compatibility shim'
+bash "$ROOT/compat_tool/liblepton/ndk_auxv/build.sh" --aosp "$LEPTON_AOSP_DIR" \
+    --output "$TEMP/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
 bash "$ROOT/compat_tool/liblepton/ndk_auxv/validate.sh" \
     "$TEMP/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
 if [[ "$WITH_NDK" == true ]]; then

@@ -55,6 +55,21 @@ without trusted keys is rejected. SHA256 alone does not prove publisher
 identity. The command never downloads keys or executes programs from the
 input bundle during validation.
 
+Two explicit options cover bundles that were not signed by the release key:
+
+- `--trusted-signers FILE` verifies the signature against your own OpenSSH
+  `allowed_signers` file (identity `lepton-release`, namespace
+  `lepton-release`) instead of the installed release keys, for example a local
+  test key. A signature is still required.
+- `--allow-unsigned` accepts a bundle **you built yourself** with
+  `make-deck-bundle-x86_64.sh`, which does not sign its manifest. Only integrity
+  (SHA256) is checked; a warning is printed and `source-bundle/SOURCE.json`
+  records `"unsigned_override": true`. A signature that is supplied is still
+  verified and must be valid.
+
+The two options cannot be combined. `SOURCE.json` also records which trust root
+verified a signature (`trust_root`).
+
 ## Create a stage
 
 Create the destination's parent first. The destination itself must not exist,
@@ -98,7 +113,7 @@ my-custom-stage/
   source-bundle/
     BUNDLE.json                 original identity, unchanged
     SHA256SUMS[.sig]            supplied integrity/authenticity evidence
-    SOURCE.json                 archive name, hash, authentication result
+    SOURCE.json                 archive name, hash, authentication result and trust root
     *PROVENANCE.txt             original build/tool provenance
   compat_tool/
     images/rootfs/              independent original Android rootfs

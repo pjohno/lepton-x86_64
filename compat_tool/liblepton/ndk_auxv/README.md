@@ -18,9 +18,13 @@ The base bundle still reports `gapps: false` and `ndk: false`: shim presence
 neither installs translation nor enables the native bridge or ARM64 ABIs.
 Runtime activation still requires `ndk_compat_supported()` to recognize the
 translator and native-bridge property. Unsupported/incomplete translators stay
-inactive (forcing `LEPTON_NDK_COMPAT=true` fails). Future client customisation
-can reuse this precompiled binary without AOSP or Android compilation; that
-customisation workflow is not implemented yet.
+inactive (forcing `LEPTON_NDK_COMPAT=true` fails). Client customisation
+(`lepton-customize`, see [CUSTOMIZING.md](../../../CUSTOMIZING.md)) reuses this
+precompiled binary without AOSP or Android compilation.
+
+Staging compiles straight into the new stage (`build.sh --output FILE`). With no
+`--output`, `build.sh` writes `bin/liblepton_ndk_auxv.so` in the checkout for
+local runtime testing only; that copy is never staged or packaged.
 
 This fixes two problems seen with AAAAXY 1.8.34's Go 1.27.2 ARM64 library:
 

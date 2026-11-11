@@ -111,13 +111,20 @@ cmp "$NORMAL/system/build.prop" "$OUTPUT/standard-stage/compat_tool/images/rootf
 base_shim="$OUTPUT/standard-stage/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
 bash "$REPO/compat_tool/liblepton/ndk_auxv/validate.sh" "$base_shim"
 [[ -z "$(find "$OUTPUT/standard-stage/compat_tool/images/rootfs" -name liblepton_ndk_auxv.so -print)" ]]
-# Compiler failure cannot fall back to a stale binary or produce a stage.
+# The shim is compiled straight into the stage; the checkout is not written.
+[[ ! -e "$FAKE/compat_tool/liblepton/ndk_auxv/bin" ]]
+# Compiler failure cannot fall back to a stale binary or produce a stage, even
+# when a valid-looking developer build is left in the checkout.
 clang="$OUTPUT/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang"
+mkdir -p "$FAKE/compat_tool/liblepton/ndk_auxv/bin"
+printf 'void stale(void) {}\n' | cc -x c -shared -nostdlib -fPIC -Wl,-soname,liblepton_ndk_auxv.so \
+    -o "$FAKE/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" -
 mv "$clang" "$clang.saved"
 printf '#!/bin/sh\nexit 1\n' > "$clang"
 chmod +x "$clang"
 expect_fail --execute --stage-dir "$OUTPUT/failed-stage"
 [[ ! -e "$OUTPUT/failed-stage" ]]
+[[ -z "$(find "$OUTPUT" -maxdepth 1 -name '.lepton-deck-stage.*' -print)" ]]
 
 [[ -f "$NORMAL/system/build.prop" && -f "$BRIDGE/system/build.prop" ]]
 
@@ -162,6 +169,9 @@ grep -qx 'ro.ndk_translation.flags=accurate-sigsegv' "$ndk_root/system/build.pro
 grep -qx 'ro.dalvik.vm.native.bridge=0' "$NORMAL/system/build.prop"
 [[ ! -e "$NORMAL/system/lib64/libndk_translation.so" ]]
 [[ -s "$OUTPUT/ndk-stage/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" ]]
+# The stale checkout binary planted above was not copied into this stage.
+not_stale() { ! cmp -s "$FAKE/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" "$1"; }
+not_stale "$OUTPUT/ndk-stage/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
 [[ -s "$OUTPUT/ndk-stage/compat_tool/ndk-provenance/NDK-INJECTION-REPORT.txt" ]]
 expect_fail --execute --with-ndk --ndk-payload "$payload" --stage-dir "$OUTPUT/ndk-stage"
 echo 'PASS: Default/alternate/opt-in NDK staging, preflight, isolation and overwrite guards'

@@ -152,6 +152,7 @@ class CustomizeTests(unittest.TestCase):
 
     def namespace(self):
         return argparse.Namespace(bundle=self.archive, checksum=self.checksum, signature=None,
+                                  trusted_signers=None, allow_unsigned=False,
                                   stage_dir=str(self.stage), check=False, execute=True)
 
     def test_valid_standalone_stage_no_compiler_adb_aosp_or_source_needed(self):
@@ -208,6 +209,53 @@ class CustomizeTests(unittest.TestCase):
         self.signed()
         Path(str(self.checksum) + '.sig').unlink()
         self.assertIn('signature', self.cli('--check', ok=False).stderr)
+
+    def test_allow_unsigned_for_local_build_is_explicit_and_recorded(self):
+        self.signed()
+        Path(str(self.checksum) + '.sig').unlink()
+        result = self.cli('--execute', '--allow-unsigned')
+        self.assertIn('--allow-unsigned', result.stderr)
+        self.assertIn('authenticity NOT verified (unsigned override)', result.stdout)
+        identity = json.loads((self.stage / 'source-bundle/SOURCE.json').read_text())
+        self.assertFalse(identity['authenticated'])
+        self.assertTrue(identity['unsigned_override'])
+        self.assertIsNone(identity['trust_root'])
+
+    def test_allow_unsigned_still_verifies_a_supplied_signature(self):
+        self.signed()
+        self.put(M.ROOTFS + 'system/etc/unchanged.conf', b'modified')
+        self.write_bundle()
+        self.assertIn('signature is NOT valid', self.cli('--check', '--allow-unsigned', ok=False).stderr)
+
+    def test_trusted_signers_file_replaces_installed_keys(self):
+        self.signed()
+        own = self.root / 'my_allowed_signers'
+        own.write_text((self.bootstrap.parent / 'release-keys/allowed_signers').read_text())
+        # Installed keys now belong to someone else: only the chosen file counts.
+        other = self.root / 'other-key'
+        subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(other)], check=True)
+        (self.bootstrap.parent / 'release-keys/allowed_signers').write_text(
+            'lepton-release namespaces="lepton-release" ' + Path(str(other) + '.pub').read_text())
+        self.assertIn('signature is NOT valid', self.cli('--check', ok=False).stderr)
+        self.cli('--execute', '--trusted-signers', str(own))
+        identity = json.loads((self.stage / 'source-bundle/SOURCE.json').read_text())
+        self.assertTrue(identity['authenticated'])
+        self.assertEqual(identity['trust_root'], 'trusted-signers option')
+        self.assertFalse(identity['unsigned_override'])
+
+    def test_trusted_signers_must_contain_a_key_and_needs_a_signature(self):
+        self.signed()
+        empty = self.root / 'empty_signers'
+        empty.write_text('# no keys\n')
+        self.assertIn('No signer keys', self.cli('--check', '--trusted-signers', str(empty), ok=False).stderr)
+        Path(str(self.checksum) + '.sig').unlink()
+        keys = str(self.bootstrap.parent / 'release-keys/allowed_signers')
+        self.assertIn('signature', self.cli('--check', '--trusted-signers', keys, ok=False).stderr)
+
+    def test_trust_options_are_mutually_exclusive(self):
+        self.signed()
+        keys = str(self.bootstrap.parent / 'release-keys/allowed_signers')
+        self.cli('--check', '--trusted-signers', keys, '--allow-unsigned', ok=False)
 
     def test_wrong_signature_rejected_even_with_matching_checksum(self):
         self.signed()
