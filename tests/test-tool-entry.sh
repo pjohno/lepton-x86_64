@@ -15,12 +15,13 @@ printf '#!/bin/sh\n' > "$root/tools/platform-tools/adb"
 cat > "$root/compat_tool/lepton" <<'SH'
 #!/bin/bash
 { echo "lepton $*"; echo "ADB=${LEPTON_ADB:-}"; echo "FLAT=${APP_WANTS_FLATSCREEN:-}"
-  echo "PATH0=${PATH%%:*}"; echo "BRIDGE=${LEPTON_BRIDGE_ACTIVE:-}"; } >> "$LOG"
+  echo "PATH0=${PATH%%:*}"; echo "BRIDGE=${LEPTON_BRIDGE_ACTIVE:-}"; echo "LOCAL=${LEPTON_LOCAL_DISPLAY_ACTIVE:-}"; } >> "$LOG"
 SH
 # Fake bundled bridge: like the real one, mark and run the command.
 cat > "$root/compat_tool/tools/lepton-gamescope-bridge" <<'SH'
 #!/bin/bash
 echo "bridge" >> "$LOG"
+echo "MODE=${LEPTON_DISPLAY_MODE:-} DIRECT=${LEPTON_DESKTOP_DIRECT:-}" >> "$LOG"
 export LEPTON_BRIDGE_ACTIVE=1
 exec "$@"
 SH
@@ -37,7 +38,7 @@ mkdir -p "$work/bin"
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$DIALOG_LOG"\n' > "$work/bin/zenity"
 chmod +x "$work/bin/zenity"
 run() { rm -f "$work/log"; env -u LEPTON_ADB -u APP_WANTS_FLATSCREEN -u LEPTON_BRIDGE_ACTIVE -u LEPTON_NO_BRIDGE \
-    -u DISPLAY -u WAYLAND_DISPLAY PATH="$work/bin:$PATH" DIALOG_LOG="$work/dialog.log" LOG="$work/log" "$@"; }
+    -u LEPTON_LOCAL_USE_GAMESCOPE -u LEPTON_INSTALL_PROFILE -u LEPTON_DESKTOP_DIRECT -u DISPLAY -u WAYLAND_DISPLAY PATH="$work/bin:$PATH" DIALOG_LOG="$work/dialog.log" LOG="$work/log" "$@"; }
 
 # Game launch: bridge first, then Valve's lepton with the original arguments.
 run "$entry" waitforexitandrun -- /games/My\ Game.apk
@@ -87,6 +88,49 @@ gms="$root/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore"
 mkdir -p "$gms" && touch "$gms/PrebuiltGmsCore.apk"
 run env STEAM_COMPAT_DATA_PATH="$work/compat/1" LEPTON_NO_BRIDGE=true "$entry" waitforexitandrun -- a.apk
 grep -qx 'lepton waitforexitandrun -- a.apk' "$work/log"
+
+# A profile belongs to this tool, never a caller's global environment.
+run env LEPTON_INSTALL_PROFILE=local-desktop "$entry" waitforexitandrun -- a.apk
+grep -qx bridge "$work/log"
+cat > "$root/compat_tool/tools/lepton-direct-wayland" <<'SH'
+#!/bin/bash
+echo direct >> "$LOG"
+echo "LOCAL=${LEPTON_LOCAL_DISPLAY_ACTIVE:-}" >> "$LOG"
+exec "$@"
+SH
+chmod +x "$root/compat_tool/tools/lepton-direct-wayland"
+printf '%s\n' local-desktop > "$root/compat_tool/install-profile"
+run "$entry" waitforexitandrun -- a.apk
+grep -qx direct "$work/log"
+grep -qx LOCAL=1 "$work/log"
+not grep -qx bridge "$work/log"
+grep -qx 'lepton waitforexitandrun -- a.apk' "$work/log"
+# Fallback must override session hints and a legacy direct override.
+run env LEPTON_LOCAL_USE_GAMESCOPE=1 LEPTON_DISPLAY_MODE=gaming LEPTON_DESKTOP_DIRECT=1 "$entry" waitforexitandrun -- a.apk
+grep -qx bridge "$work/log"
+not grep -qx direct "$work/log"
+grep -qx 'MODE=desktop DIRECT=0' "$work/log"
+grep -qx LOCAL=0 "$work/log"
+# Even a copied local profile cannot change SteamOS's default path.
+real_grep="$(command -v grep)"
+cat > "$work/bin/grep" <<SH
+#!/bin/bash
+if [[ "\${!#}" == /etc/os-release ]]; then exit \${FAKE_STEAMOS:-1}; fi
+exec '$real_grep' "\$@"
+SH
+chmod +x "$work/bin/grep"
+run env FAKE_STEAMOS=0 LEPTON_LOCAL_DISPLAY_ACTIVE=1 "$entry" waitforexitandrun -- a.apk
+grep -qx bridge "$work/log"
+not grep -qx direct "$work/log"
+grep -qx LOCAL=0 "$work/log"
+run "$entry" getcompatpath /x
+not grep -qx direct "$work/log"
+run env LEPTON_BRIDGE_ACTIVE=1 "$entry" waitforexitandrun -- a.apk
+not grep -qx direct "$work/log"
+# A second, unmarked install remains independent.
+rm "$root/compat_tool/install-profile"
+run env LEPTON_LOCAL_USE_GAMESCOPE=1 "$entry" waitforexitandrun -- a.apk
+grep -qx bridge "$work/log"
 
 # The real bridge marks its children.
 grep -qx 'export LEPTON_BRIDGE_ACTIVE=1' "$repo/compat_tool/tools/lepton-gamescope-bridge"

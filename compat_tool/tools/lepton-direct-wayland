@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Host Wayland launch with the same Binder and player-error handling as Gamescope.
+set -euo pipefail
+export LEPTON_BRIDGE_ACTIVE=1
+display_mode=desktop
+outer_display="${DISPLAY:-}"
+# shellcheck source=compat_tool/tools/lepton-display-common.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lepton-display-common.sh"
+
+if [[ -z "${WAYLAND_DISPLAY:-}" || -z "${XDG_RUNTIME_DIR:-}" ||
+      "$WAYLAND_DISPLAY" == */* || ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]]; then
+    message="Direct Wayland requires WAYLAND_DISPLAY naming a live socket in XDG_RUNTIME_DIR.
+Launch Steam from your Wayland desktop session and retry.
+For the windowed Gamescope fallback, use LEPTON_LOCAL_USE_GAMESCOPE=1 %command%."
+    echo "ERROR: $message" >&2
+    lepton_dialog "Lepton Wayland Unavailable" "$message"
+    exit 1
+fi
+lepton_check_binder || exit 1
+if [[ "${LEPTON_LOCAL_DISPLAY_ACTIVE:-0}" == 1 ]]; then
+    case "${LEPTON_LOCAL_FULLSCREEN-1}" in
+        0|1) export LEPTON_LOCAL_FULLSCREEN="${LEPTON_LOCAL_FULLSCREEN-1}" ;;
+        *) echo 'ERROR: LEPTON_LOCAL_FULLSCREEN must be 0 (windowed) or 1 (fullscreen)' >&2; exit 2 ;;
+    esac
+    export LEPTON_LOCAL_OUTPUT=""
+    if command -v kscreen-doctor >/dev/null 2>&1; then
+        LEPTON_LOCAL_OUTPUT="$(kscreen-doctor -j 2>/dev/null | python3 -c '
+import json, re, sys
+try:
+    outputs = [o for o in json.load(sys.stdin).get("outputs", []) if o.get("enabled") and o.get("connected", True)]
+    outputs.sort(key=lambda o: (not o.get("primary", False), o.get("priority", 999), o.get("id", 999)))
+    name = outputs[0].get("name", "") if outputs else ""
+    print(name if re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", name) else "")
+except (ValueError, TypeError, KeyError):
+    print("")
+' || true)"
+        export LEPTON_LOCAL_OUTPUT
+    fi
+    echo "Lepton local display: native fullscreen=$LEPTON_LOCAL_FULLSCREEN; output=${LEPTON_LOCAL_OUTPUT:-compositor-selected}; compositor controls geometry/scale"
+fi
+message_file="$(mktemp "$XDG_RUNTIME_DIR/lepton-message.XXXXXX")"
+export LEPTON_MESSAGE_FILE="$message_file"
+trap cleanup_message_file EXIT
+export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"
+echo "Lepton display: desktop Wayland ($WAYLAND_DISPLAY), no Gamescope"
+status=0
+"$@" &
+child=$!
+trap 'kill -TERM "$child" 2>/dev/null || true' INT TERM
+wait "$child" || status=$?
+# A trapped signal interrupts wait before the child's normal shutdown finishes.
+if kill -0 "$child" 2>/dev/null; then
+    wait "$child" || status=$?
+fi
+show_launch_message
+exit "$status"

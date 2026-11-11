@@ -109,7 +109,8 @@ for name in \
   "$IMAGE/patches/0002-radv-android-yv12-hardware-buffers.patch" \
   "$IMAGE/patches/0004-minigbm-gbm-mesa-driver.patch" \
   "$IMAGE/patches/0007-eventhub-preserve-evdev-axes.patch" \
-  "$IMAGE/patches/0008-inputreader-separate-steam-input-pads.patch"; do
+  "$IMAGE/patches/0008-inputreader-separate-steam-input-pads.patch" \
+  "$IMAGE/patches/0009-hwc-local-wayland-fullscreen.patch"; do
   [[ -f "$name" ]] || err "Missing required file: $name"
 done
 podman image exists "$BUILDER" || err "Missing builder image: $BUILDER"
@@ -360,6 +361,7 @@ apply_custom /workspace/output/external/mesa /workspace/patches/0002-radv-androi
 apply_custom /workspace/output/external/minigbm /workspace/patches/0004-minigbm-gbm-mesa-driver.patch minigbm
 apply_custom /workspace/output/frameworks/native /workspace/patches/0007-eventhub-preserve-evdev-axes.patch EventHub
 apply_custom /workspace/output/frameworks/native /workspace/patches/0008-inputreader-separate-steam-input-pads.patch SteamInputPads
+apply_custom /workspace/output/hardware/waydroid /workspace/patches/0009-hwc-local-wayland-fullscreen.patch LocalWaylandFullscreen
 INNER
   touch "$STATE/patches.done"
   rm -- "$STATE/patches.started"

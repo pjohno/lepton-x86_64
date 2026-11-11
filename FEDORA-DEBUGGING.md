@@ -18,6 +18,110 @@ Store local test APKs in the Git-ignored `apks/` directory. No APKs, Google
 translator binaries, Android images or generated compatibility libraries are
 committed to this repository.
 
+## Local desktop direct Wayland
+
+Both the transferred bundle installer and `install-local.sh` detect Fedora,
+write a persistent `local-desktop` profile and bypass nested Gamescope by default. Use `%command%` for the direct test or
+`LEPTON_LOCAL_USE_GAMESCOPE=1 %command%` for the windowed fallback. Existing
+unmarked tools keep their previous routing until replaced; replacement now
+reselects the profile for the current host.
+See [profile, deployment, rollback and geometry limitations](compat_tool/LOCAL-DESKTOP.md).
+Direct routing is a new Fedora test version; rendering, redraw, scaling, pointer
+alignment, focus and exit/relaunch need manual validation before release.
+
+Phase 2 adds a local-only native fullscreen request and physical/logical scale
+negotiation through an isolated hwcomposer patch. Use
+`LEPTON_LOCAL_FULLSCREEN=0 %command%` to compare the original direct geometry.
+The existing Gamescope fallback stays windowed. See the local routing document
+for the component-only build, read-only overlay deployment and runtime commands.
+A fresh Phase 1 baseline on 2026-11-11 passed without the issue #8 redraw/focus
+freeze; do not interpret that as proof that all games or Phase 2 are validated.
+
+## Per-user launcher lock
+
+The launcher uses `$XDG_RUNTIME_DIR/lepton.lock` when the directory is absolute,
+owned by the current user, writable/searchable, private (no group/other access)
+and not a symlink. A missing or unsuitable runtime directory falls back to
+`$HOME/.lepton-runtime/lepton.lock`. The launcher creates `.lepton-runtime` with
+mode 0700, validates it the same way, and requires HOME to be user-owned and
+not writable by other users. Existing unsafe paths are refused rather than
+repaired automatically. Symlink, non-regular, foreign-owned, unwritable and
+multiply linked lock files are refused. Newly created lock files use mode 0600.
+
+The fallback path is stable across launches. Normal launches ignore arbitrary
+`LEPTON_LOCK_PATH` overrides; isolated APK/sysbake workflows can still use a
+validated private lock alongside their separate Podman storage. The build and
+prepare locks are already scoped to their checkout/workspace; no global `/tmp`
+lock is needed. References to the old `/tmp/lepton.lock` in workflow code only
+migrate disposable copies of older launchers to their private lock.
+
+`flock` still guards port/container operations, with `LEPTON_LOCK_TIMEOUT`
+defaulting to 10 seconds. Opening or acquiring the lock now stops the command
+with a diagnostic on failure, including later re-acquisitions. Never delete a
+lock while a Lepton command is using it: that can create two independent lock
+inodes. The old `/tmp/lepton.lock` is ignored and need not be removed. Stop all
+Lepton games/commands for the user before switching from an older launcher to
+this one, since old and new launchers use different lock paths.
+
+### Deploy only the launcher under the second Fedora user
+
+Copy the updated repository file `compat_tool/lepton` into the second user's
+Downloads folder as `lepton-lock-fix`. Then, in a terminal logged in as that
+user in GNOME Wayland, stop their running Lepton games and commands. List the
+installed tools if needed:
+
+```bash
+"$HOME/.local/bin/lepton-manage-installs" --list
+```
+
+The following example targets the `fullscreen-test-r2` bundle from the
+repackaging instructions. If that user installed a different bundle, set
+`TOOL` to its listed install directory followed by `/compat_tool`.
+
+```bash
+TOOL="$HOME/.local/share/lepton_x86_64_fullscreen_test_r2/compat_tool"
+FIX="$HOME/Downloads/lepton-lock-fix"
+
+# Validate, keep one backup, and replace only the launcher by rename.
+(
+  set -eu
+  test -f "$TOOL/lepton"
+  bash -n "$FIX"
+  test ! -e "$TOOL/lepton.before-user-lock"
+  cp -p -- "$TOOL/lepton" "$TOOL/lepton.before-user-lock"
+  install -m 755 -- "$FIX" "$TOOL/.lepton.lock-fix"
+  mv -T -- "$TOOL/.lepton.lock-fix" "$TOOL/lepton"
+)
+```
+
+No rootfs, sysbake, profile, compatibility data or container name is changed.
+No sudo is needed. The current launcher overrides the old library's
+warning-only lock acquisition, so no library replacement is required for this
+repair. Each installed tool has its own launcher; update the tools the user
+will test before running them together.
+
+Launch the existing game from Steam with its usual Launch Options, then check
+from the same Wayland terminal:
+
+```bash
+stat -c '%U %a %n' "$XDG_RUNTIME_DIR" "$XDG_RUNTIME_DIR/lepton.lock"
+lslocks -o PID,COMMAND,PATH | rg 'lepton[.]lock'
+```
+
+An empty `lslocks` result after startup can be normal: Lepton releases the
+operation lock while Android/game processes run. Confirm that the game starts
+without the old `/tmp/lepton.lock: Permission denied` error, saves data, exits
+and relaunches. Repeat under the first user; the lock paths should refer to
+each user's own runtime directory. Steam Deck Gaming Mode and Desktop Mode
+use the same per-user policy, with their existing display routing unchanged.
+
+For host-only regression checks without root or Android startup:
+
+```bash
+python3 tests/test-lepton-lock.py -v
+python3 tests/test-build-integration.py
+```
+
 ## Testing the Steam Gamescope bridge
 
 The desktop mouse fix changes the bridge script only; an existing installed
@@ -610,3 +714,16 @@ group ownership outside Podman's user mapping, missing MAIN/LAUNCHER intent
 fields, and an older software stage without GBM HAL masking. Host SELinux
 policy/enforcement was not changed. Do not infer an SELinux failure from every
 Android permission message; inspect the first fatal error.
+
+### Phase 2 native Wayland test (2026-11-11)
+
+At KDE 125% on DP-1 (3440×1440 physical), Steam launched the local profile
+with native fullscreen requested. 2048 reported a 3440×1440 Android surface;
+the user confirmed the game covered the Plasma panels and input/redraw worked.
+Normal exit retained the profile. The original rootfs was not replaced: the
+test used a read-only overlay for the component-only hwcomposer build. The subsequent live session confirmed hwcomposer's acknowledged state:
+`fullscreen=1 logical=2752x1152 buffer=3440x1440 scale=1.2500`.
+Android `wm size`, DisplayManager and SurfaceFlinger agreed on 3440×1440.
+Use `logcat -b all` to include the early hwcomposer configure diagnostics.
+See [local desktop validation](compat_tool/LOCAL-DESKTOP.md#fedora-validation-record)
+for the implementation, remaining hardware tests and diagnostic commands.

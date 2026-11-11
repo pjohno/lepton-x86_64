@@ -172,6 +172,13 @@ function setup_props()
 
     # Only show the 2d screen if we're not baking and our app requests it.
     if ! is_sysbake && app_wants_flatscreen; then
+        # /vendor/waydroid.prop is mounted by Podman and imported by Android
+        # init. Exported host variables alone cannot configure SurfaceFlinger.
+        if [[ "${LEPTON_LOCAL_DISPLAY_ACTIVE:-0}" == 1 ]]; then
+            props_echo "ro.lepton.local_display=true"
+            props_echo "ro.lepton.local_fullscreen=${LEPTON_LOCAL_FULLSCREEN:-1}"
+            props_echo "ro.lepton.local_output=${LEPTON_LOCAL_OUTPUT:-}"
+        fi
         props_echo "waydroid.wayland_display=wayland-0"
         props_echo "waydroid.background_start=false"
         props_echo "lepton.headless=false"

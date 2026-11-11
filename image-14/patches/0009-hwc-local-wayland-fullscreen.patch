@@ -1,0 +1,722 @@
+diff --git a/hwcomposer/Android.bp b/hwcomposer/Android.bp
+--- a/hwcomposer/Android.bp
++++ b/hwcomposer/Android.bp
+@@ -79,8 +79,8 @@
+         "-Wall",
+         "-Werror",
+     ],
+-    generated_sources: ["wayland_android_client_protocol_sources"],
+-    generated_headers: ["wayland_android_client_protocol_headers"],
++    generated_sources: ["wayland_android_client_protocol_sources", "lepton_fractional_scale_sources"],
++    generated_headers: ["wayland_android_client_protocol_headers", "lepton_fractional_scale_headers"],
+ }
+ 
+ // Generate wayland-android protocol source file
+@@ -99,3 +99,19 @@
+     cmd: "$(location wayland_scanner) client-header < $(in) > $(out)",
+     out: ["wayland-android-client-protocol.h"],
+ }
++
++// Local desktop scaling, generated here to keep the pinned protocol project unchanged.
++genrule {
++    name: "lepton_fractional_scale_sources",
++    srcs: ["fractional-scale-v1.xml"],
++    tools: ["wayland_scanner"],
++    cmd: "$(location wayland_scanner) private-code < $(in) > $(out)",
++    out: ["fractional-scale-v1-protocol.c"],
++}
++genrule {
++    name: "lepton_fractional_scale_headers",
++    srcs: ["fractional-scale-v1.xml"],
++    tools: ["wayland_scanner"],
++    cmd: "$(location wayland_scanner) client-header < $(in) > $(out)",
++    out: ["fractional-scale-v1-client-protocol.h"],
++}
+diff --git a/hwcomposer/fractional-scale-v1.xml b/hwcomposer/fractional-scale-v1.xml
+new file mode 100644
+--- /dev/null
++++ b/hwcomposer/fractional-scale-v1.xml
+@@ -0,0 +1,102 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<protocol name="fractional_scale_v1">
++  <copyright>
++    Copyright © 2022 Kenny Levinsen
++
++    Permission is hereby granted, free of charge, to any person obtaining a
++    copy of this software and associated documentation files (the "Software"),
++    to deal in the Software without restriction, including without limitation
++    the rights to use, copy, modify, merge, publish, distribute, sublicense,
++    and/or sell copies of the Software, and to permit persons to whom the
++    Software is furnished to do so, subject to the following conditions:
++
++    The above copyright notice and this permission notice (including the next
++    paragraph) shall be included in all copies or substantial portions of the
++    Software.
++
++    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++    DEALINGS IN THE SOFTWARE.
++  </copyright>
++
++  <description summary="Protocol for requesting fractional surface scales">
++    This protocol allows a compositor to suggest for surfaces to render at
++    fractional scales.
++
++    A client can submit scaled content by utilizing wp_viewport. This is done by
++    creating a wp_viewport object for the surface and setting the destination
++    rectangle to the surface size before the scale factor is applied.
++
++    The buffer size is calculated by multiplying the surface size by the
++    intended scale.
++
++    The wl_surface buffer scale should remain set to 1.
++
++    If a surface has a surface-local size of 100 px by 50 px and wishes to
++    submit buffers with a scale of 1.5, then a buffer of 150px by 75 px should
++    be used and the wp_viewport destination rectangle should be 100 px by 50 px.
++
++    For toplevel surfaces, the size is rounded halfway away from zero. The
++    rounding algorithm for subsurface position and size is not defined.
++  </description>
++
++  <interface name="wp_fractional_scale_manager_v1" version="1">
++    <description summary="fractional surface scale information">
++      A global interface for requesting surfaces to use fractional scales.
++    </description>
++
++    <request name="destroy" type="destructor">
++      <description summary="unbind the fractional surface scale interface">
++        Informs the server that the client will not be using this protocol
++        object anymore. This does not affect any other objects,
++        wp_fractional_scale_v1 objects included.
++      </description>
++    </request>
++
++    <enum name="error">
++      <entry name="fractional_scale_exists" value="0"
++        summary="the surface already has a fractional_scale object associated"/>
++    </enum>
++
++    <request name="get_fractional_scale">
++      <description summary="extend surface interface for scale information">
++        Create an add-on object for the the wl_surface to let the compositor
++        request fractional scales. If the given wl_surface already has a
++        wp_fractional_scale_v1 object associated, the fractional_scale_exists
++        protocol error is raised.
++      </description>
++      <arg name="id" type="new_id" interface="wp_fractional_scale_v1"
++           summary="the new surface scale info interface id"/>
++      <arg name="surface" type="object" interface="wl_surface"
++           summary="the surface"/>
++    </request>
++  </interface>
++
++  <interface name="wp_fractional_scale_v1" version="1">
++    <description summary="fractional scale interface to a wl_surface">
++      An additional interface to a wl_surface object which allows the compositor
++      to inform the client of the preferred scale.
++    </description>
++
++    <request name="destroy" type="destructor">
++      <description summary="remove surface scale information for surface">
++        Destroy the fractional scale object. When this object is destroyed,
++        preferred_scale events will no longer be sent.
++      </description>
++    </request>
++
++    <event name="preferred_scale">
++      <description summary="notify of new preferred scale">
++        Notification of a new preferred scale for this surface that the
++        compositor suggests that the client should use.
++
++        The sent scale is the numerator of a fraction with a denominator of 120.
++      </description>
++      <arg name="scale" type="uint" summary="the new preferred scale"/>
++    </event>
++  </interface>
++</protocol>
+diff --git a/hwcomposer/hwcomposer.cpp b/hwcomposer/hwcomposer.cpp
+--- a/hwcomposer/hwcomposer.cpp
++++ b/hwcomposer/hwcomposer.cpp
+@@ -366,7 +366,7 @@
+     // Scaling can only be supported correctly with wp_viewport
+     if (surface_context.viewport) {
+         surface_context.set_crop(rect_apply_transform(hwc_layer->sourceCropf, hwc_layer->transform));
+-        surface_context.set_display_frame(hwc_layer->displayFrame, pdev->display->scale);
++        surface_context.set_display_frame(hwc_layer->displayFrame, pdev->display->scale_x(), pdev->display->scale_y());
+     } else {
+         surface_context.set_buffer_scale(pdev->display->scale);
+     }
+@@ -408,16 +408,16 @@
+     }
+ 
+     window_layer.set_position(
+-        floor(hwc_layer->displayFrame.left / pdev->display->scale),
+-        floor(hwc_layer->displayFrame.top / pdev->display->scale)
++        floor(hwc_layer->displayFrame.left / pdev->display->scale_x()),
++        floor(hwc_layer->displayFrame.top / pdev->display->scale_y())
+     );
+ 
+     if (window->input_region) {
+         wl_region_add(window->input_region,
+-                      -WINDOW_DECORATION_OUTSET + floor(hwc_layer->displayFrame.left / pdev->display->scale),
+-                      -WINDOW_DECORATION_OUTSET + floor(hwc_layer->displayFrame.top / pdev->display->scale),
+-                      2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.right - hwc_layer->displayFrame.left) / pdev->display->scale),
+-                      2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.bottom - hwc_layer->displayFrame.top) / pdev->display->scale));
++                      -WINDOW_DECORATION_OUTSET + floor(hwc_layer->displayFrame.left / pdev->display->scale_x()),
++                      -WINDOW_DECORATION_OUTSET + floor(hwc_layer->displayFrame.top / pdev->display->scale_y()),
++                      2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.right - hwc_layer->displayFrame.left) / pdev->display->scale_x()),
++                      2*WINDOW_DECORATION_OUTSET + ceil((hwc_layer->displayFrame.bottom - hwc_layer->displayFrame.top) / pdev->display->scale_y()));
+     }
+ 
+     pdev->display->layers[window_layer.surface] = {
+@@ -576,8 +576,8 @@
+ static int32_t hwc_attribute(struct waydroid_hwc_composer_device_1* pdev,
+                              const uint32_t attribute) {
+     char property[PROPERTY_VALUE_MAX];
+-    int width = floor(pdev->display->width * pdev->display->scale);
+-    int height = floor(pdev->display->height * pdev->display->scale);
++    int width = pdev->display->render_width();
++    int height = pdev->display->render_height();
+     int density = 180;
+ 
+     switch(attribute) {
+@@ -929,8 +929,8 @@
+     assert(display->pointer);
+     wl_pointer_set_cursor (display->pointer, display->pointer_enter_serial,
+                           cursor_surface_context.surface,
+-                          round(display->cursor_hotspot.x / display->scale),
+-                          round(display->cursor_hotspot.y / display->scale));
++                          round(display->cursor_hotspot.x / display->scale_x()),
++                          round(display->cursor_hotspot.y / display->scale_y()));
+ }
+ 
+ int wl_cursor_cursor_handler::apply_cursor(waydroid_hwc_composer_device_1* pdev, hwc_layer_1* hwc_layer, size_t hwc_layer_index) {
+diff --git a/hwcomposer/local-display.h b/hwcomposer/local-display.h
+new file mode 100644
+--- /dev/null
++++ b/hwcomposer/local-display.h
+@@ -0,0 +1,20 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++#include <algorithm>
++#include <cmath>
++namespace lepton {
++// xdg configure dimensions are logical; wl_output current mode is physical.
++inline int pixel_extent(int logical, double scale) {
++    return std::max(1, static_cast<int>(std::lround(logical * scale)));
++}
++inline double axis_scale(int logical, int physical) {
++    return logical > 0 && physical > 0 ? double(physical) / logical : 1.0;
++}
++inline int input_coordinate(double logical, double scale) {
++    return static_cast<int>(logical * scale);
++}
++inline int logical_extent(int physical, double scale) {
++    return std::max(1, static_cast<int>(std::ceil(physical / scale - 1e-9)));
++}
++inline bool rotated_output(int transform) { return (transform & 1) != 0; }
++}
+diff --git a/hwcomposer/wayland-hwc.cpp b/hwcomposer/wayland-hwc.cpp
+--- a/hwcomposer/wayland-hwc.cpp
++++ b/hwcomposer/wayland-hwc.cpp
+@@ -78,11 +78,12 @@
+ #include "pointer-constraints-unstable-v1-client-protocol.h"
+ #include "relative-pointer-unstable-v1-client-protocol.h"
+ #include "idle-inhibit-unstable-v1-client-protocol.h"
+-//#include "fractional-scale-v1-client-protocol.h"
++#include "fractional-scale-v1-client-protocol.h"
+ 
+ using ::android::hardware::hidl_string;
+ 
+ struct buffer;
++static void local_configure(struct window *window);
+ 
+ buffer::~buffer() {
+     wl_buffer_destroy(wl_buffer);
+@@ -128,6 +129,13 @@
+ 
+     xdg_surface_ack_configure(surface, serial);
+ 
++    if (window->display->local_display) {
++        window->configured = true;
++        window->is_fullscreen = window->pending_fullscreen;
++        window->configured_width = window->pending_width;
++        window->configured_height = window->pending_height;
++        local_configure(window);
++    }
+     window->configured = true;
+ }
+ 
+@@ -181,7 +189,8 @@
+         property_set("ro.sf.lcd_density", lcd_density.c_str());
+     }
+ 
+-    choose_width_height(d, d->req_width, d->req_height);
++    if (!d->local_display)
++        choose_width_height(d, d->req_width, d->req_height);
+ 
+     if (!d->wayland_thread_created && pthread_create(&d->wayland_thread, nullptr, hwc_wayland_thread, d->display) != 0) {
+         ALOGE("Couldn't create wayland thread");
+@@ -198,8 +207,8 @@
+ do_hotplug(struct display *display) {
+     if (display->touch) {
+         char property[PROPERTY_VALUE_MAX];
+-        int width = floor(display->width * display->scale);
+-        int height = floor(display->height * display->scale);
++        int width = display->render_width();
++        int height = display->render_height();
+ 
+         if (property_get("persist.waydroid.width_padding", property, nullptr) > 0)
+             width -= atoi(property);
+@@ -225,10 +234,22 @@
+ static void
+ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
+                               int32_t width, int32_t height,
+-                              struct wl_array *)
++                              struct wl_array *states)
+ {
+     struct window *window = (struct window *)data;
+     struct display *display = window->display;
++
++    if (display->local_display) {
++        // xdg_toplevel state is latched only when xdg_surface.configure is acked.
++        window->pending_width = width;
++        window->pending_height = height;
++        window->pending_fullscreen = false;
++        for (size_t i = 0; i < states->size / sizeof(uint32_t); ++i) {
++            if (static_cast<uint32_t *>(states->data)[i] == XDG_TOPLEVEL_STATE_FULLSCREEN)
++                window->pending_fullscreen = true;
++        }
++        return;
++    }
+ 
+     if (width <= 1 || height <= 1) {
+ 		/* Compositor is deferring to us */
+@@ -385,11 +406,12 @@
+                            wl_fixed_from_double(height));
+ }
+ 
+-void surface_context::set_display_frame(hwc_rect_t rect, double scale) {
++void surface_context::set_display_frame(hwc_rect_t rect, double scale, double scale_y) {
++    if (scale_y <= 0) scale_y = scale;
+     assert(viewport);
+ 
+-    int width = static_cast<int>(ceil((rect.right - rect.left) / scale));
+-    int height = static_cast<int>(ceil((rect.bottom - rect.top) / scale));
++    int width = lepton::logical_extent(rect.right - rect.left, scale);
++    int height = lepton::logical_extent(rect.bottom - rect.top, scale_y);
+ 
+     wp_viewport_set_destination(viewport,
+                                 std::max(1, width),
+@@ -457,6 +479,8 @@
+         xdg_toplevel_destroy(xdg_toplevel);
+     if (xdg_surface)
+         xdg_surface_destroy(xdg_surface);
++    if (fractional_scale)
++        wp_fractional_scale_v1_destroy(fractional_scale);
+     if (shell_surface)
+         wl_shell_surface_destroy(shell_surface);
+     if (bg_buffer)
+@@ -481,22 +505,77 @@
+     wl_display_flush(display->display);
+ }
+ 
+-#if 0
+-static void fractional_scale_handle_preferred_scale(void *data, struct wp_fractional_scale_v1 *,
+-            uint32_t scale_times_120) {
+-    struct display *display = (struct display *)data;
+-    if (!display->viewporter) {
+-        // We should always have the viewporter if we have the fractional scale manager
+-        // but for debugging purpuses we may decide to disable one
+-        return;
+-    }
+-    display->scale = scale_times_120 / 120.0;
+-}
+-
++// All local dimensions come from acked surface configure plus the entered
++// output's current mode. No global max of unrelated output scales is used.
++static void local_configure(struct window *window) {
++    auto d = window->display;
++    if (!d->local_display || !window->configured) return;
++    std::scoped_lock lock(d->windowsMutex);
++    // A zero configure size lets the client choose. Retain the previous size,
++    // or use an output-based startup hint, never wait indefinitely for a size.
++    int hint_width = 1280, hint_height = 800;
++    for (auto &[id, o] : d->local_outputs) {
++        if ((o->output == window->local_output || d->local_outputs.size() == 1) && o->width > 0 && o->height > 0) {
++            hint_width = o->width; hint_height = o->height;
++            if (lepton::rotated_output(o->transform)) std::swap(hint_width, hint_height);
++            hint_width = lepton::pixel_extent(hint_width, 1.0 / d->preferred_scale);
++            hint_height = lepton::pixel_extent(hint_height, 1.0 / d->preferred_scale);
++            break;
++        }
++    }
++    int width = window->configured_width > 1 ? window->configured_width : (d->req_width > 1 ? d->req_width : hint_width);
++    int height = window->configured_height > 1 ? window->configured_height : (d->req_height > 1 ? d->req_height : hint_height);
++    int pw = lepton::pixel_extent(width, d->preferred_scale);
++    int ph = lepton::pixel_extent(height, d->preferred_scale);
++    for (auto &[id, output] : d->local_outputs) {
++        if (output->output == window->local_output && window->is_fullscreen &&
++            output->width > 0 && output->height > 0) {
++            pw = output->width; ph = output->height;
++            if (lepton::rotated_output(output->transform)) std::swap(pw, ph);
++            break;
++        }
++    }
++    bool pixels_changed = pw != d->pixel_width || ph != d->pixel_height;
++    bool changed = pixels_changed || width != d->width || height != d->height;
++    d->req_width = d->width = width;
++    d->req_height = d->height = height;
++    d->pixel_width = pw; d->pixel_height = ph;
++    d->scale = d->scale_x();
++    if (!changed) return; // Focus-only configure must not hotplug SurfaceFlinger.
++    xdg_surface_set_window_geometry(window->xdg_surface, 0, 0, width, height);
++    if (window->viewport) wp_viewport_set_destination(window->viewport, width, height);
++    ALOGI("Lepton local configure: fullscreen=%d logical=%dx%d buffer=%dx%d scale=%.4f entered_output=%p",
++          window->is_fullscreen, width, height, pw, ph, d->preferred_scale, window->local_output);
++    if (d->width && d->height && pixels_changed) do_hotplug(d);
++    else if (d->procs && d->procs->invalidate) d->procs->invalidate(d->procs);
++}
++
++static void fractional_scale_handle_preferred_scale(void *data, struct wp_fractional_scale_v1 *, uint32_t value) {
++    auto window = static_cast<struct window *>(data);
++    if (value == 0 || value > 1920) return;
++    window->display->preferred_scale = value / 120.0;
++    window->display->has_fractional_scale = true;
++    local_configure(window);
++}
+ static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
+-    .preferred_scale = fractional_scale_handle_preferred_scale
++    fractional_scale_handle_preferred_scale,
+ };
+-#endif
++static void local_surface_enter(void *data, struct wl_surface *, struct wl_output *output) {
++    auto window = static_cast<struct window *>(data);
++    window->local_output = output;
++    if (!window->display->has_fractional_scale) {
++        for (auto &[id, o] : window->display->local_outputs)
++            if (o->output == output) window->display->preferred_scale = o->scale;
++    }
++    local_configure(window);
++}
++static void local_surface_leave(void *data, struct wl_surface *, struct wl_output *output) {
++    auto window = static_cast<struct window *>(data);
++    if (window->local_output == output) window->local_output = nullptr;
++}
++static const struct wl_surface_listener local_surface_listener = {
++    local_surface_enter, local_surface_leave,
++};
+ 
+ std::unique_ptr<window>
+ window::create(struct display *display, bool use_subsurfaces, std::string appID, std::string taskID, hwc_color_t color)
+@@ -506,8 +585,20 @@
+         return nullptr;
+ 
+     window->display = display;
++    if (display->local_display) {
++        for (auto &[id, o] : display->local_outputs) {
++            if (o->name == display->local_output_name) { window->local_output = o->output; break; }
++        }
++    }
+     window->surface = wl_compositor_create_surface(display->compositor);
+     wl_surface_set_user_data(window->surface, window.get());
++    if (display->local_display) {
++        wl_surface_add_listener(window->surface, &local_surface_listener, window.get());
++        if (display->fractional_scale_manager) {
++            window->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(display->fractional_scale_manager, window->surface);
++            wp_fractional_scale_v1_add_listener(window->fractional_scale, &fractional_scale_listener, window.get());
++        }
++    }
+     if (display->viewporter)
+         window->viewport = wp_viewporter_get_viewport(display->viewporter, window->surface);
+     window->taskID = std::move(taskID);
+@@ -548,7 +639,10 @@
+         abort();
+     }
+ 
+-    if (display->isMaximized || calibrating) {
++    if (display->local_display && display->local_fullscreen && window->xdg_toplevel) {
++        xdg_toplevel_set_fullscreen(window->xdg_toplevel, window->local_output);
++        ALOGI("Lepton local fullscreen requested on %s", display->local_output_name.c_str());
++    } else if (display->isMaximized || calibrating) {
+         window->set_maximize(true);
+     }
+     // Set title
+@@ -571,15 +665,7 @@
+             wl_display_roundtrip(display->display);
+         } while (!window->configured);
+ 
+-#if 0
+-        wp_fractional_scale_v1* fs = nullptr;
+-        if (display->fractional_scale_manager) {
+-            // We only support one global scale
+-            fs = wp_fractional_scale_manager_v1_get_fractional_scale(
+-                    display->fractional_scale_manager, window->surface);
+-            wp_fractional_scale_v1_add_listener(fs, &fractional_scale_listener, display);
+-        }
+-#endif
++
+ 
+         // Some compositors fail to give us a window size or scale without a buffer attached
+         // See: https://github.com/swaywm/sway/issues/2176
+@@ -592,11 +678,7 @@
+         wl_surface_commit(window->surface);
+         wl_display_roundtrip(display->display);
+ 
+-#if 0
+-        if (fs) {
+-            wp_fractional_scale_v1_destroy(fs);
+-        }
+-#endif
++
+ 
+         // If after all of this we still did not receive a proper configure event,
+         // fallback to using the full output size.
+@@ -607,7 +689,7 @@
+             display->req_width = display->full_width / display->scale;
+ 
+         finished_calibrating(display);
+-        if (!display->isMaximized)
++        if (!display->isMaximized && !display->local_fullscreen)
+             window->set_maximize(false);
+     }
+ 
+@@ -933,7 +1015,10 @@
+     }
+     x = wl_fixed_to_int(sx);
+     y = wl_fixed_to_int(sy);
+-    if (display->scale != 1) {
++    if (display->local_display) {
++        x = lepton::input_coordinate(wl_fixed_to_double(sx), display->scale_x());
++        y = lepton::input_coordinate(wl_fixed_to_double(sy), display->scale_y());
++    } else if (display->scale != 1) {
+         x = int(x * display->scale);
+         y = int(y * display->scale);
+     }
+@@ -1172,7 +1257,10 @@
+     }
+     x = wl_fixed_to_int(x_w);
+     y = wl_fixed_to_int(y_w);
+-    if (display->scale != 1) {
++    if (display->local_display) {
++        x = lepton::input_coordinate(wl_fixed_to_double(x_w), display->scale_x());
++        y = lepton::input_coordinate(wl_fixed_to_double(y_w), display->scale_y());
++    } else if (display->scale != 1) {
+         x = int(x * display->scale);
+         y = int(y * display->scale);
+     }
+@@ -1244,7 +1332,10 @@
+         }
+         x = wl_fixed_to_int(x_w);
+         y = wl_fixed_to_int(y_w);
+-        if (display->scale != 1) {
++        if (display->local_display) {
++            x = lepton::input_coordinate(wl_fixed_to_double(x_w), display->scale_x());
++            y = lepton::input_coordinate(wl_fixed_to_double(y_w), display->scale_y());
++        } else if (display->scale != 1) {
+             x = int(x * display->scale);
+             y = int(y * display->scale);
+         }
+@@ -1503,6 +1594,34 @@
+     output_handle_mode,
+     output_handle_done,
+     output_handle_scale,
++};
++
++static void local_output_geometry(void *data, struct wl_output *, int32_t, int32_t,
++        int32_t, int32_t, int32_t, const char *, const char *, int32_t transform) {
++    static_cast<local_output *>(data)->transform = transform;
++}
++static void local_output_mode(void *data, struct wl_output *, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
++    auto o = static_cast<local_output *>(data);
++    if (!(flags & WL_OUTPUT_MODE_CURRENT)) return;
++    o->width = width; o->height = height;
++    o->owner->refresh = refresh;
++}
++static void local_output_done(void *data, struct wl_output *) {
++    auto o = static_cast<local_output *>(data);
++    for (auto &[key, window] : o->owner->windows) local_configure(window.get());
++}
++static void local_output_scale(void *data, struct wl_output *, int32_t scale) {
++    auto o = static_cast<local_output *>(data);
++    o->scale = std::max(1, scale);
++    if (!o->owner->has_fractional_scale) o->owner->preferred_scale = o->scale;
++}
++static void local_output_name(void *data, struct wl_output *, const char *name) {
++    static_cast<local_output *>(data)->name = name;
++}
++static void local_output_description(void *, struct wl_output *, const char *) {}
++static const struct wl_output_listener local_output_listener = {
++    local_output_geometry, local_output_mode, local_output_done, local_output_scale,
++    local_output_name, local_output_description,
+ };
+ 
+ static void
+@@ -1712,7 +1831,10 @@
+         }
+         x = wl_fixed_to_int(x_w);
+         y = wl_fixed_to_int(y_w);
+-        if (display->scale != 1) {
++        if (display->local_display) {
++            x = lepton::input_coordinate(wl_fixed_to_double(x_w), display->scale_x());
++            y = lepton::input_coordinate(wl_fixed_to_double(y_w), display->scale_y());
++        } else if (display->scale != 1) {
+             x = int(x * display->scale);
+             y = int(y * display->scale);
+         }
+@@ -1936,6 +2058,14 @@
+ 		d->shm = (struct wl_shm *)wl_registry_bind(registry, id,
+                 &wl_shm_interface, 1);
+     } else if (strcmp(interface, "wl_output") == 0) {
++        if (d->local_display) {
++            auto output = std::make_unique<local_output>();
++            output->owner = d; output->id = id;
++            output->output = static_cast<struct wl_output *>(wl_registry_bind(registry, id, &wl_output_interface, std::min(version, 4U)));
++            wl_output_add_listener(output->output, &local_output_listener, output.get());
++            d->local_outputs[id] = std::move(output);
++            return;
++        }
+         d->output = (struct wl_output*)wl_registry_bind(registry, id,
+                 &wl_output_interface, std::min(version, 3U));
+         wl_output_add_listener(d->output, &output_listener, d);
+@@ -1976,11 +2106,9 @@
+     } else if (strcmp(interface, "zwp_idle_inhibit_manager_v1") == 0) {
+         d->idle_manager = (struct zwp_idle_inhibit_manager_v1 *)wl_registry_bind(
+                 registry, id, &zwp_idle_inhibit_manager_v1_interface, 1);
+-#if 0
+-    } else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
++    } else if (d->local_display && strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
+         d->fractional_scale_manager = (struct wp_fractional_scale_manager_v1*)wl_registry_bind(registry, id,
+                 &wp_fractional_scale_manager_v1_interface, 1);
+-#endif
+     } else if (strcmp(interface, wl_data_device_manager_interface.name) == 0) {
+         d->data_device_manager = (struct wl_data_device_manager *)wl_registry_bind(registry, id,
+                 &wl_data_device_manager_interface, std::min(version,  3U));
+@@ -1995,8 +2123,17 @@
+ }
+ 
+ static void
+-registry_handle_global_remove(void *, struct wl_registry *, uint32_t)
+-{
++registry_handle_global_remove(void *data, struct wl_registry *, uint32_t id)
++{
++    auto d = static_cast<struct display *>(data);
++    auto it = d->local_outputs.find(id);
++    if (it == d->local_outputs.end()) return;
++    for (auto &[key, window] : d->windows) {
++        if (window->local_output == it->second->output) window->local_output = nullptr;
++    }
++    wl_output_destroy(it->second->output);
++    d->local_outputs.erase(it);
++    ALOGI("Lepton local output removed; waiting for compositor surface enter/configure");
+ }
+ 
+ static const struct wl_registry_listener registry_listener = {
+@@ -2082,6 +2219,12 @@
+         return NULL;
+     }
+     wl_log_set_handler_client(wayland_log_handler);
++    display->local_display = property_get_bool("ro.lepton.local_display", false);
++    display->local_fullscreen = display->local_display && property_get_bool("ro.lepton.local_fullscreen", true);
++    char local_name[PROPERTY_VALUE_MAX];
++    property_get("ro.lepton.local_output", local_name, "");
++    display->local_output_name = local_name;
++    display->scale = 1.0;
+     display->system_version = property_get_int32("ro.system.build.version.sdk", 0);
+     display->wayland_thread_created = false;
+     display->gtype = get_gralloc_type(gralloc);
+@@ -2108,6 +2251,14 @@
+                  &registry_listener, display);
+     wl_display_roundtrip(display->display);
+ 
++    if (display->local_display)
++        wl_display_roundtrip(display->display); // output names/current modes before initial fullscreen
++    if (display->local_display && (!display->wm_base || !display->viewporter)) {
++        ALOGE("Lepton local display requires xdg-shell and viewporter");
++        wl_display_disconnect(display->display);
++        delete display;
++        return nullptr;
++    }
+     display->task = IWaydroidTask::getService();
+     return display;
+ }
+@@ -2141,6 +2292,8 @@
+     if (display->pointer_constraints)
+         zwp_pointer_constraints_v1_destroy(display->pointer_constraints);
+ 
++    for (auto &[id, o] : display->local_outputs) wl_output_destroy(o->output);
++    if (display->fractional_scale_manager) wp_fractional_scale_manager_v1_destroy(display->fractional_scale_manager);
+     wl_registry_destroy(display->registry);
+     wl_display_flush(display->display);
+     wl_display_disconnect(display->display);
+diff --git a/hwcomposer/wayland-hwc.h b/hwcomposer/wayland-hwc.h
+--- a/hwcomposer/wayland-hwc.h
++++ b/hwcomposer/wayland-hwc.h
+@@ -29,6 +29,7 @@
+ #pragma once
+ 
+ #include <cutils/native_handle.h>
++#include "local-display.h"
+ 
+ #include <stdint.h>
+ #include <stdio.h>
+@@ -166,7 +167,7 @@
+     // Requires the transformed rectangle
+     void set_crop(hwc_frect_t crop);
+     // TODO: This should not require scale. Scaling handling is broken
+-    void set_display_frame(hwc_rect_t rect, double scale);
++    void set_display_frame(hwc_rect_t rect, double scale, double scale_y = 0);
+ };
+ 
+ struct window {
+@@ -189,6 +190,12 @@
+     struct wl_shell_surface *shell_surface;
+     struct xdg_surface *xdg_surface;
+     struct xdg_toplevel *xdg_toplevel;
++    struct wp_fractional_scale_v1 *fractional_scale = nullptr;
++    struct wl_output *local_output = nullptr;
++    int pending_width = 0, pending_height = 0;
++    int configured_width = 0, configured_height = 0;
++    bool pending_fullscreen = false;
++    bool is_fullscreen = false;
+ 
+     /* Used for the background color */
+     bool dedicated_background_surface;
+@@ -298,6 +305,14 @@
+     virtual int apply_cursor(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index) = 0;
+     virtual int reset_cursor(waydroid_hwc_composer_device_1 *pdev) = 0;
+     virtual int on_cursor_enter(display *display) = 0;
++};
++
++struct local_output {
++    struct display *owner;
++    uint32_t id;
++    struct wl_output *output;
++    std::string name;
++    int width = 0, height = 0, transform = 0, scale = 1;
+ };
+ 
+ struct display {
+@@ -333,6 +348,17 @@
+     int system_version;
+     GrallocType gtype;
+     double scale;
++    bool local_display = false;
++    bool local_fullscreen = false;
++    std::string local_output_name;
++    double preferred_scale = 1.0;
++    bool has_fractional_scale = false;
++    int pixel_width = 0, pixel_height = 0;
++    std::map<uint32_t, std::unique_ptr<local_output>> local_outputs;
++    double scale_x() const { return local_display ? lepton::axis_scale(width, pixel_width) : scale; }
++    double scale_y() const { return local_display ? lepton::axis_scale(height, pixel_height) : scale; }
++    int render_width() const { return local_display ? pixel_width : int(floor(width * scale)); }
++    int render_height() const { return local_display ? pixel_height : int(floor(height * scale)); }
+ 
+     int input_fd[INPUT_TOTAL];
+     int ptrPrvX;

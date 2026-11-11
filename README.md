@@ -97,7 +97,9 @@ Properties > Launch Options, followed by `%command%`:
 | `LEPTON_DESKTOP_FULLSCREEN=1` | Desktop Mode: fill the screen instead of a movable window ([Desktop Mode](INSTALL-STEAM-DECK.md#desktop-mode-and-gaming-mode)) |
 | `LEPTON_DESKTOP_TOUCH_MODE=1` | Desktop Mode: `1` mouse and single-touch emulation (default, no native multitouch), `0` pointer-only compatibility, `4` native multitouch with a known mouse-motion issue ([modes and caveats](INSTALL-STEAM-DECK.md#desktop-mode-and-gaming-mode)) |
 | `LEPTON_GAMING_TOUCH_MODE=1` | Experimental Gaming Mode touch override: `0` hover, `1` touch as left-click, `4` passthrough (default); [hardware testing and caveats](INSTALL-STEAM-DECK.md#gaming-mode-touch-experiments) |
-| `LEPTON_DESKTOP_DIRECT=1` | Experimental: use direct Wayland instead of nested Gamescope on the desktop |
+| `LEPTON_DESKTOP_DIRECT=1` | Experimental direct Wayland opt-in for unmarked tools; [local desktop installs](compat_tool/LOCAL-DESKTOP.md) use it by default |
+| `LEPTON_LOCAL_FULLSCREEN=0` | Local desktop direct Wayland: disable the native fullscreen default (requires Phase 2 hwcomposer) |
+| `LEPTON_LOCAL_USE_GAMESCOPE=1` | Local desktop installations: use the existing windowed Gamescope fallback |
 | `LEPTON_RESOLUTION=WIDTHxHEIGHT` | Android's screen size; in Desktop Mode also the window's size |
 
 ## What works

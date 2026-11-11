@@ -28,7 +28,8 @@ image).
 
 You only run the scripts in `image-14/scripts/` itself. The ones in
 `image-14/scripts/internal/` are building blocks those scripts call; you only
-need them when debugging a failed step.
+need them when debugging a failed step or
+[repackaging an existing stage](#repackage-an-existing-stage-without-rebuilding-android).
 
 ## Requirements
 
@@ -38,9 +39,177 @@ need them when debugging a failed step.
   is checked before each step.
 - 24 GB RAM works with `LEPTON_BUILD_JOBS=6`. The first build takes many hours;
   later builds are incremental.
-- Host commands, all checked by the preflight in step 2: `git podman rsync python3 simg2img sqfs2tar fuse2fs fusermount3 unzip`, plus `lpunpack sfdisk debugfs` for the Google inputs. On Fedora they come from the `android-tools`,
+- Host commands, all checked by the preflight in step 2: `git podman rsync python3 simg2img sqfs2tar fuse2fs fusermount fusermount3 unzip`, plus `lpunpack sfdisk debugfs` for the Google inputs. On Fedora they come from the `android-tools`,
   `squashfs-tools-ng`, `e2fsprogs`/`fuse2fs`, `fuse3`, `util-linux` and `unzip`
   packages.
+
+### Complete bundle versus image-only prerequisites
+
+By default, preflight checks the **complete installable-bundle host**, including
+native tool compilation, Android sysbake and packaging. This applies to both
+`--check` and `--execute` in `do_build_x86_64.sh`, to the incremental bundle
+wrapper, and to `make-deck-bundle-x86_64.sh`. The complete wrappers refuse to
+start Android compilation/source preparation when mandatory host capabilities
+are unavailable, even if the builder image or checkout does not exist yet.
+
+Host capability and build-state checks are separate:
+
+| Invocation | Host capabilities | Required generated state |
+| --- | --- | --- |
+| `preflight-x86_64.sh fresh` (default) | Complete build and bundle | Fresh checkout path; no compiled images |
+| `preflight-x86_64.sh existing` | Complete build and bundle | Prepared checkout/checkpoints; no compiled images |
+| `preflight-x86_64.sh full` | Complete build and bundle | Legacy full-state check: prepared checkout and compiled images |
+| `preflight-x86_64.sh --host-only` | Complete build and bundle | No checkout, builder image or generated Android assets |
+| `preflight-x86_64.sh fresh --workflow images` | Compilation and rootfs packaging | Fresh checkout path; no BinderFS/sysbake session required |
+| `preflight-x86_64.sh --host-only --workflow packaging` | Rootfs extraction/packaging | No checkout, BinderFS, user systemd manager or Podman store required by this host check |
+| `make-deck-bundle-x86_64.sh --check --bundle-id ID` | Native tool compilation and isolated sysbake/bundling | Existing packaged rootfs; stage assets are checked after creation |
+
+`--host-only` still reads your trusted `.build-env` for the workspace and
+resource settings. Existing `fresh`, `existing` and `full` invocations retain
+their build-state meanings; `full` is **not** the mode to use before a clean
+build. Use `--workflow images` explicitly for an image-only preflight.
+
+The report collects missing commands and failed probes together and prints
+separate readiness lines for compilation, rootfs packaging and a full bundle.
+Unselected stages say **NOT CHECKED**, rather than claiming they are ready.
+Required tools include Cargo, rustc, cc, make/binutils, attr (`getfattr` and
+`setfattr`), headless Weston, `ip`, rootless Podman and its UID/GID helpers,
+`fuse-overlayfs`, the appropriate FUSE helpers, and the core shell utilities
+used by provisioning/sysbake. Optional Google, NDK and transfer options add
+applicable extraction/ELF/SSH checks. Missing-tool reports name Fedora and
+Ubuntu packages; kernel/session errors are reported separately.
+
+The probes compile tiny C/Rust programs, exercise workspace `user.*` xattrs,
+start/stop a disposable headless Weston, test rootless Podman with private
+storage and subordinate-ID mappings, and mount/unmount temporary FUSE
+filesystems. They use no downloaded container image, do not touch the normal
+Podman store, do not start/stop user services, and do not modify existing build
+outputs. Rust toolchain auto-install is disabled during these probes.
+An AMD render node is required only when `--sysbake-rendering amd` is selected;
+the default software sysbake does not require a GPU.
+
+### BinderFS and WSL/systemd
+
+A complete bundle needs the running kernel to expose `binder` in
+`/proc/filesystems`. An installed `binder_linux` module file or a kernel config
+setting alone is insufficient. If BinderFS is registered, preflight tests a
+private rootless mount namespace and allocates/opens its own `binder`,
+`hwbinder` and `vndbinder` devices through `binder-control`. It never loads a
+kernel module or mounts/changes the host's `/dev/binderfs`. See the
+[Linux BinderFS documentation](https://kernel.org/doc/html/v6.16/admin-guide/binderfs.html)
+for namespace and device-allocation behavior. No sudo is used for preflight.
+A registered filesystem that cannot be used under the rootless kernel/security
+policy is a blocking failure for bundling, as is absent kernel support.
+
+Standard WSL kernels, including the reported
+`6.6.87.2-microsoft-standard-WSL2` configuration, may lack BinderFS. Userspace
+package installation cannot add a missing kernel capability. A Binder-enabled
+custom WSL kernel or native Linux host may be required for sysbake; preflight
+never installs/builds modules or changes the kernel automatically.
+
+Isolated sysbake also requires systemd as PID 1, a working `systemctl --user`,
+an idle sysbake slice, and a private, user-owned mode-0700 runtime directory at
+`/run/user/$(id -u)`. WSLg's `/mnt/wslg/runtime-dir` is incompatible with this
+isolated workflow. If WSL runs `init(DISTRO)` instead of systemd, configure
+systemd manually in `/etc/wsl.conf` and restart the distribution from Windows.
+After systemd starts and the user session/runtime directory exists, use a build
+terminal with the correct runtime, verifying it before starting a long build:
+
+```bash
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+stat -c '%U %a %n' "$XDG_RUNTIME_DIR"
+systemctl --user show-environment >/dev/null
+bash image-14/scripts/preflight-x86_64.sh --host-only
+```
+
+If that shell inherited a WSLg D-Bus address, verify the systemd user bus exists
+at `$XDG_RUNTIME_DIR/bus` and set `DBUS_SESSION_BUS_ADDRESS` to
+`unix:path=$XDG_RUNTIME_DIR/bus` in the build terminal. Do not create a fake
+runtime directory or change kernel/device permissions to bypass a failed
+check. These instructions do not change WSLg's global environment.
+
+### Deliberately split compilation and bundling across hosts
+
+BinderFS and the sysbake systemd session are **not** prerequisites for preparing
+AOSP, compiling Android, or packaging its images. To build images under WSL
+and finish sysbake on native Linux, use the individual commands explicitly:
+
+```bash
+# On the compilation host, from the repository root:
+bash image-14/scripts/preflight-x86_64.sh fresh --workflow images
+bash image-14/scripts/prepare-x86_64.sh --execute
+bash image-14/scripts/build-images-x86_64.sh --execute
+# If only rootfs packaging needs recovery:
+bash image-14/scripts/build-images-x86_64.sh --package-only
+```
+
+For an existing prepared checkout, select `existing --workflow images` and
+skip preparation/reset when no source re-preparation is needed. Transfer the
+packaged rootfs **including its `.lepton-image-provenance`** to the bundle
+host, then use a matching source checkout there:
+
+```bash
+bash image-14/scripts/preflight-x86_64.sh --host-only --workflow bundle
+bash image-14/scripts/make-deck-bundle-x86_64.sh --check \
+  --bundle-id split-test --rootfs-source /path/to/transferred/rootfs
+bash image-14/scripts/make-deck-bundle-x86_64.sh --execute \
+  --bundle-id split-test --rootfs-source /path/to/transferred/rootfs
+```
+
+These scope choices do not bypass ownership, path-safety, locking, image
+validation or overwrite protections. Complete wrappers always require the
+complete host; there is no blanket `--force` switch. Network downloads,
+optional payload integrity, generated stage assets and actual Android boot are
+still checked at their appropriate phases; no preflight can prove an Android
+boot before its images exist. Restricted namespace/PID visibility or security
+policy may prevent functional probes, which then fail with diagnostics rather
+than claiming full readiness.
+
+Host-only regression tests (temporary fixtures; no Android build or root):
+
+```bash
+python3 tests/test-build-preflight.py -v
+python3 tests/test-build-integration.py
+python3 tests/test-rootfs-packaging.py
+```
+
+### FUSE packaging requirements (including Fedora under WSL)
+
+Complete/image preflight scopes check rootfs packaging tools and read/write access to
+`/dev/fuse` before a long compile. They also create a small disposable ext4
+image and test an unprivileged `fuse2fs` mount and unmount. This verifies helper
+execution and mount permission, beyond checking that the device exists. No
+Android image or existing output is mounted by this smoke test.
+
+Both `fusermount` (FUSE 2) and `fusermount3` (FUSE 3) are checked. The helper
+matching the installed `fuse2fs` library dependency is required; unknown/static
+implementations conservatively require both. They are not interchangeable.
+The installed `fuse2fs` may invoke the legacy helper even when FUSE 3 is already
+installed. On Fedora, including Fedora under WSL, fix the
+missing FUSE 2 helper with:
+
+```bash
+sudo dnf install fuse fuse-libs
+```
+
+Other Fedora packaging tools come from `fuse3`, `e2fsprogs`/`fuse2fs`,
+`squashfs-tools-ng`, `android-tools`, `rsync`, `unzip`, `util-linux`, `coreutils`
+and `python3`. On Ubuntu, install `fuse2fs`, `e2fsprogs`, `squashfs-tools-ng`,
+`android-sdk-libsparse-utils`, `rsync`, `unzip`, `util-linux`, `coreutils` and
+`python3`, plus `fuse` for a FUSE 2 implementation or `fuse3` for FUSE 3.
+Ubuntu releases differ: check `ldd "$(command -v fuse2fs)"`,
+`command -v fusermount fusermount3` and package dependencies before installing `fuse`/`fuse3`; some releases make those packages conflict. Do not
+work around this by symlinking the two executables.
+
+WSL needs a kernel/environment supporting FUSE (normally WSL2), an exposed
+`/dev/fuse`, and permission for the build user to read/write it and mount FUSE
+filesystems. A container also needs the device and suitable mount policy.
+Installing utilities alone cannot fix a missing device or kernel restriction.
+The preflight distinguishes missing tools, device access, mount failures and
+unmount failures. It does not use sudo for mounting or compilation. If an
+unmount fails, its temporary directory is retained and reported; inspect the
+mount/processes before unmounting it with the matching helper. Do not delete a
+still-mounted temporary tree.
 
 ## 0. One-time setup
 
@@ -118,9 +287,11 @@ What each step does:
    - If the download is interrupted, rerun with `--resume`.
    - `--reset` puts an existing checkout back to exactly the downloaded sources
      and then patches it again, with no new download. It also removes
-     previously installed build outputs. Use it after `git pull`, after
-     editing patches, or whenever you want a build that is known to come only
-     from this repository.
+     previously installed build outputs. Use it when the checkout needs to be
+     re-prepared for changed Android sources or patches, or when you want a
+     build that is known to come only from this repository. For an already
+     prepared checkout, use the [incremental workflow](#incremental-test-bundle-without-replacing-packaged-outputs)
+     below instead.
 3. **Build images** compiles `system.img` and `vendor.img` inside the builder
    container, copies them to `images/` and unpacks them to `rootfs/`,
    replacing those from any earlier build.
@@ -168,9 +339,16 @@ To update an existing install in place instead (its games keep working), add
 
 ## Or install on this computer (experimental)
 
-A bundle can also be installed on the build computer itself, with the same
-installer a Deck uses: it registers the Steam compatibility tool and adds
+A bundle can also be installed on the build computer itself. The local wrapper
+uses the Deck installer with a persistent `local-desktop` installation profile: it registers the Steam compatibility tool and adds
 **Lepton: Add Android game** to the application menu.
+
+Local installs now launch directly through host Wayland by default, without
+nested Gamescope. Phase 2 requests native fullscreen and negotiates physical buffer dimensions
+through the local hwcomposer patch; runtime verification is required. Use `LEPTON_LOCAL_USE_GAMESCOPE=1 %command%`
+for the existing windowed Gamescope fallback. Normal Deck installs keep their
+existing paths. See [local desktop routing](compat_tool/LOCAL-DESKTOP.md) for
+profile persistence, upgrades, limitations and launcher-only deployment.
 
 **Lepton targets the Steam Deck.** Desktop PCs remain experimental. Fedora KDE
 Wayland testing confirmed mouse and keyboard input with the desktop touch-mode
@@ -222,7 +400,92 @@ have already been made and tested.
 
 ## Rebuilding later
 
-After pulling new commits or changing patches:
+Choose the workflow according to what changed. Run commands from the repository
+root, keeping `.build-env` pointed at the existing workspace and AOSP checkout.
+
+| Change | Workflow |
+| --- | --- |
+| Android source changes already applied to a prepared checkout | [Incremental build](#incremental-test-bundle-without-replacing-packaged-outputs): reuse `aosp/` and `aosp/out/`, create new images, rootfs, stage and bundle |
+| Installer, launcher or host script changes; existing Android runtime is suitable | [Repackage the existing stage](#repackage-an-existing-stage-without-rebuilding-android): no compilation or sysbake regeneration |
+| Android patches or vendored sources changed and the checkout needs re-preparation | [Reset and re-prepare](#reset-and-re-prepare-the-existing-checkout) before building |
+
+Pulling host-only changes does not require an Android reset or rebuild.
+`image-14/do_build_x86_64.sh` is for a fresh checkout and refuses an existing
+one; use the incremental wrapper below to reuse the checkout.
+
+### Compile, package, check or repair
+
+| `build-images-x86_64.sh` option | Purpose |
+| --- | --- |
+| `--execute` | Compile Android, then copy images, package rootfs and write provenance |
+| `--package-only` | Package existing compiled AOSP images; no Podman build, Soong, Ninja or compilation |
+| `--repair` | Detect and remove damaged compiled outputs; follow with a successful `--execute` |
+| `--check` | Validate build and packaging prerequisites without changing output artifacts; the FUSE probe uses disposable temporary files |
+
+If compilation finished but packaging failed (for example, missing
+`fusermount`), fix the reported host dependency and run:
+
+```bash
+bash image-14/scripts/build-images-x86_64.sh --package-only
+```
+
+This reads **only** `system.img` and `vendor.img` from the configured AOSP
+checkout's `out/target/product/lepton_x86_64/`, validates their sparse/SquashFS
+structure, copies them, writes SHA256 checksums and `BUILD-INFO.txt`, and
+packages the rootfs with its matching `.lepton-image-provenance`. It never
+falls back to old workspace images. Keep the prepared sources matching the
+compiled products so source attribution is meaningful; an older build without
+workflow markers cannot reveal every possible out-of-band source/image change.
+
+Both commands use the same packaging transaction. New images, rootfs and
+metadata are staged beside their destinations, preserving existing valid
+outputs until packaging and validation succeed. Each directory is promoted by
+rename; failures and handled signals roll back the pair. Renaming two separate
+directories is not one atomic operation: SIGKILL/power loss during promotion
+can leave previous outputs in the reported `.lepton-image-package.*` and
+`.lepton-rootfs-package.*` backup directories. Inspect `RECOVERY.txt`, hashes
+and mount state before manually restoring backups. Stale temporary trees are
+reported and never automatically deleted, because they may still be mounted
+or hold the previous valid outputs. Successful repeated `--package-only` calls
+replace the default outputs consistently and clean their own temporary trees.
+
+The checkout's build lock covers compilation, packaging and repair. Packaging
+also refuses visible Ninja/Soong/Kati processes conservatively, and rejects
+interrupted/failed compilation markers. Finish a successful build in that
+case; do not delete markers to force packaging. A compiler outside the managed
+workflow can race process inspection; source-image hashes are rechecked before
+publishing, but do not start external builds concurrently. Restricted PID
+visibility can limit detection of external container processes.
+
+For isolated output recovery, preserve both original overrides:
+
+```bash
+source .build-env
+bash image-14/scripts/build-images-x86_64.sh --package-only \
+  --images-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/images" \
+  --rootfs-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/rootfs"
+```
+
+Explicit destinations must still be new. A failed transaction leaves them
+absent; if they already contain a successful build, choose new override paths.
+Omitting the overrides selects the normal workspace outputs. `--repair` is
+not a remedy for a missing packaging executable, failed FUSE mount or failed
+unmount, and does not package images.
+
+Host-only workflow regression tests use tiny image fixtures and mocked FUSE;
+they do not compile Android or require root:
+
+```bash
+python3 tests/test-rootfs-packaging.py -v
+python3 tests/test-build-integration.py
+```
+
+### Reset and re-prepare the existing checkout
+
+Use this when the prepared Android sources no longer match the required
+patches/vendor content. `--reset` discards checkout edits and runs
+`m installclean`; it keeps the downloaded checkout and compiled intermediates,
+but removes installed build outputs. It is not the ordinary incremental path.
 
 ```bash
 bash image-14/scripts/preflight-x86_64.sh existing
@@ -231,10 +494,141 @@ bash image-14/scripts/build-images-x86_64.sh --execute
 bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id base-YYYYMMDD
 ```
 
+### Repackage an existing stage without rebuilding Android
+
+For installer or host-script changes, reuse a complete stage, including its
+existing rootfs and sysbake. For example, refresh the fullscreen test bundle:
+
+```bash
+source .build-env
+
+bash image-14/scripts/internal/deploy-compat-x86_64.sh \
+  --package-only --check \
+  --stage-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/stage" \
+  --bundle-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/bundles" \
+  --bundle-id fullscreen-test-r2
+
+bash image-14/scripts/internal/deploy-compat-x86_64.sh \
+  --package-only --execute \
+  --stage-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/stage" \
+  --bundle-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/bundles" \
+  --bundle-id fullscreen-test-r2
+```
+
+Replace the stage path with your existing complete stage. Choose a new bundle
+ID each time: packaging refuses to overwrite existing archives, checksums or
+installers. It copies the stage and refreshes the bundled host scripts from
+this repository, leaving the source stage unchanged. It neither compiles
+Android nor regenerates sysbake, and it does not transfer or install anything.
+Android changes must already be present in the stage to appear in this bundle.
+
+## Incremental test bundle without replacing packaged outputs
+
+When the checkout is already prepared for this branch, use a new output folder
+instead of the fresh-checkout `do_build_x86_64.sh` workflow. The wrapper reuses
+the checkout at `LEPTON_AOSP_DIR` (default `$LEPTON_OUTPUT_DIR/aosp`) and its
+existing `out/` intermediates; Android rebuilds the affected targets. It does
+not download another checkout. Do not run `prepare --reset`, `installclean`,
+or a clean build for this case. If `fullscreen-test` already exists, choose a
+new output folder and bundle ID, such as `fullscreen-test-r2`, in both commands.
+
+```bash
+source .build-env
+TEST_OUT="$LEPTON_OUTPUT_DIR/fullscreen-test"
+bash image-14/scripts/build-incremental-bundle-x86_64.sh \
+  --check --bundle-id fullscreen-test --output-dir "$TEST_OUT"
+bash image-14/scripts/build-incremental-bundle-x86_64.sh \
+  --execute --bundle-id fullscreen-test --output-dir "$TEST_OUT" \
+  --from-stage "$LEPTON_OUTPUT_DIR/stages/v0.1.0-alpha"
+```
+
+`--from-stage` is optional and reuses only verified ADB/inotify tools from an
+existing stage; it never reuses that stage's sysbake. Omit it to provision tools
+normally. ADB is not redistributed in the archive. Forward `--with-gapps`,
+`--with-ndk`, `--with-widevine`, their input options, tool identity and sysbake
+options as needed; these features remain opt-in. No files are transferred or
+installed by this wrapper.
+
+The new folder must not exist. It will contain:
+
+| Path | Contents |
+| --- | --- |
+| `images/` | New system/vendor images, `SHA256SUMS`, `BUILD-INFO.txt` |
+| `rootfs/` | New flattened rootfs, including its own image-provenance record |
+| `stage/` | New compatibility tool and fresh sysbake for those images |
+| `bundles/` | `lepton-x86_64-steamdeck-fullscreen-test.tar.gz`, its `.sha256` and `.install.sh` |
+
+The original workspace `images/`, `rootfs/`, `stages/` and `bundles/` are
+preserved. **The existing checkout's `aosp/out/` is shared and updated by
+incremental compilation.** Source files are not reset. Logs and the build lock
+are also updated. An interrupted earlier build is refused in isolated mode;
+inspect or repair it separately, rather than silently deleting intermediates.
+Partial new outputs are kept for inspection and are never silently overwritten.
+
+The same operations can be run separately:
+
+```bash
+bash image-14/scripts/build-images-x86_64.sh --execute \
+  --images-dir "$TEST_OUT/images" --rootfs-dir "$TEST_OUT/rootfs"
+bash image-14/scripts/make-deck-bundle-x86_64.sh --execute \
+  --bundle-id fullscreen-test --rootfs-source "$TEST_OUT/rootfs" \
+  --stage-dir "$TEST_OUT/stage" --bundle-dir "$TEST_OUT/bundles" \
+  --from-stage "$LEPTON_OUTPUT_DIR/stages/v0.1.0-alpha"
+```
+
+Both explicit image/rootfs destinations must be new, outside the original
+artifact directories, disjoint from sources/each other, and contain no symlink
+ancestors. Supply both overrides to preserve both defaults. `.build-env` is
+never edited. Omitting overrides retains the original replacement behavior.
+
+Before compilation, the local hwcomposer patch must already be applied and
+vendored source contents must match this branch's pinned trees plus its reviewed
+patches. The copied tree's underlying Git HEAD need not equal the vendored
+submodule HEAD: vendoring overlays source files. Content checks are authoritative.
+A missing patch is reported with a safe apply command; it is not applied twice
+or reset automatically. Conflicting/stale source content stops the build.
+
+The compiler explicitly builds `hwcomposer.waydroid` before generating images.
+The extracted vendor library must match that artifact byte-for-byte and contain
+the new local-display code before the output is marked ready. New rootfs builds
+carry `.lepton-image-provenance`, which packaging prefers over the workspace's
+old `BUILD-INFO.txt`. Both build.prop and hwcomposer hashes must match, avoiding
+false provenance when only the native library changed.
+
+After reviewing the resulting bundle, transfer it (replace `DECK_IP`):
+
+```bash
+bash image-14/scripts/transfer-deck-bundle.sh --check \
+  --bundle-id fullscreen-test --bundle-dir "$TEST_OUT/bundles"
+bash image-14/scripts/transfer-deck-bundle.sh \
+  --bundle-id fullscreen-test --bundle-dir "$TEST_OUT/bundles" --deck-ip DECK_IP
+```
+
+On the Deck, install alongside existing tools:
+
+```bash
+bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-fullscreen-test.install.sh --new
+```
+
+Restart Steam and manually select `Lepton x86_64 (community) - fullscreen-test`
+for a test shortcut. The tool ID is `lepton_x86_64_fullscreen_test`; do not use
+`--replace`, `--into` or a transfer `--replace` option. The bundle carries no
+local-desktop profile, so Deck Desktop Mode stays windowed with touch mode 1,
+and Gaming Mode retains fullscreen SDL/X11 Gamescope with touch mode 4.
+
+Existing saves/prefixes are not reset. A different Android runtime may be refused
+for an existing game profile by fingerprint protection; keep the original tool
+for that game or add a separately named test shortcut with its own prefix.
+Never bypass that refusal by resetting valuable data. These commands do not
+publish a release, merge the branch or change GitHub issue state.
+
 ## When something fails
 
 - Every step prints the path of its log. Logs live in the workspace's `logs/`
   and stay after failures.
+- A **rootfs packaging** failure after successful compilation can be retried
+  with `build-images-x86_64.sh --package-only` after fixing the reported host
+  tool, FUSE permission or unmount error. No Android compilation is needed.
 - A failed or stopped **build** can simply be run again; it continues where
   it stopped.
 - **Power cut, crash or forced shutdown during a build.** Avoid these if you

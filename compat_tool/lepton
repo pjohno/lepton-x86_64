@@ -55,12 +55,83 @@ if systemctl --user is-system-running >/dev/null && [[ -z "${CATATONIT_PID}" ]];
     fi
 fi
 
-# This lock guards against multiple commands running at the same time
-# which would be problematic for e.g. start due to the port assignments.
-exec {LEPTON_LOCKFD}>/tmp/lepton.lock
-if ! flock --timeout "${LEPTON_LOCK_TIMEOUT:-10}" "${LEPTON_LOCKFD}"; then
-    echo "WARNING: Failed to acquire the lepton lock (initial)."
-fi
+# This lock guards commands sharing ports and container state for one user.
+# Keep this code self-contained so an installed tool can be fixed by replacing
+# only this launcher, without touching its Android runtime or saved data.
+function lepton_lock_error()
+{
+    printf 'ERROR: Lepton lock: %s\n' "$*" >&2
+    exit 1
+}
+
+function lepton_private_lock_dir()
+{
+    local directory="$1" mode
+    while [[ "$directory" == */ && "$directory" != / ]]; do directory="${directory%/}"; done
+    [[ "$directory" == /* && -d "$directory" && ! -L "$directory" &&
+       -O "$directory" && -w "$directory" && -x "$directory" ]] || return 1
+    mode="$(stat -c '%a' -- "$directory" 2>/dev/null)" || return 1
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 077) == 0 ))
+}
+
+function lepton_open_lock()
+{
+    local directory home_directory home_mode old_umask
+    # Isolated sysbake/APK workflows have private container storage and must
+    # not block the live tool. Their override is allowed only in isolated mode.
+    if [[ "${LEPTON_ISOLATED_SYSBAKE:-0}" == 1 && -n "${LEPTON_LOCK_PATH:-}" ]]; then
+        directory="$(dirname -- "$LEPTON_LOCK_PATH")"
+        lepton_private_lock_dir "$directory" ||
+            lepton_lock_error "Unsafe isolated lock directory: $directory. Use an absolute, user-owned directory with mode 0700 and write/search access."
+    elif lepton_private_lock_dir "${XDG_RUNTIME_DIR:-}"; then
+        LEPTON_LOCK_PATH="$XDG_RUNTIME_DIR/lepton.lock"
+    else
+        # A stable directory under HOME coordinates all fallback launches.
+        # Never use a shared /tmp filename or a fresh random lock per launch.
+        home_directory="${HOME:-}"
+        while [[ "$home_directory" == */ && "$home_directory" != / ]]; do home_directory="${home_directory%/}"; done
+        [[ "$home_directory" == /* && -d "$home_directory" && ! -L "$home_directory" &&
+           -O "$home_directory" && -w "$home_directory" && -x "$home_directory" ]] ||
+            lepton_lock_error 'No safe user runtime directory or writable, user-owned HOME. Restore XDG_RUNTIME_DIR (normally /run/user/$(id -u), mode 0700) or HOME permissions, then retry.'
+        home_mode="$(stat -c '%a' -- "$home_directory" 2>/dev/null)" ||
+            lepton_lock_error "Cannot inspect HOME permissions: $home_directory"
+        [[ "$home_mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$home_mode & 022) == 0 )) ||
+            lepton_lock_error "HOME is writable by other users: $home_directory. Restore private ownership/write permissions or a valid XDG_RUNTIME_DIR."
+        directory="$home_directory/.lepton-runtime"
+        if [[ ! -e "$directory" && ! -L "$directory" ]]; then
+            # Concurrent first launches may both attempt mkdir; validate the
+            # result instead of changing permissions on a pre-existing path.
+            mkdir -m 700 -- "$directory" 2>/dev/null || true
+        fi
+        lepton_private_lock_dir "$directory" ||
+            lepton_lock_error "Cannot use fallback lock directory: $directory. It must be a writable, user-owned directory with mode 0700, not a symlink. Restore its permissions or XDG_RUNTIME_DIR."
+        LEPTON_LOCK_PATH="$directory/lepton.lock"
+    fi
+    # Reject unsafe pre-existing entries, including dangling symlinks/FIFOs.
+    if [[ -e "$LEPTON_LOCK_PATH" || -L "$LEPTON_LOCK_PATH" ]]; then
+        [[ ! -L "$LEPTON_LOCK_PATH" && -f "$LEPTON_LOCK_PATH" &&
+           -O "$LEPTON_LOCK_PATH" && -w "$LEPTON_LOCK_PATH" &&
+           "$(stat -c '%h' -- "$LEPTON_LOCK_PATH" 2>/dev/null)" == 1 ]] ||
+            lepton_lock_error "Unsafe or unwritable lock file: $LEPTON_LOCK_PATH. Stop this user's Lepton processes and inspect the file's type, ownership and permissions before retrying."
+    fi
+    old_umask="$(umask)"
+    umask 077
+    if ! { exec {LEPTON_LOCKFD}>"$LEPTON_LOCK_PATH"; } 2>/dev/null; then
+        umask "$old_umask"
+        lepton_lock_error "Cannot open $LEPTON_LOCK_PATH. Check directory permissions, free space and filesystem access; Lepton cannot continue without its lock."
+    fi
+    umask "$old_umask"
+}
+
+function lepton_acquire_lock()
+{
+    if ! flock --timeout "${LEPTON_LOCK_TIMEOUT:-10}" "${LEPTON_LOCKFD}"; then
+        lepton_lock_error "Cannot acquire $LEPTON_LOCK_PATH (timeout: ${LEPTON_LOCK_TIMEOUT:-10}s). Another Lepton command for this user may still be running. Wait for it to finish or check LEPTON_LOCK_TIMEOUT and filesystem locking support; retry without deleting an active lock file."
+    fi
+}
+
+lepton_open_lock
+lepton_acquire_lock
 
 # Automatically set the context if we're part of a Steam launch
 if [[ -n "${SteamAppId:-}" ]] then
@@ -78,6 +149,13 @@ fi
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/liblepton/liblepton.sh"
+
+# Also override older installed utils.sh when deploying only this launcher.
+# Every later re-acquisition must stop on failure just like the initial lock.
+function lock_lepton()
+{
+    lepton_acquire_lock
+}
 
 case "${COMMAND}" in
     # This avoids starting up zygote, it gets you into a container at the earliest possible moment.

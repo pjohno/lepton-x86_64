@@ -284,11 +284,17 @@ for helper in run-apk.sh unpack-apkm.py read-gsf-id.py; do
 done
 install -m 644 "$repo/tests/runtime/README.md" "$tmp/payload/tests/runtime/README.md"
 install -m 644 "$repo/tests/runtime/STEAM-DECK-GAPPS.md" "$tmp/payload/tests/runtime/STEAM-DECK-GAPPS.md"
+# Installation profiles are host-local and must never travel in bundles.
+rm -f -- "$tmp/payload/compat_tool/install-profile"
 # These launch helpers must track the checked-out Fedora source, not an
 # older stage snapshot. Do not touch the staged Android rootfs.
 install -m 755 "$repo/compat_tool/lepton" "$tmp/payload/compat_tool/lepton"
 install -m 755 "$repo/compat_tool/tools/lepton-gamescope-bridge" \
     "$tmp/payload/compat_tool/tools/lepton-gamescope-bridge"
+install -m 755 "$repo/compat_tool/tools/lepton-direct-wayland" \
+    "$tmp/payload/compat_tool/tools/lepton-direct-wayland"
+install -m 644 "$repo/compat_tool/tools/lepton-display-common.sh" \
+    "$tmp/payload/compat_tool/tools/lepton-display-common.sh"
 install -m 755 "$repo/compat_tool/tools/lepton-controller-hotplug-experiment" \
     "$tmp/payload/compat_tool/tools/lepton-controller-hotplug-experiment"
 install -m 755 "$repo/compat_tool/tools/lepton-add-game" \
@@ -442,9 +448,22 @@ done
 # What the Android images were built from (build-images writes it). Carried
 # only when it describes this bundle's rootfs (same build.prop); a modified
 # rootfs (GApps, NDK) or an older build has no record.
-image_info="${LEPTON_IMAGES_DIR:+$LEPTON_IMAGES_DIR/BUILD-INFO.txt}"
+# A new isolated rootfs carries its own record; never select the old workspace
+# build merely because its build.prop happens to be identical.
+image_info="$tmp/payload/compat_tool/images/rootfs/.lepton-image-provenance"
+if [[ ! -f "$image_info" ]]; then
+    image_info="${LEPTON_IMAGES_DIR:+$LEPTON_IMAGES_DIR/BUILD-INFO.txt}"
+fi
+bundle_hwc="$tmp/payload/compat_tool/images/rootfs/vendor/lib64/hw/hwcomposer.waydroid.so"
+hwc_matches=true
+if [[ -n "$image_info" && -f "$image_info" ]] && grep -q '^Rootfs hwcomposer SHA256:' "$image_info"; then
+    hwc_matches=false
+    if [[ -f "$bundle_hwc" ]] && grep -qx "Rootfs hwcomposer SHA256: $(sha256sum "$bundle_hwc" | cut -d' ' -f1)" "$image_info"; then
+        hwc_matches=true
+    fi
+fi
 bundle_prop="$(sha256sum "$tmp/payload/compat_tool/images/rootfs/system/build.prop" 2>/dev/null | cut -d' ' -f1 || true)"
-if [[ -n "$image_info" && -f "$image_info" && -n "$bundle_prop" ]] &&
+if [[ "$hwc_matches" == true && -n "$image_info" && -f "$image_info" && -n "$bundle_prop" ]] &&
    grep -qx "Rootfs build.prop SHA256: $bundle_prop" "$image_info"; then
     cp -- "$image_info" "$tmp/payload/tools/IMAGE-PROVENANCE.txt"
     printf 'Image provenance: tools/IMAGE-PROVENANCE.txt\n' >> "$tmp/payload/tools/BUNDLE-PROVENANCE.txt"

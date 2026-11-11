@@ -388,3 +388,18 @@ not grep -qx './tools/IMAGE-PROVENANCE.txt' <(tar -tzf "$out/lepton-x86_64-steam
 tar -xOf "$out/lepton-x86_64-steamdeck-prov-other.tar.gz" ./tools/BUNDLE-PROVENANCE.txt |
     grep -q '^Image provenance: not recorded'
 echo 'PASS: read-only packaging/transfer checks, real archive without Google adb, installer ADB download, xattr preservation, overwrite guards, mocked transfer and image provenance'
+
+# A rootfs-specific record takes precedence over an unrelated workspace build.
+hwc="$stage/compat_tool/images/rootfs/vendor/lib64/hw/hwcomposer.waydroid.so"
+printf 'new HAL' > "$hwc"
+hwc_sha="$(sha256sum "$hwc" | cut -d' ' -f1)"
+root_info="$stage/compat_tool/images/rootfs/.lepton-image-provenance"
+printf 'Image source commit: %s\nRootfs build.prop SHA256: %s\nRootfs hwcomposer SHA256: %s\n' \
+    "$(printf 'c%.0s' {1..40})" "$prop" "$hwc_sha" > "$root_info"
+LEPTON_IMAGES_DIR="$images" run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id prov-rootfs > /dev/null
+tar -xOf "$out/lepton-x86_64-steamdeck-prov-rootfs.tar.gz" ./tools/IMAGE-PROVENANCE.txt | cmp - "$root_info"
+# Identical build.prop must not authenticate a changed/stale hwcomposer.
+printf stale > "$hwc"
+LEPTON_IMAGES_DIR="$images" run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id prov-hwc-mismatch > /dev/null
+not grep -qx './tools/IMAGE-PROVENANCE.txt' <(tar -tzf "$out/lepton-x86_64-steamdeck-prov-hwc-mismatch.tar.gz")
+echo 'PASS: rootfs-specific image provenance wins over workspace defaults; hwcomposer hash mismatch refused'

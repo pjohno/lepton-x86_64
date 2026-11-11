@@ -72,6 +72,9 @@ class BuildIntegrationTests(unittest.TestCase):
                 for name in ('Containerfile.ubuntu26', 'Containerfile.deck-tools'):
                     write(repo / 'image-14/.buildscripts_x86_64' / name, 'fixture\n')
                 write(repo / 'image-14/scripts/internal/provision-deck-tools.sh', '# fixture\n')
+                # Capability behavior is exercised by test-build-preflight.py;
+                # this test isolates builder selection in the wrapper/children.
+                write(repo / 'image-14/scripts/internal/check-host-capabilities.py', 'raise SystemExit(0)\n')
                 write(repo / 'image-14/scripts/lib/workspace.sh',
                       (ROOT / 'image-14/scripts/lib/workspace.sh').read_text())
                 for name in ('preflight-x86_64.sh', 'prepare-x86_64.sh', 'build-images-x86_64.sh'):

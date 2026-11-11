@@ -38,3 +38,32 @@ lepton_create_workspace() {
     [[ -d "$dir" ]] || mkdir -p -- "$dir" || return 1
     chgrp "$(id -g)" "$dir" && chmod g-s "$dir"
 }
+
+# Canonical output path without hiding symlinks in any existing ancestor.
+lepton_output_path() {
+    local lexical resolved
+    lexical="$(realpath -ms -- "$1")" || return 1
+    resolved="$(realpath -m -- "$1")" || return 1
+    [[ "$lexical" == "$resolved" && ! -L "$lexical" ]] || {
+        echo "Output path contains a symlink: $1" >&2; return 1;
+    }
+    case "$resolved" in
+        /|/tmp|/mnt|/media|/home|/opt|/srv|/etc|/etc/*|/usr|/usr/*|/var|/var/*|/run|/run/*|/dev|/dev/*|/proc|/proc/*|/sys|/sys/*|/boot|/boot/*)
+            echo "Unsafe output path: $resolved" >&2; return 1 ;;
+    esac
+    [[ "$resolved" != "$HOME" && "$HOME" != "$resolved/"* ]] || {
+        echo "Unsafe output path: $resolved" >&2; return 1;
+    }
+    printf '%s\n' "$resolved"
+}
+lepton_paths_overlap() {
+    [[ "$1" == "$2" || "$1" == "$2/"* || "$2" == "$1/"* ]]
+}
+lepton_output_outside() {
+    local output="$1" protected; shift
+    for protected in "$@"; do
+        if lepton_paths_overlap "$output" "$protected"; then
+            echo "Output overlaps protected path: $output ($protected)" >&2; return 1
+        fi
+    done
+}

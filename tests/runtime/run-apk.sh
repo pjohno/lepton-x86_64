@@ -395,11 +395,16 @@ p = Path(sys.argv[1]); s = p.read_text()
 for old,new in [
     ('if systemctl --user is-system-running >/dev/null && [[ -z "${CATATONIT_PID}" ]]; then',
      'if [[ "${LEPTON_ISOLATED_SYSBAKE:-0}" != "1" ]] && systemctl --user is-system-running >/dev/null && [[ -z "${CATATONIT_PID}" ]]; then'),
-    ('exec {LEPTON_LOCKFD}>/tmp/lepton.lock',
-     'exec {LEPTON_LOCKFD}>"${LEPTON_LOCK_PATH:-/tmp/lepton.lock}"'),
 ]:
     if s.count(old) != 1: raise SystemExit(f'Unsafe launcher patch count: {old!r}')
     s = s.replace(old,new,1)
+# Older stages still need a disposable-only lock-path migration. Current
+# launchers validate the private override directly; do not patch them twice.
+legacy_lock = 'exec {LEPTON_LOCKFD}>/tmp/lepton.lock'
+if s.count(legacy_lock) == 1:
+    s = s.replace(legacy_lock, 'exec {LEPTON_LOCKFD}>"${LEPTON_LOCK_PATH:?Isolated lock path required}"', 1)
+elif s.count('function lepton_open_lock()') != 1:
+    raise SystemExit('Unrecognized launcher lock implementation; refresh the stage launcher')
 p.write_text(s)
 p = Path(sys.argv[2]); s = p.read_text()
 old='function wait_for_file()\n{\n'

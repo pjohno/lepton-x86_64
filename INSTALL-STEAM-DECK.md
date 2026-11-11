@@ -23,12 +23,19 @@ Google's `NOTICE.txt` (see [Google ADB](#google-adb)).
 **Steam Deck**: SteamOS in Desktop Mode, signed in to Steam at least once, and
 about 3 GiB free in your home directory per install.
 
-**Lepton supports the Steam Deck only.** Desktop PCs with an AMD GPU can
-install it, but that is experimental. Fedora KDE Wayland testing confirmed
-mouse and keyboard input with the desktop touch-mode fix below; older bundles
-may still have the nested Gamescope mouse failure
-([issue #9](https://github.com/pjohno/lepton-x86_64/issues/9)). Other GPUs are
-not supported (the image only contains AMD RADV/radeonsi drivers).
+SteamOS installations automatically use the existing Gamescope bridge, with
+fullscreen Gaming Mode and windowed Desktop Mode. The same bundle installer
+also detects conventional Linux hosts and selects direct Wayland with native
+fullscreen. Fedora GNOME and KDE Plasma Wayland are supported launch
+environments; desktop game compatibility remains experimental. X11 is
+unsupported for the direct profile. Other GPUs are not supported (the image
+only contains AMD RADV/radeonsi drivers).
+
+Both installers accept `--install-profile local-desktop` or
+`--install-profile steamos` to override OS detection. Replacement installs
+reselect the profile for the current host instead of preserving the old one.
+See [desktop installation and test commands](compat_tool/LOCAL-DESKTOP.md)
+for Fedora, host requirements and the Gamescope debugging override.
 
 ## Install from GitHub Releases
 

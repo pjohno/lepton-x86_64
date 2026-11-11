@@ -36,15 +36,15 @@ LEPTON_CUSTOM_PATCHES=(
     "external/minigbm|0004-minigbm-gbm-mesa-driver.patch"
     "frameworks/native|0007-eventhub-preserve-evdev-axes.patch"
     "frameworks/native|0008-inputreader-separate-steam-input-pads.patch"
+    "hardware/waydroid|0009-hwc-local-wayland-fullscreen.patch"
 )
 
-# image_provenance_write REPO AOSP ROOTFS OUTPUT
-# Records the repository commit, whether the image inputs had uncommitted
-# changes, whether the copied folders still match the repository, whether
-# each Lepton patch is applied, the resolved AOSP manifest and the rootfs.
-image_provenance_write() (
+# image_source_status REPO AOSP: verify copied source content and every patch.
+# The copied project's Git HEAD can differ: vendoring copies pinned source files
+# over the manifest project. Content plus applied patches is authoritative.
+image_source_status() (
     set -Eeuo pipefail
-    local repo="$1" aosp="$2" rootfs="$3" output="$4" entry src dst project patch
+    local repo="$1" aosp="$2" entry src dst project patch expected custom matching
     local inputs=clean trees=match patches=applied
     local -a tree_problems=() patch_problems=()
     [[ -z "$(git -C "$repo" status --porcelain -- "${LEPTON_IMAGE_INPUTS[@]}")" ]] || inputs=modified
@@ -53,8 +53,27 @@ image_provenance_write() (
         if [[ -z "$(ls -A -- "$src" 2>/dev/null)" ]]; then
             # An uninitialised submodule (e.g. in a git worktree): cannot compare.
             trees=differ; tree_problems+=("${entry%%|*} not checked out")
-        elif ! diff -rq --no-dereference --exclude=.git -- "$src" "$dst" >/dev/null 2>&1; then
-            trees=differ; tree_problems+=("${entry#*|}")
+        else
+            # A copied project can also receive a reviewed custom patch. Compare
+            # its expected patched tree, never treat those changes as unexplained.
+            matching=()
+            for custom in "${LEPTON_CUSTOM_PATCHES[@]}"; do
+                [[ "${custom%%|*}" != "${entry#*|}" ]] || matching+=("${custom#*|}")
+            done
+            expected="$src"
+            if ((${#matching[@]})); then
+                expected="$(mktemp -d)"
+                cp -a -- "$src/." "$expected/"
+                rm -rf -- "$expected/.git"
+                for patch in "${matching[@]}"; do
+                    git -C "$expected" apply --no-index "$repo/image-14/patches/$patch" >/dev/null 2>&1 ||
+                        { trees=differ; tree_problems+=("${entry#*|} expected patch failed"); }
+                done
+            fi
+            if ! diff -rq --no-dereference --exclude=.git -- "$expected" "$dst" >/dev/null 2>&1; then
+                trees=differ; tree_problems+=("${entry#*|}")
+            fi
+            [[ "$expected" == "$src" ]] || rm -rf -- "$expected"
         fi
     done
     for entry in "${LEPTON_CUSTOM_PATCHES[@]}"; do
@@ -63,14 +82,29 @@ image_provenance_write() (
             patches=missing; patch_problems+=("${entry#*|}")
         fi
     done
+    printf 'Image inputs: %s\n' "$inputs"
+    printf 'Copied folders: %s%s\n' "$trees" "${tree_problems[*]:+ (${tree_problems[*]})}"
+    printf 'Lepton patches: %s%s\n' "$patches" "${patch_problems[*]:+ (${patch_problems[*]})}"
+    [[ "$trees" == match && "$patches" == applied ]]
+)
+
+# image_provenance_write REPO AOSP ROOTFS OUTPUT
+# Records the repository commit, whether the image inputs had uncommitted
+# changes, whether the copied folders still match the repository, whether
+# each Lepton patch is applied, the resolved AOSP manifest and the rootfs.
+image_provenance_write() (
+    set -Eeuo pipefail
+    local repo="$1" aosp="$2" rootfs="$3" output="$4" status
+    status="$(image_source_status "$repo" "$aosp" || true)"
     {
         printf 'Image source commit: %s\n' "$(git -C "$repo" rev-parse HEAD)"
-        printf 'Image inputs: %s\n' "$inputs"
-        printf 'Copied folders: %s%s\n' "$trees" "${tree_problems[*]:+ (${tree_problems[*]})}"
-        printf 'Lepton patches: %s%s\n' "$patches" "${patch_problems[*]:+ (${patch_problems[*]})}"
+        printf '%s\n' "$status"
         printf 'AOSP manifest SHA256: %s\n' \
             "$(sha256sum "$aosp/.lepton-resolved-manifest.xml" 2>/dev/null | cut -d' ' -f1 || echo unknown)"
         printf 'Rootfs build.prop SHA256: %s\n' "$(sha256sum "$rootfs/system/build.prop" | cut -d' ' -f1)"
+        if [[ -f "$rootfs/vendor/lib64/hw/hwcomposer.waydroid.so" ]]; then
+            printf 'Rootfs hwcomposer SHA256: %s\n' "$(sha256sum "$rootfs/vendor/lib64/hw/hwcomposer.waydroid.so" | cut -d' ' -f1)"
+        fi
         printf 'Built: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     } > "$output"
 )
