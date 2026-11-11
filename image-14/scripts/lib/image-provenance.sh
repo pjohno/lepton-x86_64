@@ -39,13 +39,12 @@ LEPTON_CUSTOM_PATCHES=(
     "hardware/waydroid|0009-hwc-local-wayland-fullscreen.patch"
 )
 
-# image_provenance_write REPO AOSP ROOTFS OUTPUT
-# Records the repository commit, whether the image inputs had uncommitted
-# changes, whether the copied folders still match the repository, whether
-# each Lepton patch is applied, the resolved AOSP manifest and the rootfs.
-image_provenance_write() (
+# image_source_status REPO AOSP: verify copied source content and every patch.
+# The copied project's Git HEAD can differ: vendoring copies pinned source files
+# over the manifest project. Content plus applied patches is authoritative.
+image_source_status() (
     set -Eeuo pipefail
-    local repo="$1" aosp="$2" rootfs="$3" output="$4" entry src dst project patch expected custom matching
+    local repo="$1" aosp="$2" entry src dst project patch expected custom matching
     local inputs=clean trees=match patches=applied
     local -a tree_problems=() patch_problems=()
     [[ -z "$(git -C "$repo" status --porcelain -- "${LEPTON_IMAGE_INPUTS[@]}")" ]] || inputs=modified
@@ -83,14 +82,29 @@ image_provenance_write() (
             patches=missing; patch_problems+=("${entry#*|}")
         fi
     done
+    printf 'Image inputs: %s\n' "$inputs"
+    printf 'Copied folders: %s%s\n' "$trees" "${tree_problems[*]:+ (${tree_problems[*]})}"
+    printf 'Lepton patches: %s%s\n' "$patches" "${patch_problems[*]:+ (${patch_problems[*]})}"
+    [[ "$trees" == match && "$patches" == applied ]]
+)
+
+# image_provenance_write REPO AOSP ROOTFS OUTPUT
+# Records the repository commit, whether the image inputs had uncommitted
+# changes, whether the copied folders still match the repository, whether
+# each Lepton patch is applied, the resolved AOSP manifest and the rootfs.
+image_provenance_write() (
+    set -Eeuo pipefail
+    local repo="$1" aosp="$2" rootfs="$3" output="$4" status
+    status="$(image_source_status "$repo" "$aosp" || true)"
     {
         printf 'Image source commit: %s\n' "$(git -C "$repo" rev-parse HEAD)"
-        printf 'Image inputs: %s\n' "$inputs"
-        printf 'Copied folders: %s%s\n' "$trees" "${tree_problems[*]:+ (${tree_problems[*]})}"
-        printf 'Lepton patches: %s%s\n' "$patches" "${patch_problems[*]:+ (${patch_problems[*]})}"
+        printf '%s\n' "$status"
         printf 'AOSP manifest SHA256: %s\n' \
             "$(sha256sum "$aosp/.lepton-resolved-manifest.xml" 2>/dev/null | cut -d' ' -f1 || echo unknown)"
         printf 'Rootfs build.prop SHA256: %s\n' "$(sha256sum "$rootfs/system/build.prop" | cut -d' ' -f1)"
+        if [[ -f "$rootfs/vendor/lib64/hw/hwcomposer.waydroid.so" ]]; then
+            printf 'Rootfs hwcomposer SHA256: %s\n' "$(sha256sum "$rootfs/vendor/lib64/hw/hwcomposer.waydroid.so" | cut -d' ' -f1)"
+        fi
         printf 'Built: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     } > "$output"
 )

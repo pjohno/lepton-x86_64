@@ -238,6 +238,102 @@ bash image-14/scripts/build-images-x86_64.sh --execute
 bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id base-YYYYMMDD
 ```
 
+## Incremental test bundle without replacing packaged outputs
+
+When the checkout is already prepared for this branch, use a new output folder
+instead of the fresh-checkout `do_build_x86_64.sh` workflow. Do not run
+`prepare --reset`, `installclean`, or a clean build for this case.
+
+```bash
+source .build-env
+TEST_OUT="$LEPTON_OUTPUT_DIR/fullscreen-test"
+bash image-14/scripts/build-incremental-bundle-x86_64.sh \
+  --check --bundle-id fullscreen-test --output-dir "$TEST_OUT"
+bash image-14/scripts/build-incremental-bundle-x86_64.sh \
+  --execute --bundle-id fullscreen-test --output-dir "$TEST_OUT" \
+  --from-stage "$LEPTON_OUTPUT_DIR/stages/v0.1.0-alpha"
+```
+
+`--from-stage` is optional and reuses only verified ADB/inotify tools from an
+existing stage; it never reuses that stage's sysbake. Omit it to provision tools
+normally. ADB is not redistributed in the archive. Forward `--with-gapps`,
+`--with-ndk`, `--with-widevine`, their input options, tool identity and sysbake
+options as needed; these features remain opt-in. No files are transferred or
+installed by this wrapper.
+
+The new folder must not exist. It will contain:
+
+| Path | Contents |
+| --- | --- |
+| `images/` | New system/vendor images, `SHA256SUMS`, `BUILD-INFO.txt` |
+| `rootfs/` | New flattened rootfs, including its own image-provenance record |
+| `stage/` | New compatibility tool and fresh sysbake for those images |
+| `bundles/` | `lepton-x86_64-steamdeck-fullscreen-test.tar.gz`, its `.sha256` and `.install.sh` |
+
+The original workspace `images/`, `rootfs/`, `stages/` and `bundles/` are
+preserved. **The existing checkout's `aosp/out/` is shared and updated by
+incremental compilation.** Source files are not reset. Logs and the build lock
+are also updated. An interrupted earlier build is refused in isolated mode;
+inspect or repair it separately, rather than silently deleting intermediates.
+Partial new outputs are kept for inspection and are never silently overwritten.
+
+The same operations can be run separately:
+
+```bash
+bash image-14/scripts/build-images-x86_64.sh --execute \
+  --images-dir "$TEST_OUT/images" --rootfs-dir "$TEST_OUT/rootfs"
+bash image-14/scripts/make-deck-bundle-x86_64.sh --execute \
+  --bundle-id fullscreen-test --rootfs-source "$TEST_OUT/rootfs" \
+  --stage-dir "$TEST_OUT/stage" --bundle-dir "$TEST_OUT/bundles" \
+  --from-stage "$LEPTON_OUTPUT_DIR/stages/v0.1.0-alpha"
+```
+
+Both explicit image/rootfs destinations must be new, outside the original
+artifact directories, disjoint from sources/each other, and contain no symlink
+ancestors. Supply both overrides to preserve both defaults. `.build-env` is
+never edited. Omitting overrides retains the original replacement behavior.
+
+Before compilation, the local hwcomposer patch must already be applied and
+vendored source contents must match this branch's pinned trees plus its reviewed
+patches. The copied tree's underlying Git HEAD need not equal the vendored
+submodule HEAD: vendoring overlays source files. Content checks are authoritative.
+A missing patch is reported with a safe apply command; it is not applied twice
+or reset automatically. Conflicting/stale source content stops the build.
+
+The compiler explicitly builds `hwcomposer.waydroid` before generating images.
+The extracted vendor library must match that artifact byte-for-byte and contain
+the new local-display code before the output is marked ready. New rootfs builds
+carry `.lepton-image-provenance`, which packaging prefers over the workspace's
+old `BUILD-INFO.txt`. Both build.prop and hwcomposer hashes must match, avoiding
+false provenance when only the native library changed.
+
+After reviewing the resulting bundle, transfer it (replace `DECK_IP`):
+
+```bash
+bash image-14/scripts/transfer-deck-bundle.sh --check \
+  --bundle-id fullscreen-test --bundle-dir "$TEST_OUT/bundles"
+bash image-14/scripts/transfer-deck-bundle.sh \
+  --bundle-id fullscreen-test --bundle-dir "$TEST_OUT/bundles" --deck-ip DECK_IP
+```
+
+On the Deck, install alongside existing tools:
+
+```bash
+bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-fullscreen-test.install.sh --new
+```
+
+Restart Steam and manually select `Lepton x86_64 (community) - fullscreen-test`
+for a test shortcut. The tool ID is `lepton_x86_64_fullscreen_test`; do not use
+`--replace`, `--into` or a transfer `--replace` option. The bundle carries no
+local-desktop profile, so Deck Desktop Mode stays windowed with touch mode 1,
+and Gaming Mode retains fullscreen SDL/X11 Gamescope with touch mode 4.
+
+Existing saves/prefixes are not reset. A different Android runtime may be refused
+for an existing game profile by fingerprint protection; keep the original tool
+for that game or add a separately named test shortcut with its own prefix.
+Never bypass that refusal by resetting valuable data. These commands do not
+publish a release, merge the branch or change GitHub issue state.
+
 ## When something fails
 
 - Every step prints the path of its log. Logs live in the workspace's `logs/`

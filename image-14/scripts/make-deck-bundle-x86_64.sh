@@ -26,7 +26,9 @@ Usage: bash image-14/scripts/make-deck-bundle-x86_64.sh --check|--execute --bund
 
 Builds a Steam Deck bundle from the workspace's packaged rootfs (rootfs/,
 made by build-images-x86_64.sh), or --rootfs-source DIR.
-Use image-14/do_build_x86_64.sh instead to also compile Android from source.
+Use build-incremental-bundle-x86_64.sh for an already prepared checkout with
+isolated image/rootfs/stage/bundle outputs. Use image-14/do_build_x86_64.sh
+for a fresh Android checkout.
 
 Options:
   --stage-dir DIR             New stage (default: workspace stages/ID)
@@ -127,5 +129,5 @@ bash "$SCRIPT_DIR/internal/deploy-compat-x86_64.sh" --package-only --execute --s
 printf '\n[PASS] Bundle ready: %s\n' "$ARCHIVE"
 if [[ -z "$DECK_IP" ]]; then
     info "The stage is no longer needed: podman unshare rm -rf \"$STAGE\""
-    info "Send it with: bash image-14/scripts/transfer-deck-bundle.sh --bundle-id $BUNDLE_ID --deck-ip DECK_IP"
+    printf '[INFO] Send it with: bash image-14/scripts/transfer-deck-bundle.sh --bundle-id %q --bundle-dir %q --deck-ip DECK_IP\n' "$BUNDLE_ID" "$BUNDLE_DIR"
 fi
