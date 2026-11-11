@@ -271,11 +271,13 @@ def _unescape(text):
                   ).decode('utf-8', 'surrogateescape')
 
 
-def parse_xattrs(data):
+def parse_xattrs(data, strict=True):
     """Parse a `getfattr -R -P -h -d -m -` record: {path: {name: value}}.
 
     Paths must stay inside sysbake/ and attributes must be restorable by an
     ordinary user (user.* only; never security.selinux or trusted.*).
+    strict=False only parses (for reporting differences); it validates nothing
+    beyond the record syntax.
     """
     require(isinstance(data, bytes), 'Invalid xattr record')
     try:
@@ -291,19 +293,20 @@ def parse_xattrs(data):
         if line.startswith('# file: '):
             path = _unescape(line[len('# file: '):])
             parts = path.split('/')
-            require(parts[0] == 'sysbake' and not any(p in ('', '.', '..') for p in parts),
+            require(not strict or (parts[0] == 'sysbake' and not any(p in ('', '.', '..') for p in parts)),
                     f'sysbake.xattrs line {number}: path outside sysbake/: {path!r}')
             require(path not in entries, f'sysbake.xattrs line {number}: duplicate path {path!r}')
             current = entries[path] = {}
             continue
         require(current is not None and '=' in line, f'sysbake.xattrs line {number}: malformed entry')
         name, value = line.split('=', 1)
-        require(name.startswith('user.') and len(name) > 5,
+        require(not strict or (name.startswith('user.') and len(name) > 5),
                 f'sysbake.xattrs line {number}: attribute {name!r} cannot be restored by an ordinary user')
         require(name not in current, f'sysbake.xattrs line {number}: duplicate attribute {name}')
         current[name] = value
-    require(entries, 'sysbake.xattrs records no files')
-    require(any(entries.values()), 'sysbake.xattrs records no user.* attributes')
+    if strict:
+        require(entries, 'sysbake.xattrs records no files')
+        require(any(entries.values()), 'sysbake.xattrs records no user.* attributes')
     return entries
 
 

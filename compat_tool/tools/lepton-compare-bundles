@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Compare two Lepton bundle archives without installing, booting or extracting them.
+
+Each archive is read once as a stream. Sections are compared separately:
+Android rootfs, sysbake, sysbake.xattrs, runtime fingerprint inputs, bundle
+metadata/provenance and all other (launcher/tooling) files.
+
+Exit status: 0 when the Android rootfs, sysbake, xattr record and runtime
+fingerprint inputs are identical (other files may differ); 1 when any of them
+differ or could not be compared; 2 for unreadable, malformed or unsafe archives.
+Identical content is evidence, not a guarantee that saved profiles are compatible.
+"""
+import argparse
+import json
+from pathlib import Path
+import runpy
+import sys
+import types
+
+HERE = Path(__file__).resolve().parent
+L = types.SimpleNamespace(**runpy.run_path(str(HERE / 'lepton_bundle_lib.py')))
+KINDS = {'d': 'directory', 'f': 'file', 'l': 'symlink'}
+
+
+def compare_trees(old, new):
+    result = dict(added=sorted(set(new) - set(old)), removed=sorted(set(old) - set(new)),
+                  content_changed=[], type_changed=[], link_changed=[], permissions_changed=[])
+    for name in sorted(set(old) & set(new)):
+        (kind_a, mode_a, value_a), (kind_b, mode_b, value_b) = old[name], new[name]
+        if kind_a != kind_b:
+            result['type_changed'].append(dict(path=name, old=KINDS[kind_a], new=KINDS[kind_b]))
+            continue
+        if value_a != value_b:
+            result['link_changed' if kind_a == 'l' else 'content_changed'].append(
+                dict(path=name, old=value_a, new=value_b) if kind_a == 'l' else name)
+        if mode_a != mode_b:
+            result['permissions_changed'].append(dict(path=name, old=f'{mode_a:04o}', new=f'{mode_b:04o}'))
+    present = bool(old) and bool(new)
+    result.update(present=dict(old=bool(old), new=bool(new)), entries=dict(old=len(old), new=len(new)),
+                  tree_sha256=dict(old=L.tree_digest(old) if old else None, new=L.tree_digest(new) if new else None))
+    result['identical'] = present and not any(result[key] for key in
+                                              ('added', 'removed', 'content_changed', 'type_changed',
+                                               'link_changed', 'permissions_changed'))
+    return result
+
+
+def compare_xattrs(old_data, new_data):
+    result = dict(present=dict(old=old_data is not None, new=new_data is not None), problems={})
+    parsed = {}
+    for side, data in (('old', old_data), ('new', new_data)):
+        if data is None:
+            continue
+        try:
+            parsed[side] = L.parse_xattrs(data, strict=False)
+        except L.BundleError as exc:
+            result['problems'][side] = f'unparseable: {exc}'
+            continue
+        try:
+            L.parse_xattrs(data)
+        except L.BundleError as exc:
+            result['problems'][side] = str(exc)
+    if len(parsed) != 2:
+        result['identical'] = False
+        return result
+    old, new = parsed['old'], parsed['new']
+    changed = []
+    for path in sorted(set(old) & set(new)):
+        a, b = old[path], new[path]
+        if a != b:
+            changed.append(dict(path=path, added={k: b[k] for k in sorted(set(b) - set(a))},
+                                removed={k: a[k] for k in sorted(set(a) - set(b))},
+                                changed={k: [a[k], b[k]] for k in sorted(set(a) & set(b)) if a[k] != b[k]}))
+    result.update(paths=dict(old=len(old), new=len(new)),
+                  attributes=dict(old=sum(map(len, old.values())), new=sum(map(len, new.values()))),
+                  added_paths=sorted(set(new) - set(old)), removed_paths=sorted(set(old) - set(new)),
+                  changed=changed, byte_identical=old_data == new_data,
+                  sha256=dict(old=L.hashlib.sha256(old_data).hexdigest(), new=L.hashlib.sha256(new_data).hexdigest()))
+    result['identical'] = old_data == new_data
+    return result
+
+
+def provenance_lines(data):
+    lines = {}
+    for line in (data or b'').decode('utf-8', 'replace').splitlines():
+        key, sep, value = line.partition(': ')
+        if sep and key in ('Launcher source commit', 'Original launcher source commit (source bundle)',
+                           'Launcher working tree', 'Packaging', 'Source bundle', 'Stage type', 'Sysbake',
+                           'Android artifacts', 'Image provenance'):
+            lines[key] = value
+    return lines
+
+
+def compare(old_path, new_path):
+    old, new = L.ArchiveScan(old_path), L.ArchiveScan(new_path)
+    meta = {}
+    for side, scan in (('old', old), ('new', new)):
+        try:
+            meta[side] = scan.metadata()
+        except L.BundleError as exc:
+            meta[side] = {'error': str(exc)}
+    components = {}
+    for name in L.COMPONENTS:
+        values = {}
+        for side in ('old', 'new'):
+            data = meta[side] or {}
+            value = data.get(name)
+            if value is None and name == 'widevine' and 'gapps' in data:
+                values[side], values[side + '_legacy'] = False, True  # Older metadata lacks the field.
+            else:
+                values[side] = value
+        components[name] = values
+    bundle_changes = {}
+    if meta['old'] is not None and meta['new'] is not None:
+        for key in sorted(set(meta['old']) | set(meta['new'])):
+            if meta['old'].get(key) != meta['new'].get(key):
+                bundle_changes[key] = [meta['old'].get(key), meta['new'].get(key)]
+    fp_old, fp_new = old.fingerprint(), new.fingerprint()
+    fingerprint = dict(old=fp_old['fingerprint'], new=fp_new['fingerprint'],
+                       inputs={name[len('compat_tool/'):]: dict(old=fp_old['inputs'][name], new=fp_new['inputs'][name])
+                               for name in L.FINGERPRINT_INPUTS})
+    fingerprint['identical'] = fp_old['fingerprint'] is not None and fp_old['fingerprint'] == fp_new['fingerprint']
+    others = compare_trees({k: v for k, v in old.other.items() if k != L.XATTRS},
+                           {k: v for k, v in new.other.items() if k != L.XATTRS})
+    image = {side: scan.files.get('tools/IMAGE-PROVENANCE.txt') for side, scan in (('old', old), ('new', new))}
+    report = dict(
+        old=dict(archive=str(old_path), sha256=old.sha256, bundle=meta['old']),
+        new=dict(archive=str(new_path), sha256=new.sha256, bundle=meta['new']),
+        android_rootfs=compare_trees(old.rootfs, new.rootfs),
+        sysbake=compare_trees(old.sysbake, new.sysbake),
+        sysbake_xattrs=compare_xattrs(old.files.get(L.XATTRS), new.files.get(L.XATTRS)),
+        fingerprint=fingerprint,
+        metadata=dict(components=components, bundle_json_changes=bundle_changes,
+                      provenance=dict(old=provenance_lines(old.files.get('tools/BUNDLE-PROVENANCE.txt')),
+                                      new=provenance_lines(new.files.get('tools/BUNDLE-PROVENANCE.txt'))),
+                      image_provenance=('absent' if image['old'] is None and image['new'] is None else
+                                        'identical' if image['old'] == image['new'] else 'different')),
+        other_files=others)
+    runtime = all(report[key]['identical'] for key in ('android_rootfs', 'sysbake', 'sysbake_xattrs', 'fingerprint'))
+    outside = (not others['identical'] or bool(bundle_changes) or
+               report['metadata']['provenance']['old'] != report['metadata']['provenance']['new'])
+    report['summary'] = dict(
+        android_rootfs_identical=report['android_rootfs']['identical'],
+        sysbake_identical=report['sysbake']['identical'],
+        sysbake_xattrs_identical=report['sysbake_xattrs']['identical'],
+        fingerprint_inputs_identical=fingerprint['identical'],
+        runtime_inputs_identical=runtime,
+        differences_confined_to_launcher_tooling_metadata=runtime and outside,
+        archives_equivalent=runtime and not outside,
+        note='Identical content is evidence that both archives carry the same Android system and baked data. '
+             'It is not a guarantee that saved game profiles are compatible.')
+    return report
+
+
+def listing(items, limit, render):
+    shown = items if limit == 0 else items[:limit]
+    lines = ['      ' + render(item) for item in shown]
+    if len(items) > len(shown):
+        lines.append(f'      ... {len(items) - len(shown)} more (use --all or --json)')
+    return lines
+
+
+def tree_text(title, section, limit):
+    if not (section['present']['old'] and section['present']['new']):
+        missing = ', '.join(side for side in ('old', 'new') if not section['present'][side])
+        return [f'{title}: NOT COMPARED (absent from {missing})']
+    head = f'{title}: ' + ('IDENTICAL' if section['identical'] else 'DIFFERENT')
+    head += f" ({section['entries']['old']} -> {section['entries']['new']} entries)"
+    lines = [head]
+    if section['identical']:
+        lines.append(f"      tree SHA256 {section['tree_sha256']['old']}")
+        return lines
+    for key, label, render in (('added', 'added', lambda x: '+ ' + x), ('removed', 'removed', lambda x: '- ' + x),
+                               ('content_changed', 'content changed', lambda x: '~ ' + x),
+                               ('type_changed', 'type changed', lambda x: f"~ {x['path']} ({x['old']} -> {x['new']})"),
+                               ('link_changed', 'symlink target changed', lambda x: f"~ {x['path']} ({x['old']} -> {x['new']})"),
+                               ('permissions_changed', 'permissions changed', lambda x: f"~ {x['path']} ({x['old']} -> {x['new']})")):
+        if section[key]:
+            lines.append(f'    {label}: {len(section[key])}')
+            lines += listing(section[key], limit, render)
+    return lines
+
+
+def human(report, limit):
+    out = ['Comparing (read-only; nothing extracted or installed)']
+    for side in ('old', 'new'):
+        info = report[side]
+        bundle = info['bundle'] or {}
+        out.append(f"  {side}: {Path(info['archive']).name}  sha256 {info['sha256']}")
+        out.append(f"       bundle {bundle.get('bundle_id', '?')}, tool {bundle.get('tool_id', '?')}")
+    out.append('')
+    out += tree_text('Android rootfs', report['android_rootfs'], limit)
+    out += tree_text('Sysbake', report['sysbake'], limit)
+    x = report['sysbake_xattrs']
+    if not (x['present']['old'] and x['present']['new']) or 'paths' not in x:
+        out.append('sysbake.xattrs: NOT COMPARED (' + '; '.join(
+            [f'absent from {s}' for s in ('old', 'new') if not x['present'][s]] +
+            [f'{s}: {p}' for s, p in x['problems'].items()]) + ')')
+    else:
+        out.append('sysbake.xattrs: ' + ('IDENTICAL' if x['identical'] else 'DIFFERENT') +
+                   f" ({x['paths']['old']} -> {x['paths']['new']} paths, "
+                   f"{x['attributes']['old']} -> {x['attributes']['new']} attributes)")
+        if not x['identical']:
+            if not (x['added_paths'] or x['removed_paths'] or x['changed']):
+                out.append('    same attributes; record bytes differ (formatting or order)')
+            out += listing(x['added_paths'], limit, lambda p: '+ ' + p)
+            out += listing(x['removed_paths'], limit, lambda p: '- ' + p)
+            out += listing(x['changed'], limit, lambda c: '~ {}: {}'.format(c['path'], ', '.join(
+                [f'+{k}' for k in c['added']] + [f'-{k}' for k in c['removed']] + [f'{k} changed' for k in c['changed']])))
+        for side, problem in x['problems'].items():
+            out.append(f'    WARNING ({side}): {problem}')
+    f = report['fingerprint']
+    out.append('Runtime fingerprint inputs: ' + ('IDENTICAL' if f['identical'] else 'DIFFERENT'))
+    for name, values in f['inputs'].items():
+        state = 'missing' if values['old'] is None or values['new'] is None else \
+            ('same' if values['old'] == values['new'] else 'changed')
+        out.append(f'      {name}: {state}')
+    out.append(f"      fingerprint {f['old'] or 'unavailable'} -> {f['new'] or 'unavailable'}")
+    out.append('')
+    m = report['metadata']
+    out.append('Components (BUNDLE.json): ' + ', '.join(
+        f"{name} {str(v['old']).lower()}{' (legacy: absent)' if v.get('old_legacy') else ''}"
+        f" -> {str(v['new']).lower()}{' (legacy: absent)' if v.get('new_legacy') else ''}"
+        for name, v in m['components'].items()))
+    if m['bundle_json_changes']:
+        out.append('BUNDLE.json changes:')
+        out += [f'      {key}: {json.dumps(a)} -> {json.dumps(b)}' for key, (a, b) in m['bundle_json_changes'].items()]
+    else:
+        out.append('BUNDLE.json: identical')
+    old_p, new_p = m['provenance']['old'], m['provenance']['new']
+    for key in sorted(set(old_p) | set(new_p)):
+        if old_p.get(key) != new_p.get(key):
+            out.append(f'Provenance {key}: {old_p.get(key, "-")} -> {new_p.get(key, "-")}')
+    out.append('Image provenance (tools/IMAGE-PROVENANCE.txt): ' + {'absent': 'absent from both'}.get(
+        m['image_provenance'], m['image_provenance']))
+    o = report['other_files']
+    out.append('Launcher/tooling/metadata files: ' + ('IDENTICAL' if o['identical'] else
+               f"{len(o['added'])} added, {len(o['removed'])} removed, {len(o['content_changed'])} changed, "
+               f"{len(o['permissions_changed']) + len(o['type_changed']) + len(o['link_changed'])} other changes"))
+    if not o['identical']:
+        out += tree_text('  details', o, limit)[1:]
+    out.append('')
+    s = report['summary']
+    if s['archives_equivalent']:
+        out.append('RESULT: identical Android rootfs, sysbake, xattrs and fingerprint inputs; no other differences.')
+    elif s['differences_confined_to_launcher_tooling_metadata']:
+        out.append('RESULT: identical Android rootfs, sysbake, xattrs and fingerprint inputs; '
+                   'differences are confined to launcher/tooling/metadata.')
+    else:
+        different = [label for key, label in (('android_rootfs_identical', 'Android rootfs'), ('sysbake_identical', 'sysbake'),
+                                              ('sysbake_xattrs_identical', 'sysbake.xattrs'),
+                                              ('fingerprint_inputs_identical', 'fingerprint inputs')) if not s[key]]
+        out.append('RESULT: Android/runtime content differs or was not fully compared: ' + ', '.join(different) + '.')
+    out.append('NOTE: ' + s['note'])
+    return '\n'.join(out)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('old', type=Path, help='first bundle .tar.gz')
+    parser.add_argument('new', type=Path, help='second bundle .tar.gz')
+    parser.add_argument('--json', metavar='FILE', help="also write a machine-readable report ('-' for stdout only)")
+    parser.add_argument('--max-list', type=int, default=20, metavar='N', help='paths listed per category (default 20)')
+    parser.add_argument('--all', action='store_true', help='list every changed path')
+    args = parser.parse_args(argv)
+    try:
+        for path in (args.old, args.new):
+            if not path.is_file():
+                raise L.BundleError(f'Not a regular file: {path}')
+        report = compare(args.old, args.new)
+    except L.BundleError as exc:
+        print(f'ERROR: {exc}', file=sys.stderr)
+        return 2
+    text = json.dumps(report, indent=2) + '\n'
+    if args.json == '-':
+        sys.stdout.write(text)
+    else:
+        print(human(report, 0 if args.all else max(args.max_list, 1)))
+        if args.json:
+            Path(args.json).write_text(text)
+    return 0 if report['summary']['runtime_inputs_identical'] else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

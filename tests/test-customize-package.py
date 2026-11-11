@@ -192,6 +192,16 @@ class Harness:
         return self.run_tool(stage, 'package', mode, '--stage-dir', str(stage), '--output-dir', str(self.bundles),
                              '--bundle-id', bundle_id, *extra, ok=ok)
 
+    def compare(self, old, new, tool=None):
+        """Run lepton-compare-bundles (from a stage or the repository) and return its JSON report."""
+        tool = tool or REPO / 'compat_tool/tools/lepton-compare-bundles'
+        result = subprocess.run([sys.executable, '-B', str(tool), str(old), str(new), '--json', '-'],
+                                cwd=self.outside, capture_output=True, text=True, timeout=600)
+        self.assertIn(result.returncode, (0, 1), result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(result.returncode, 0 if report['summary']['runtime_inputs_identical'] else 1)
+        return report
+
     def state(self, stage):
         return json.loads((stage / 'STAGE.json').read_text())
 
@@ -544,7 +554,15 @@ class RestoreTests(Harness, unittest.TestCase):
         self.restore()
         self.assertIn('keeps its original validated sysbake', self.sysbake(self.restored, ok=False))
         self.package(self.restored, 'repacked')
-        before, after = scan(self.base.archive), scan(self.bundles / 'lepton-x86_64-repacked.tar.gz')
+        repacked = self.bundles / 'lepton-x86_64-repacked.tar.gz'
+        # The bundled comparison tool proves preservation, including the xattr record.
+        report = self.compare(self.base.archive, repacked, self.restored / 'compat_tool/tools/lepton-compare-bundles')
+        summary = report['summary']
+        self.assertTrue(summary['android_rootfs_identical'] and summary['sysbake_identical'] and
+                        summary['sysbake_xattrs_identical'] and summary['fingerprint_inputs_identical'])
+        self.assertTrue(summary['differences_confined_to_launcher_tooling_metadata'])
+        self.assertIn('tools/platform-tools/adb', report['other_files']['removed'])
+        before, after = scan(self.base.archive), scan(repacked)
         self.assertEqual(before.rootfs, after.rootfs)
         self.assertEqual(before.sysbake, after.sysbake)
         self.assertEqual(before.files[L.XATTRS], after.files[L.XATTRS])
@@ -691,8 +709,14 @@ class CustomizedWorkflowTests(Harness, INJECT.InjectionTests):
         self.package(restored, 'gapps-local-2')
         again = self.bundles / 'lepton-x86_64-gapps-local-2.tar.gz'
         self.assertTrue(json.loads(self.read_member(again, 'BUNDLE.json'))['gapps'])
-        first, second = L.ArchiveScan(archive), L.ArchiveScan(again)
-        self.assertEqual((first.rootfs, first.sysbake, first.fingerprint()), (second.rootfs, second.sysbake, second.fingerprint()))
+        report = self.compare(archive, again)
+        self.assertTrue(report['summary']['differences_confined_to_launcher_tooling_metadata'])
+        self.assertEqual(report['metadata']['components']['gapps'], dict(old=True, new=True))
+        # Against the base bundle, Workflow A changed Android and its sysbake.
+        base = self.compare(self.base.archive, archive)
+        self.assertFalse(base['summary']['android_rootfs_identical'])
+        self.assertIn('system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk', base['android_rootfs']['added'])
+        self.assertFalse(base['sysbake']['present']['old'] and base['sysbake']['identical'])
         names = self.members(again)
         self.assertIn('./compat_tool/provenance/sources/v0.2.0-alpha/SOURCE.json', names)
         self.assertIn('./compat_tool/provenance/sources/gapps-local/SOURCE.json', names)
@@ -704,6 +728,74 @@ class CustomizedWorkflowTests(Harness, INJECT.InjectionTests):
         state['components']['gapps'] = False
         (self.output / 'STAGE.json').write_text(json.dumps(state))
         self.assertIn('does not match the stage record', self.package(self.output, mode='--check', ok=False))
+
+
+
+@unittest.skipUnless(os.environ.get('LEPTON_TEST_COMPLETE_BUNDLE'), 'set LEPTON_TEST_COMPLETE_BUNDLE to a real bundle')
+class LocalBundleIntegration(Harness, unittest.TestCase):
+    """Workflow B with a real complete bundle (optional; read-only on the input).
+
+    LEPTON_TEST_COMPLETE_BUNDLE=/path/lepton-x86_64-ID.tar.gz (its .sha256 alongside)
+    LEPTON_TEST_ALLOW_UNSIGNED=1 for your own unsigned build. Needs ~3x the
+    archive size free in TMPDIR.
+    """
+    def test_restore_repackage_compare(self):
+        archive = Path(os.environ['LEPTON_TEST_COMPLETE_BUNDLE']).resolve()
+        work = Path(tempfile.mkdtemp(prefix='lepton-workflow-b-'))
+        def remove():
+            subprocess.run(['chmod', '-R', 'u+rwX', str(work)], check=False)
+            shutil.rmtree(work)
+        self.addCleanup(remove)
+        self.outside, self.bundles = work, work / 'bundles'
+        tool = REPO / 'compat_tool/tools/lepton-customize'
+        extra = ['--allow-unsigned'] if os.environ.get('LEPTON_TEST_ALLOW_UNSIGNED') == '1' else []
+        subprocess.run([sys.executable, '-B', str(tool), 'restore', '--execute', *extra, '--bundle', str(archive),
+                        '--checksum', str(archive) + '.sha256', '--stage-dir', str(work / 'stage')], check=True)
+        subprocess.run([sys.executable, '-B', str(tool), 'package', '--execute', '--stage-dir', str(work / 'stage'),
+                        '--output-dir', str(self.bundles), '--bundle-id', 'workflow-b-test'], check=True)
+        report = self.compare(archive, self.bundles / 'lepton-x86_64-workflow-b-test.tar.gz')
+        self.assertTrue(report['summary']['runtime_inputs_identical'], json.dumps(report['summary'], indent=2))
+
+
+@unittest.skipUnless(os.environ.get('LEPTON_TEST_BASE_BUNDLE'), 'set LEPTON_TEST_BASE_BUNDLE for a real Fedora Workflow A run')
+class LocalSysbakeIntegration(Harness, unittest.TestCase):
+    """Workflow A on a real Fedora host: real Podman, Weston, BinderFS and Android boot.
+
+    LEPTON_TEST_BASE_BUNDLE=/path/lepton-x86_64-ID.tar.gz (.sha256 and .sig alongside)
+    LEPTON_TEST_GOOGLE_INPUTS=/path/prepared-google-inputs   (optional)
+    LEPTON_TEST_COMPONENTS="ndk gapps widevine"               (default: all three with inputs)
+    LEPTON_TEST_ALLOW_UNSIGNED=1                               (your own unsigned build)
+    """
+    def test_customise_sysbake_package_compare(self):
+        base = Path(os.environ['LEPTON_TEST_BASE_BUNDLE']).resolve()
+        inputs = os.environ.get('LEPTON_TEST_GOOGLE_INPUTS')
+        components = os.environ.get('LEPTON_TEST_COMPONENTS', 'ndk gapps widevine' if inputs else '').split()
+        work = Path(tempfile.mkdtemp(prefix='lepton-workflow-a-', dir=os.environ.get('LEPTON_TEST_WORK_DIR')))
+        tool = REPO / 'compat_tool/tools/lepton-customize'
+        extra = ['--allow-unsigned'] if os.environ.get('LEPTON_TEST_ALLOW_UNSIGNED') == '1' else []
+        run = lambda *args: subprocess.run([sys.executable, '-B', str(tool), *map(str, args)], check=True)
+        run('--execute', *extra, '--bundle', base, '--checksum', str(base) + '.sha256', '--stage-dir', work / 'prepared')
+        stage = work / 'prepared'
+        if components:
+            run('inject', '--execute', '--stage-dir', stage, '--output-stage', work / 'custom',
+                '--google-inputs', inputs, *('--with-' + c for c in components))
+            stage = work / 'custom'
+        run('sysbake', '--check', '--stage-dir', stage)
+        run('sysbake', '--execute', '--stage-dir', stage)
+        run('package', '--execute', '--stage-dir', stage, '--output-dir', work / 'bundles', '--bundle-id', 'workflow-a-test')
+        archive = work / 'bundles/lepton-x86_64-workflow-a-test.tar.gz'
+        self.outside = work
+        report = self.compare(base, archive)
+        self.assertFalse(report['sysbake']['identical'], 'a fresh sysbake was expected')
+        for name in ('gapps', 'ndk', 'widevine'):
+            self.assertEqual(report['metadata']['components'][name]['new'], name in components)
+        home = work / 'home'
+        home.mkdir()
+        result = subprocess.run(['bash', str(work / 'bundles/lepton-x86_64-workflow-a-test.install.sh'), '--check',
+                                 '--allow-non-amd'], env=dict(os.environ, HOME=str(home), LEPTON_INSTALL_IN_TERMINAL='1',
+                                                              LEPTON_NO_DIALOGS='1'), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        print(f'Workflow A outputs kept in {work} (remove with: podman unshare rm -rf {work})')
 
 
 # Do not rerun the inherited injection tests in this suite.

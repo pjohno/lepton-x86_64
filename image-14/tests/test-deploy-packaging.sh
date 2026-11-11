@@ -107,7 +107,7 @@ grep -qx 'user.fake=0x31' "$work/packaged-xattrs"
 cmp "$work/original-xattrs" "$stage/compat_tool/sysbake.xattrs"
 tar -tzf "$archive" > "$work/contents"
 grep -qx './compat_tool/liblepton/ndk_auxv/runtime.sh' "$work/contents"
-for file in compat_tool/tools/lepton-customize compat_tool/tools/lepton_customize_inject.py compat_tool/tools/lepton_customize_package.py compat_tool/tools/lepton_bundle_lib.py tools/customize/internal/sysbake-isolated-x86_64.sh tools/customize/internal/inject-ndk-translation.sh tools/customize/internal/extract-ndk-translation.sh tools/customize/lib/google-services.sh tools/customize/lib/workspace.sh tools/customize/prepare-google-inputs.sh CUSTOMIZING.md; do
+for file in compat_tool/tools/lepton-customize compat_tool/tools/lepton_customize_inject.py compat_tool/tools/lepton_customize_package.py compat_tool/tools/lepton_bundle_lib.py compat_tool/tools/lepton-compare-bundles tools/customize/internal/sysbake-isolated-x86_64.sh tools/customize/internal/inject-ndk-translation.sh tools/customize/internal/extract-ndk-translation.sh tools/customize/lib/google-services.sh tools/customize/lib/workspace.sh tools/customize/prepare-google-inputs.sh CUSTOMIZING.md; do
     grep -Fxq "./$file" "$work/contents"
 done
 
