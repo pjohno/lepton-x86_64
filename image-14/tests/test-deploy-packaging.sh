@@ -132,6 +132,7 @@ grep -Fq 'https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.
 vdf="$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_fixture.vdf"
 grep -Fq "\"$dest/compat_tool\"" "$vdf"
 grep -Fq '"Lepton x86_64 (community) - fixture"' "$vdf"
+grep -Fq '"from_oslist" "android"' "$vdf"
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_fixture.env ]]
 ( source "$deck_home/.config/lepton-x86_64/lepton_x86_64_fixture.env"; [[ "$LEPTON_X86_INSTALL_DIR" == "$dest" ]] )
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$dest/compat_tool/tools/lepton-add-game" ]]
