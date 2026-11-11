@@ -50,14 +50,14 @@ as your normal user. Replace `VERSION` with your bundle ID:
 
 ```bash
 # Transferred bundle: no source checkout needed.
-bash lepton-x86_64-steamdeck-VERSION.install.sh --check
-bash lepton-x86_64-steamdeck-VERSION.install.sh
+bash lepton-x86_64-VERSION.install.sh --check
+bash lepton-x86_64-VERSION.install.sh
 # Upgrade an existing installation, recalculating its profile for this host.
-bash lepton-x86_64-steamdeck-VERSION.install.sh --replace
+bash lepton-x86_64-VERSION.install.sh --replace
 # Force the Gamescope route for comparison (requires Gamescope).
-bash lepton-x86_64-steamdeck-VERSION.install.sh --replace --install-profile steamos
+bash lepton-x86_64-VERSION.install.sh --replace --install-profile steamos
 # Restore direct Wayland.
-bash lepton-x86_64-steamdeck-VERSION.install.sh --replace --install-profile local-desktop
+bash lepton-x86_64-VERSION.install.sh --replace --install-profile local-desktop
 ```
 
 From the source checkout, with a bundle or prepared stage already available:

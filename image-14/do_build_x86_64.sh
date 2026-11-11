@@ -121,7 +121,7 @@ BUNDLE_DIR="$LEPTON_DECK_BUNDLE_DIR"
 [[ "$BUNDLE_DIR" != / && "$BUNDLE_DIR" != "$HOME" &&
    "$BUNDLE_DIR" != "$REPO" && "$BUNDLE_DIR" != "$STAGE" &&
    "$BUNDLE_DIR" != "$STAGE/"* ]] || fail 'Unsafe bundle output directory'
-ARCHIVE="$BUNDLE_DIR/lepton-x86_64-steamdeck-$BUNDLE_ID.tar.gz"
+ARCHIVE="$BUNDLE_DIR/lepton-x86_64-$BUNDLE_ID.tar.gz"
 [[ ! -e "$ARCHIVE" && ! -L "$ARCHIVE" &&
    ! -e "$ARCHIVE.sha256" && ! -L "$ARCHIVE.sha256" ]] ||
     fail "Bundle already exists: $ARCHIVE"

@@ -14,9 +14,9 @@ and extract the archive, refusing to overwrite an earlier test installation:
 
 ```bash
 cd "$HOME/Downloads"
-sha256sum -c lepton-x86_64-steamdeck-gapps-view-20261102.tar.gz.sha256 &&
+sha256sum -c lepton-x86_64-gapps-view-20261102.tar.gz.sha256 &&
   mkdir "$HOME/.local/share/lepton-gapps-test-20261102" &&
-  tar -xzf lepton-x86_64-steamdeck-gapps-view-20261102.tar.gz \
+  tar -xzf lepton-x86_64-gapps-view-20261102.tar.gz \
     -C "$HOME/.local/share/lepton-gapps-test-20261102" --no-same-owner
 ```
 

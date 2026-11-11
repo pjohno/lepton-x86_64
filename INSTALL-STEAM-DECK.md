@@ -44,10 +44,10 @@ Each release of version `VERSION` (for example `v0.1.0-alpha`) has these files:
 
 | File | Purpose |
 | --- | --- |
-| `lepton-x86_64-steamdeck-VERSION.tar.gz` | The bundle |
-| `lepton-x86_64-steamdeck-VERSION.tar.gz.sha256` | Checksums of the bundle and the installer |
-| `lepton-x86_64-steamdeck-VERSION.install.sh` | The installer |
-| `lepton-x86_64-steamdeck-VERSION.tar.gz.sha256.sig` | Signature (signed releases only) |
+| `lepton-x86_64-VERSION.tar.gz` | The bundle |
+| `lepton-x86_64-VERSION.tar.gz.sha256` | Checksums of the bundle and the installer |
+| `lepton-x86_64-VERSION.install.sh` | The installer |
+| `lepton-x86_64-VERSION.tar.gz.sha256.sig` | Signature (signed releases only) |
 
 ### First installation
 
@@ -65,7 +65,7 @@ Each release of version `VERSION` (for example `v0.1.0-alpha`) has these files:
      completes the file name):
 
      ```bash
-     bash lepton-x86_64-steamdeck-VERSION.install.sh
+     bash lepton-x86_64-VERSION.install.sh
      ```
    - **Double-click:** in Dolphin, right-click the `.install.sh` file and choose
      **Properties > Permissions**. Tick **Is executable** (called **Allow
@@ -185,9 +185,9 @@ example for the bundle ID `base-20261104`:
 
 | File | Purpose |
 | --- | --- |
-| `lepton-x86_64-steamdeck-base-20261104.tar.gz` | The bundle |
-| `lepton-x86_64-steamdeck-base-20261104.tar.gz.sha256` | Checksums |
-| `lepton-x86_64-steamdeck-base-20261104.install.sh` | One-command installer |
+| `lepton-x86_64-base-20261104.tar.gz` | The bundle |
+| `lepton-x86_64-base-20261104.tar.gz.sha256` | Checksums |
+| `lepton-x86_64-base-20261104.install.sh` | One-command installer |
 
 ### 2. Copy it to the Deck
 
@@ -218,7 +218,7 @@ double-tap the `.install.sh` file in Dolphin instead.) A Konsole window shows
 progress. From a terminal, the same is:
 
 ```bash
-bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-base-20261104.install.sh
+bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-base-20261104.install.sh
 ```
 
 The installer:
@@ -263,7 +263,7 @@ once the Deck is online. No `sudo` is needed.
 the Deck and pass it in; it is checked in exactly the same way:
 
 ```bash
-bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-base-20261104.install.sh \
+bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-base-20261104.install.sh \
     --adb-zip ~/Downloads/platform-tools_r37.0.1-linux.zip
 ```
 

@@ -61,7 +61,7 @@ Transfer the archive, `.sha256` and `.install.sh` files together (for example
 with `transfer-deck-bundle.sh`, see [BUILDING.md](BUILDING.md#6-send-the-bundles-to-the-deck)), then in Desktop Mode:
 
 ```bash
-bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-gapps-v1.install.sh
+bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-gapps-v1.install.sh
 ```
 
 The installer verifies the checksum, extracts to a new directory named after the
@@ -198,7 +198,7 @@ SHA256 `d82f1d0afa895cd849ad035fb7f07aaea1b961d02e46715844b09b87fa49b28e`.
 Fresh offline sysbake was generated; no signed-in test profile was reused.
 
 The local bundle is
-`$LEPTON_OUTPUT_DIR/deck-bundles/lepton-x86_64-steamdeck-gapps-milestone-20261102.tar.gz`,
+`$LEPTON_OUTPUT_DIR/deck-bundles/lepton-x86_64-gapps-milestone-20261102.tar.gz`,
 with its `.sha256` companion. It uses tool ID and suggested installation directory
 `lepton_gapps_milestone_20261102`, displayed as **Lepton Android 14 GApps (milestone)**.
 The archive includes `GAPPS.md`, `BUNDLE.json`, exact installation instructions,

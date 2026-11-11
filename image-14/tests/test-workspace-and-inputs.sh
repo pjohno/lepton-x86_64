@@ -81,9 +81,9 @@ mkdir -p "$WS/bundles"
 step='transfer-deck-bundle --check'
 (
     cd "$WS/bundles"
-    printf 'archive\n' > lepton-x86_64-steamdeck-t1.tar.gz
-    sha256sum lepton-x86_64-steamdeck-t1.tar.gz > lepton-x86_64-steamdeck-t1.tar.gz.sha256
-    printf '#!/bin/sh\n' > lepton-x86_64-steamdeck-t1.install.sh
+    printf 'archive\n' > lepton-x86_64-t1.tar.gz
+    sha256sum lepton-x86_64-t1.tar.gz > lepton-x86_64-t1.tar.gz.sha256
+    printf '#!/bin/sh\n' > lepton-x86_64-t1.install.sh
 )
 transfer --check --bundle-id t1 | grep -Fq '[PASS] Bundle t1 is complete and verified'
 expect_fail '--bundle-id is required' transfer --check
@@ -91,9 +91,9 @@ expect_fail '--deck-ip is required' transfer --bundle-id t1
 expect_fail 'Unknown argument' transfer --check --bundle-id t1 --bogus
 expect_fail 'Bundle t2 not found' transfer --check --bundle-id t2
 mkdir "$TMP/other-bundles"
-cp "$WS"/bundles/lepton-x86_64-steamdeck-t1.* "$TMP/other-bundles/"
+cp "$WS"/bundles/lepton-x86_64-t1.* "$TMP/other-bundles/"
 transfer --check --bundle-id t1 --bundle-dir "$TMP/other-bundles" >/dev/null
-printf 'tampered\n' >> "$WS/bundles/lepton-x86_64-steamdeck-t1.tar.gz"
+printf 'tampered\n' >> "$WS/bundles/lepton-x86_64-t1.tar.gz"
 expect_fail 'Checksum mismatch' transfer --check --bundle-id t1
 
 ## prepare-google-inputs.sh refuses bad input before extracting anything

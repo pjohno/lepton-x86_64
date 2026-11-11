@@ -15,10 +15,17 @@ A release of version `VERSION` contains exactly:
 
 | File | Made by |
 | --- | --- |
-| `lepton-x86_64-steamdeck-VERSION.tar.gz` | `make-deck-bundle-x86_64.sh --bundle-id VERSION` (standard release), or `deploy-compat-x86_64.sh --package-only` ([launcher-only release](#launcher-only-releases-using-a-validated-stage)) |
-| `lepton-x86_64-steamdeck-VERSION.tar.gz.sha256` | the same; SHA256 of the archive **and** the installer |
-| `lepton-x86_64-steamdeck-VERSION.install.sh` | the same (`compat_tool/tools/lepton-install-bundle`) |
-| `lepton-x86_64-steamdeck-VERSION.tar.gz.sha256.sig` | `publish-release.sh --execute`, when signing |
+| `lepton-x86_64-VERSION.tar.gz` | `make-deck-bundle-x86_64.sh --bundle-id VERSION` (standard release), or `deploy-compat-x86_64.sh --package-only` ([launcher-only release](#launcher-only-releases-using-a-validated-stage)) |
+| `lepton-x86_64-VERSION.tar.gz.sha256` | the same; SHA256 of the archive **and** the installer |
+| `lepton-x86_64-VERSION.install.sh` | the same (`compat_tool/tools/lepton-install-bundle`) |
+| `lepton-x86_64-VERSION.tar.gz.sha256.sig` | `publish-release.sh --execute`, when signing |
+
+Release artifacts use `lepton-x86_64-VERSION` for both SteamOS and Linux
+desktops. The release manager also accepts complete older releases named
+`lepton-x86_64-steamdeck-VERSION`. Keep previously downloaded archives,
+installers and checksum/signature files under their original names: run their
+`.install.sh` as before, or pass the archive to `lepton-install-bundle`.
+Renaming a signed release would invalidate its checksum manifest or signature.
 
 **Versions** are [Semantic Versioning 2.0](https://semver.org) with a leading
 `v` and no build metadata: `v0.1.0-alpha`, `v0.1.0-alpha.2`, `v0.2.0-beta.1`,
@@ -141,7 +148,7 @@ bash image-14/tests/run-workflow-tests.sh
 ### 5. Test the bundle on a Steam Deck
 
 Install it the way users will: copy the three files to the Deck's `Downloads`
-and run `bash lepton-x86_64-steamdeck-v0.1.0-alpha.install.sh`. Then check:
+and run `bash lepton-x86_64-v0.1.0-alpha.install.sh`. Then check:
 - "Lepton: Check graphics" (RADV);
 - a few APK and APKM games;
 - **Lepton: Install / Update / Repair** opens.
@@ -255,8 +262,8 @@ then on, because the release manager rejects them.
 **Verify a release by hand:**
 ```bash
 ssh-keygen -Y verify -f allowed_signers -I lepton-release -n lepton-release \
-    -s lepton-x86_64-steamdeck-VERSION.tar.gz.sha256.sig < lepton-x86_64-steamdeck-VERSION.tar.gz.sha256
-sha256sum --check lepton-x86_64-steamdeck-VERSION.tar.gz.sha256
+    -s lepton-x86_64-VERSION.tar.gz.sha256.sig < lepton-x86_64-VERSION.tar.gz.sha256
+sha256sum --check lepton-x86_64-VERSION.tar.gz.sha256
 ```
 
 **Key rotation:**

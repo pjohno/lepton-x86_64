@@ -90,7 +90,7 @@ lepton_workspace
 
 STAGE="$(realpath -m -- "${STAGE:-$LEPTON_STAGES_DIR/$BUNDLE_ID}")"
 BUNDLE_DIR="$(realpath -m -- "${BUNDLE_DIR:-$LEPTON_DECK_BUNDLE_DIR}")"
-ARCHIVE="$BUNDLE_DIR/lepton-x86_64-steamdeck-$BUNDLE_ID.tar.gz"
+ARCHIVE="$BUNDLE_DIR/lepton-x86_64-$BUNDLE_ID.tar.gz"
 [[ ! -e "$STAGE" && ! -L "$STAGE" ]] || fail "Stage already exists (choose another --bundle-id or --stage-dir): $STAGE"
 [[ ! -e "$ARCHIVE" && ! -L "$ARCHIVE" ]] || fail "Bundle already exists: $ARCHIVE"
 [[ "$BUNDLE_DIR" != "$STAGE" && "$BUNDLE_DIR" != "$STAGE/"* ]] || fail 'Bundle directory must be outside the stage'

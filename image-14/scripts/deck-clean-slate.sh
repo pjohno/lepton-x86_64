@@ -79,7 +79,8 @@ done
 for path in "$steam"/compatibilitytools.d/lepton*.vdf "$HOME"/.local/bin/lepton-* \
             "$share"/applications/lepton-x86_64-*.desktop "$share"/applications/lepton-release-manager.desktop \
             "$HOME"/Desktop/lepton-*.desktop \
-            "$HOME"/Downloads/lepton-x86_64-steamdeck-*; do
+            "$HOME"/Downloads/lepton-x86_64-*.tar.gz* \
+            "$HOME"/Downloads/lepton-x86_64-*.install.sh; do
     add "$path"
 done
 add "$HOME/.config/lepton-x86_64"

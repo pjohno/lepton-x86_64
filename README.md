@@ -44,7 +44,7 @@ The full guide, with every step and troubleshooting, is **[INSTALL-STEAM-DECK.md
    their names: the `.tar.gz`, the `.tar.gz.sha256` and the `.install.sh`.
 3. **Run the installer** from a terminal (Konsole):
    ```bash
-   cd ~/Downloads && bash lepton-x86_64-steamdeck-VERSION.install.sh
+   cd ~/Downloads && bash lepton-x86_64-VERSION.install.sh
    ```
    It checks the download and the Deck, installs into `~/.local/share` and
    registers Lepton as a Steam compatibility tool. If anything fails, nothing

@@ -556,7 +556,7 @@ The new folder must not exist. It will contain:
 | `images/` | New system/vendor images, `SHA256SUMS`, `BUILD-INFO.txt` |
 | `rootfs/` | New flattened rootfs, including its own image-provenance record |
 | `stage/` | New compatibility tool and fresh sysbake for those images |
-| `bundles/` | `lepton-x86_64-steamdeck-fullscreen-test.tar.gz`, its `.sha256` and `.install.sh` |
+| `bundles/` | `lepton-x86_64-fullscreen-test.tar.gz`, its `.sha256` and `.install.sh` |
 
 The original workspace `images/`, `rootfs/`, `stages/` and `bundles/` are
 preserved. **The existing checkout's `aosp/out/` is shared and updated by
@@ -607,7 +607,7 @@ bash image-14/scripts/transfer-deck-bundle.sh \
 On the Deck, install alongside existing tools:
 
 ```bash
-bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-fullscreen-test.install.sh --new
+bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-fullscreen-test.install.sh --new
 ```
 
 Restart Steam and manually select `Lepton x86_64 (community) - fullscreen-test`
