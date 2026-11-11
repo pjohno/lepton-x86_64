@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: MIT
 # Install a Lepton x86_64 Steam Deck bundle for the current user.
 #
-#   bash lepton-x86_64-steamdeck-ID.install.sh            # install
-#   bash lepton-x86_64-steamdeck-ID.install.sh --check    # verify only
-#   bash lepton-x86_64-steamdeck-ID.install.sh --replace  # overwrite this tool's install
-#   bash lepton-x86_64-steamdeck-ID.install.sh --into OLD_TOOL_ID   # overwrite another
-#   bash lepton-x86_64-steamdeck-ID.install.sh --remove OLD_TOOL_ID # remove after install
+#   bash lepton-x86_64-ID.install.sh            # install
+#   bash lepton-x86_64-ID.install.sh --check    # verify only
+#   bash lepton-x86_64-ID.install.sh --replace  # overwrite this tool's install
+#   bash lepton-x86_64-ID.install.sh --into OLD_TOOL_ID   # overwrite another
+#   bash lepton-x86_64-ID.install.sh --remove OLD_TOOL_ID # remove after install
 #
 # Steps: verify checksum, extract, download Google's ADB (needs internet),
 # move into ~/.local/share/<install_directory>, register the Steam

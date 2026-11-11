@@ -65,7 +65,7 @@ reject --package-only --check --stage-dir "$stage" --bundle-dir "$out" --bundle-
 reject --bundle-id fixture
 reject --package-only --check --stage-dir "$stage" --bundle-dir "$out" --bundle-id fixture --deck-ip 999.0.0.1
 run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id fixture > "$work/package.log"
-archive="$out/lepton-x86_64-steamdeck-fixture.tar.gz"
+archive="$out/lepton-x86_64-fixture.tar.gz"
 (cd "$out" && sha256sum -c "$(basename "$archive").sha256")
 tar -xOf "$archive" ./compat_tool/sysbake.xattrs > "$work/packaged-xattrs"
 not grep -q '^security.selinux=' "$work/packaged-xattrs"
@@ -100,11 +100,11 @@ assert metadata['tool_id'] == 'lepton_x86_64_fixture'
 assert metadata['install_directory'] == 'lepton_x86_64_fixture'
 PYMETA
 # Deck installer, run against a throwaway home (no real Steam/user files).
-installer="$out/lepton-x86_64-steamdeck-fixture.install.sh"
+installer="$out/lepton-x86_64-fixture.install.sh"
 [[ -x "$installer" ]]
 pinned="$out/fixture-pinned.install.sh"
 pin_installer "$installer" "$pinned" "$fake_sha"
-grep -Fq ' lepton-x86_64-steamdeck-fixture.install.sh' "$archive.sha256"
+grep -Fq ' lepton-x86_64-fixture.install.sh' "$archive.sha256"
 deck_home="$work/deck-home"
 mkdir -p "$deck_home"
 # LEPTON_INSTALL_IN_TERMINAL stops the installer reopening itself in Konsole.
@@ -301,7 +301,7 @@ with zipfile.ZipFile(sys.argv[1], 'w') as jar:
     jar.writestr('classes.dex', b'StartLocaleManagerService StartCrossProfileAppsService persist.lepton.forward_web_intents')
 PYJAR
 run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id gapps-fixture > "$work/gapps-package.log"
-tar -xOf "$out/lepton-x86_64-steamdeck-gapps-fixture.tar.gz" ./BUNDLE.json > "$work/gapps.json"
+tar -xOf "$out/lepton-x86_64-gapps-fixture.tar.gz" ./BUNDLE.json > "$work/gapps.json"
 python3 - "$work/gapps.json" <<'PYMETA'
 import json, sys
 metadata = json.load(open(sys.argv[1]))
@@ -312,7 +312,7 @@ PYMETA
 # GApps installs get Google game icons pointing at their own install;
 # removing the install removes them.
 g_home="$work/gapps-home"; mkdir -p "$g_home/Desktop"
-pin_installer "$out/lepton-x86_64-steamdeck-gapps-fixture.install.sh" "$out/gapps-pinned.install.sh" "$fake_sha"
+pin_installer "$out/lepton-x86_64-gapps-fixture.install.sh" "$out/gapps-pinned.install.sh" "$fake_sha"
 env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 HOME="$g_home" \
     bash "$out/gapps-pinned.install.sh" --allow-non-amd > "$work/gapps-install.log"
 g_dest="$g_home/.local/share/lepton_gapps_gapps_fixture"
@@ -325,7 +325,7 @@ done
 grep -q 'Name=Lepton: Google sign-in (gapps-fixture)' "$g_home/.local/share/applications/lepton-x86_64-google-sign-in-lepton_gapps_gapps_fixture.desktop"
 [[ -x "$g_dest/compat_tool/tools/lepton-google-game-gui" ]]
 "$g_dest/tools/platform-tools/adb" version | grep -x 'Version 37.0.1-15733141' > /dev/null
-tar -tzf "$out/lepton-x86_64-steamdeck-gapps-fixture.tar.gz" > "$work/gapps-contents"
+tar -tzf "$out/lepton-x86_64-gapps-fixture.tar.gz" > "$work/gapps-contents"
 not grep -Eq '(^|/)adb$|platform-tools' "$work/gapps-contents"
 env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$g_home" python3 "$g_home/.local/bin/lepton-manage-installs" \
     --remove lepton_gapps_gapps_fixture --execute > /dev/null
@@ -349,7 +349,7 @@ not compgen -G "$h_home/.local/share/.lepton-*" > /dev/null
 cp "$stage/tools/platform-tools/adb" "$stage/tools/bin/adb"
 reject --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id stray-adb
 grep -q 'would redistribute Google Platform-Tools' "$work/rejected.log"
-[[ ! -e "$out/lepton-x86_64-steamdeck-stray-adb.tar.gz" ]]
+[[ ! -e "$out/lepton-x86_64-stray-adb.tar.gz" ]]
 rm -f "$stage/tools/bin/adb"
 # Packaging no longer needs ADB in the stage at all.
 mv "$stage/tools/platform-tools" "$work/staged-platform-tools"
@@ -362,7 +362,7 @@ run --transfer-only --check --bundle-dir "$out" --bundle-id fixture --deck-ip 19
 run --transfer-only --execute --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1 > "$work/transfer.log"
 [[ $(wc -l < "$TRACE") == 4 ]]  # ssh mkdir, rsync, ssh verify, ssh desktop icon
 sed "s|@HOME@|/home/deck|g" "$TRACE.desktop" > "$work/lepton-install-fixture.desktop"
-grep -Fqx 'Exec=konsole -e bash "/home/deck/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-fixture.install.sh" --pause' "$work/lepton-install-fixture.desktop"
+grep -Fqx 'Exec=konsole -e bash "/home/deck/Downloads/lepton-deck-bundles/lepton-x86_64-fixture.install.sh" --pause' "$work/lepton-install-fixture.desktop"
 if command -v desktop-file-validate >/dev/null; then desktop-file-validate "$work/lepton-install-fixture.desktop"; fi
 # --deck-replace: after transfer, install over SSH into an existing tool.
 reject --transfer-only --execute --bundle-dir "$out" --bundle-id fixture --deck-replace lepton_x
@@ -370,7 +370,7 @@ reject --transfer-only --execute --bundle-dir "$out" --bundle-id fixture --deck-
 rm -f "$TRACE" "$TRACE.args"
 run --transfer-only --execute --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1 --deck-replace lepton_x86_64_old > "$work/transfer-replace.log"
 [[ $(wc -l < "$TRACE") == 5 ]]
-grep -q 'LEPTON_NO_DIALOGS=1 bash "$HOME/Downloads/lepton-deck-bundles/lepton-x86_64-steamdeck-fixture.install.sh" --into lepton_x86_64_old$' "$TRACE.args"
+grep -q 'LEPTON_NO_DIALOGS=1 bash "$HOME/Downloads/lepton-deck-bundles/lepton-x86_64-fixture.install.sh" --into lepton_x86_64_old$' "$TRACE.args"
 grep -q 'Deck install lepton_x86_64_old overwritten' "$work/transfer-replace.log"
 printf 'broken' >> "$archive"
 reject --transfer-only --check --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1
@@ -379,13 +379,13 @@ images="$work/images"; mkdir -p "$images"
 prop="$(sha256sum "$stage/compat_tool/images/rootfs/system/build.prop" | cut -d' ' -f1)"
 printf 'Image source commit: %s\nRootfs build.prop SHA256: %s\n' "$(printf 'b%.0s' {1..40})" "$prop" > "$images/BUILD-INFO.txt"
 LEPTON_IMAGES_DIR="$images" run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id prov-match > /dev/null
-tar -xOf "$out/lepton-x86_64-steamdeck-prov-match.tar.gz" ./tools/IMAGE-PROVENANCE.txt | cmp - "$images/BUILD-INFO.txt"
-tar -xOf "$out/lepton-x86_64-steamdeck-prov-match.tar.gz" ./tools/BUNDLE-PROVENANCE.txt |
+tar -xOf "$out/lepton-x86_64-prov-match.tar.gz" ./tools/IMAGE-PROVENANCE.txt | cmp - "$images/BUILD-INFO.txt"
+tar -xOf "$out/lepton-x86_64-prov-match.tar.gz" ./tools/BUNDLE-PROVENANCE.txt |
     grep -qx 'Image provenance: tools/IMAGE-PROVENANCE.txt'
 sed -i "s/^Rootfs build.prop SHA256: .*/Rootfs build.prop SHA256: $(printf '0%.0s' {1..64})/" "$images/BUILD-INFO.txt"
 LEPTON_IMAGES_DIR="$images" run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id prov-other > /dev/null
-not grep -qx './tools/IMAGE-PROVENANCE.txt' <(tar -tzf "$out/lepton-x86_64-steamdeck-prov-other.tar.gz")
-tar -xOf "$out/lepton-x86_64-steamdeck-prov-other.tar.gz" ./tools/BUNDLE-PROVENANCE.txt |
+not grep -qx './tools/IMAGE-PROVENANCE.txt' <(tar -tzf "$out/lepton-x86_64-prov-other.tar.gz")
+tar -xOf "$out/lepton-x86_64-prov-other.tar.gz" ./tools/BUNDLE-PROVENANCE.txt |
     grep -q '^Image provenance: not recorded'
 echo 'PASS: read-only packaging/transfer checks, real archive without Google adb, installer ADB download, xattr preservation, overwrite guards, mocked transfer and image provenance'
 
@@ -397,9 +397,9 @@ root_info="$stage/compat_tool/images/rootfs/.lepton-image-provenance"
 printf 'Image source commit: %s\nRootfs build.prop SHA256: %s\nRootfs hwcomposer SHA256: %s\n' \
     "$(printf 'c%.0s' {1..40})" "$prop" "$hwc_sha" > "$root_info"
 LEPTON_IMAGES_DIR="$images" run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id prov-rootfs > /dev/null
-tar -xOf "$out/lepton-x86_64-steamdeck-prov-rootfs.tar.gz" ./tools/IMAGE-PROVENANCE.txt | cmp - "$root_info"
+tar -xOf "$out/lepton-x86_64-prov-rootfs.tar.gz" ./tools/IMAGE-PROVENANCE.txt | cmp - "$root_info"
 # Identical build.prop must not authenticate a changed/stale hwcomposer.
 printf stale > "$hwc"
 LEPTON_IMAGES_DIR="$images" run --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id prov-hwc-mismatch > /dev/null
-not grep -qx './tools/IMAGE-PROVENANCE.txt' <(tar -tzf "$out/lepton-x86_64-steamdeck-prov-hwc-mismatch.tar.gz")
+not grep -qx './tools/IMAGE-PROVENANCE.txt' <(tar -tzf "$out/lepton-x86_64-prov-hwc-mismatch.tar.gz")
 echo 'PASS: rootfs-specific image provenance wins over workspace defaults; hwcomposer hash mismatch refused'

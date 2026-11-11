@@ -83,8 +83,8 @@ class InstallProfiles(unittest.TestCase):
         old_pin = next(line for line in template.splitlines() if line.startswith('ADB_SHA256='))
         template = template.replace(old_pin, f"ADB_SHA256='{pin}'")
         self.transfer = self.work / 'transferred'
-        self.installer = self.transfer / 'lepton-x86_64-steamdeck-test.install.sh'
-        self.archive = self.transfer / 'lepton-x86_64-steamdeck-test.tar.gz'
+        self.installer = self.transfer / 'lepton-x86_64-test.install.sh'
+        self.archive = self.transfer / 'lepton-x86_64-test.tar.gz'
         write(self.installer, template.replace("DEFAULT_ARCHIVE=''", f"DEFAULT_ARCHIVE='{self.archive.name}'"), True)
         write(self.payload / 'BUNDLE.json', json.dumps({
             'tool_id': 'lepton_test', 'display_name': 'Lepton Test',

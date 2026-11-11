@@ -51,10 +51,10 @@ Options:
   --allow-dirty        Allow uncommitted changes in this checkout (not recommended)
 
 Release files (exactly these, from make-deck-bundle-x86_64.sh --bundle-id VERSION):
-  lepton-x86_64-steamdeck-VERSION.tar.gz
-  lepton-x86_64-steamdeck-VERSION.tar.gz.sha256
-  lepton-x86_64-steamdeck-VERSION.install.sh
-  lepton-x86_64-steamdeck-VERSION.tar.gz.sha256.sig   (the signature, if signed)
+  lepton-x86_64-VERSION.tar.gz
+  lepton-x86_64-VERSION.tar.gz.sha256
+  lepton-x86_64-VERSION.install.sh
+  lepton-x86_64-VERSION.tar.gz.sha256.sig   (the signature, if signed)
 See RELEASING.md for the whole workflow.
 HELP
 }
@@ -124,7 +124,7 @@ if [[ -z "$BUNDLE_DIR" ]]; then
     BUNDLE_DIR="$LEPTON_DECK_BUNDLE_DIR"
 fi
 BUNDLE_DIR="$(realpath -e -- "$BUNDLE_DIR")" || fail "Bundle directory not found: $BUNDLE_DIR"
-NAME="lepton-x86_64-steamdeck-$VERSION"
+NAME="lepton-x86_64-$VERSION"
 ARCHIVE="$BUNDLE_DIR/$NAME.tar.gz"
 MANIFEST="$ARCHIVE.sha256"
 INSTALLER="$BUNDLE_DIR/$NAME.install.sh"

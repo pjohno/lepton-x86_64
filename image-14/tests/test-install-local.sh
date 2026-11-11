@@ -65,18 +65,18 @@ grep -q 'No bundle yet; packaging stage' "$work/out"
 grep -q 'Checking that this computer can run Lepton games' "$work/out"  # installer's own check
 grep -q 'does not match the pinned SHA256' "$work/out" && grep -q 'dl.google.com' "$work/curl.log"
 [[ ! -e "$dest" ]] || fail 'partial install after a rejected ADB'
-installer="$out/lepton-x86_64-steamdeck-local.install.sh"
+installer="$out/lepton-x86_64-local.install.sh"
 pin_installer "$installer" "$work/pinned.install.sh" "$fake_sha"
 mv -- "$work/pinned.install.sh" "$installer"
-sums="$out/lepton-x86_64-steamdeck-local.tar.gz.sha256"   # it also lists the installer
-(cd "$out" && sed -i "/ lepton-x86_64-steamdeck-local.install.sh\$/d" "$sums" && sha256sum lepton-x86_64-steamdeck-local.install.sh >> "$sums")
+sums="$out/lepton-x86_64-local.tar.gz.sha256"   # it also lists the installer
+(cd "$out" && sed -i "/ lepton-x86_64-local.install.sh\$/d" "$sums" && sha256sum lepton-x86_64-local.install.sh >> "$sums")
 local_install --execute || { cat "$work/out"; fail 'install failed'; }
 grep -q 'Using existing bundle' "$work/out"
 "$dest/tools/platform-tools/adb" version | grep -qx 'Version 37.0.1-15733141'
-[[ -f "$out/lepton-x86_64-steamdeck-local.tar.gz" && -x "$dest/compat_tool/lepton" ]]
+[[ -f "$out/lepton-x86_64-local.tar.gz" && -x "$dest/compat_tool/lepton" ]]
 grep -qx local-desktop "$dest/compat_tool/install-profile"
 [[ -x "$dest/compat_tool/tools/lepton-direct-wayland" ]]
-! tar -tzf "$out/lepton-x86_64-steamdeck-local.tar.gz" | grep -q '/install-profile$'
+! tar -tzf "$out/lepton-x86_64-local.tar.gz" | grep -q '/install-profile$'
 grep -Fq "\"$dest/compat_tool\"" "$home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_local.vdf"
 grep -Fqx "Exec=\"$home/.local/bin/lepton-add-game-gui\"" "$home/.local/share/applications/lepton-x86_64-add-game.desktop"
 # The existing bundle is reused; installing again needs --replace.

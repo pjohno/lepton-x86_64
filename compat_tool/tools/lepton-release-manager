@@ -36,7 +36,7 @@ import urllib.request
 
 # Raise when this file changes, so installers only ever replace the installed
 # copy (~/.local/share/lepton-release-manager) with the same or a newer one.
-MANAGER_VERSION = 1
+MANAGER_VERSION = 2
 
 REPO = "pjohno/lepton-x86_64"
 API = "https://api.github.com/repos/%s/releases?per_page=100" % REPO
@@ -44,7 +44,8 @@ API = "https://api.github.com/repos/%s/releases?per_page=100" % REPO
 # hosts; anything else (or plain http) is refused, also after redirects.
 ALLOWED_HOSTS = {"api.github.com", "github.com", "objects.githubusercontent.com",
                  "release-assets.githubusercontent.com", "github-releases.githubusercontent.com"}
-PREFIX = "lepton-x86_64-steamdeck-"
+PREFIX = "lepton-x86_64-"
+LEGACY_PREFIX = "lepton-x86_64-steamdeck-"
 SIGNATURE_NAMESPACE = "lepton-release"
 SIGNER = "lepton-release"
 # During the alpha period the newest alpha is the preselected choice.
@@ -113,10 +114,10 @@ def parse_version(tag):
         return None
 
 
-def asset_names(tag):
-    archive = PREFIX + tag + ".tar.gz"
+def asset_names(tag, prefix=PREFIX):
+    archive = prefix + tag + ".tar.gz"
     return {"archive": archive, "manifest": archive + ".sha256",
-            "installer": PREFIX + tag + ".install.sh", "signature": archive + ".sha256.sig"}
+            "installer": prefix + tag + ".install.sh", "signature": archive + ".sha256.sig"}
 
 
 def packaged_tool_id(tag):
@@ -199,10 +200,10 @@ TRANSPORT = Transport()
 
 # ---------------------------------------------------------------- releases
 class Release:
-    def __init__(self, tag, version, prerelease, published, assets, url):
+    def __init__(self, tag, version, prerelease, published, assets, url, names=None):
         self.tag, self.version, self.published, self.assets, self.url = tag, version, published, assets, url
         self.prerelease = prerelease or version.is_prerelease
-        self.names = asset_names(tag)
+        self.names = names if names is not None else asset_names(tag)
         self.signed = self.names["signature"] in assets
 
     @property
@@ -230,6 +231,11 @@ def parse_releases(items):
             continue
         names = asset_names(tag)
         assets = {a.get("name"): a for a in item.get("assets") or []}
+        # Accept an intact older release without renaming its signed manifest.
+        # Never mix the two conventions or ignore extra release assets.
+        legacy_names = asset_names(tag, LEGACY_PREFIX)
+        if assets and set(assets) <= set(legacy_names.values()):
+            names = legacy_names
         unexpected = sorted(n for n in assets if n not in names.values())
         missing = [names[k] for k in ("archive", "manifest", "installer") if names[k] not in assets]
         incomplete = [n for n, a in assets.items() if a.get("state", "uploaded") != "uploaded"]
@@ -238,7 +244,7 @@ def parse_releases(items):
                             "missing %s" % (missing or incomplete)))
             continue
         releases.append(Release(tag, version, bool(item.get("prerelease")), item.get("published_at"),
-                                assets, item.get("html_url", "")))
+                                assets, item.get("html_url", ""), names=names))
     releases.sort(key=lambda r: r.version, reverse=True)
     return releases, skipped
 

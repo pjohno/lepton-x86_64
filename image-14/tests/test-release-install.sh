@@ -36,7 +36,7 @@ export FAKE_ADB_ZIP="$work/fake-adb/platform-tools.zip" FAKE_CURL_LOG="$work/cur
 for version in v0.1.0-alpha v0.2.0-alpha; do
     bash "$repo/image-14/scripts/internal/deploy-compat-x86_64.sh" --package-only --execute \
         --stage-dir "$stage" --bundle-dir "$out" --bundle-id "$version" > "$work/package-$version.log"
-    name="lepton-x86_64-steamdeck-$version"
+    name="lepton-x86_64-$version"
     # Pin the fake adb, then refresh the release checksum file accordingly.
     pin_installer "$out/$name.install.sh" "$work/pinned.sh" "$fake_sha"
     mv -- "$work/pinned.sh" "$out/$name.install.sh"

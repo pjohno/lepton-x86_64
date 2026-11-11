@@ -74,8 +74,8 @@ if [[ -z "$BUNDLE_DIR" || -z "$STAGE" ]]; then
 fi
 BUNDLE_DIR="$(realpath -m -- "${BUNDLE_DIR:-$LEPTON_DECK_BUNDLE_DIR}")"
 STAGE="$(realpath -m -- "${STAGE:-$LEPTON_STAGES_DIR/$BUNDLE_ID}")"
-ARCHIVE="$BUNDLE_DIR/lepton-x86_64-steamdeck-$BUNDLE_ID.tar.gz"
-INSTALLER="$BUNDLE_DIR/lepton-x86_64-steamdeck-$BUNDLE_ID.install.sh"
+ARCHIVE="$BUNDLE_DIR/lepton-x86_64-$BUNDLE_ID.tar.gz"
+INSTALLER="$BUNDLE_DIR/lepton-x86_64-$BUNDLE_ID.install.sh"
 
 # Resolve using the self-contained installer policy, including manual overrides.
 INSTALL_PROFILE="$(bash "$ROOT/compat_tool/tools/lepton-install-bundle" --detect-profile "${PROFILE_ARGS[@]}")"

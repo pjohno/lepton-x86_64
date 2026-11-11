@@ -93,8 +93,8 @@ class FakeUI:
         return P()
 
 
-def release_item(tag, files, prerelease=False, draft=False, extra=(), state="uploaded"):
-    names = M.asset_names(tag)
+def release_item(tag, files, prerelease=False, draft=False, extra=(), state="uploaded", prefix=M.PREFIX):
+    names = M.asset_names(tag, prefix)
     assets = []
     for key in ("archive", "manifest", "installer", "signature"):
         if key in files:
@@ -106,8 +106,8 @@ def release_item(tag, files, prerelease=False, draft=False, extra=(), state="upl
                 html_url="https://github.com/pjohno/lepton-x86_64/releases/tag/" + tag)
 
 
-def bundle_files(tag, archive=b"archive-bytes", installer=b"#!/bin/bash\necho installer\n"):
-    names = M.asset_names(tag)
+def bundle_files(tag, archive=b"archive-bytes", installer=b"#!/bin/bash\necho installer\n", prefix=M.PREFIX):
+    names = M.asset_names(tag, prefix)
     manifest = ("%s  %s\n%s  %s\n" % (sha(archive), names["archive"], sha(installer), names["installer"])).encode()
     return dict(archive=archive, installer=installer, manifest=manifest)
 
@@ -132,7 +132,7 @@ class Base(unittest.TestCase):
     def publish(self, tag, files, **kw):
         item = release_item(tag, files, **kw)
         for key, data in files.items():
-            self.transport.files[BASE + tag + "/" + M.asset_names(tag)[key]] = data
+            self.transport.files[BASE + tag + "/" + M.asset_names(tag, kw.get("prefix", M.PREFIX))[key]] = data
         return item
 
     def release(self, tag="v0.1.0-alpha", **files):
@@ -159,6 +159,23 @@ class Versions(unittest.TestCase):
 
 
 class Releases(Base):
+    def test_default_asset_names(self):
+        self.assertEqual(M.asset_names("v1.2.3"), {
+            "archive": "lepton-x86_64-v1.2.3.tar.gz",
+            "manifest": "lepton-x86_64-v1.2.3.tar.gz.sha256",
+            "signature": "lepton-x86_64-v1.2.3.tar.gz.sha256.sig",
+            "installer": "lepton-x86_64-v1.2.3.install.sh",
+        })
+
+    def test_mixed_naming_conventions_are_refused(self):
+        tag = "v0.1.0"
+        files = bundle_files(tag)
+        item = self.publish(tag, files)
+        item["assets"][0]["name"] = M.asset_names(tag, M.LEGACY_PREFIX)["archive"]
+        releases, skipped = M.parse_releases([item])
+        self.assertEqual(releases, [])
+        self.assertIn("unexpected", skipped[0][1])
+
     def test_parsing_filters_and_orders(self):
         good = bundle_files("v0.1.0")
         items = [
@@ -235,6 +252,19 @@ class Releases(Base):
 
 
 class Downloads(Base):
+    def test_legacy_release_download_preserves_names_and_manifest(self):
+        tag = "v0.1.0"
+        files = bundle_files(tag, prefix=M.LEGACY_PREFIX)
+        item = self.publish(tag, files, prefix=M.LEGACY_PREFIX)
+        releases, skipped = M.parse_releases([item])
+        self.assertEqual(skipped, [])
+        release = releases[0]
+        self.assertEqual(release.names, M.asset_names(tag, M.LEGACY_PREFIX))
+        verified = M.download_release(release, FakeUI(), self.transport, keys=None)
+        self.assertEqual(verified.archive.read_bytes(), files["archive"])
+        self.assertEqual(verified.installer.read_bytes(), files["installer"])
+        self.assertEqual((self.downloads / release.names["manifest"]).read_bytes(), files["manifest"])
+
     def test_download_cache_and_redownload(self):
         release, files = self.release()
         verified = M.download_release(release, FakeUI(), self.transport, keys=None)
@@ -317,6 +347,16 @@ class Signatures(Base):
         subprocess.run(["ssh-keygen", "-q", "-Y", "sign", "-f", str(key or self.key), "-n", "lepton-release",
                         str(path)], check=True, stderr=subprocess.DEVNULL)
         return Path(str(path) + ".sig").read_bytes()
+
+    def test_legacy_signature_authenticates_original_manifest(self):
+        tag = "v0.1.0"
+        files = bundle_files(tag, prefix=M.LEGACY_PREFIX)
+        files["signature"] = self.sign(files["manifest"])
+        item = self.publish(tag, files, prefix=M.LEGACY_PREFIX)
+        releases, skipped = M.parse_releases([item])
+        self.assertEqual(skipped, [])
+        verified = M.download_release(releases[0], FakeUI(), self.transport, keys=self.keys)
+        self.assertTrue(verified.authenticated)
 
     def test_valid_signature_authenticates(self):
         files = bundle_files("v0.1.0-alpha")

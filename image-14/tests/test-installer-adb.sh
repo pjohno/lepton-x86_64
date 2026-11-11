@@ -25,7 +25,7 @@ grep -qx "ADB_VERSION='37.0.1-15733141'" "$template"
 
 # A minimal bundle, laid out as packaging writes it (no tools/platform-tools).
 make_bundle() {
-    local id="$1" payload="$work/payload-$1" out="$work/bundles"
+    local id="$1" payload="$work/payload-$1" out="$work/bundles" prefix="${3:-lepton-x86_64-}"
     mkdir -p "$payload/compat_tool/tools" "$payload/compat_tool/liblepton" "$payload/compat_tool/sysbake/system" \
         "$payload/tools/bin" "$out"
     printf '#!/bin/sh\n' > "$payload/compat_tool/lepton"; chmod 755 "$payload/compat_tool/lepton"
@@ -36,15 +36,15 @@ make_bundle() {
     printf '{"format_version": 2, "bundle_id": "%s", "tool_id": "lepton_x86_64_%s", "display_name": "Lepton %s",
  "install_directory": "lepton_x86_64_%s", "gapps": false, "ndk": false}\n' "$id" "$id" "$id" "$id" > "$payload/BUNDLE.json"
     if [[ -n "${2:-}" ]]; then install -D -m 755 "$2" "$payload/tools/platform-tools/adb"; fi
-    (cd "$payload" && tar -czf "$out/lepton-x86_64-steamdeck-$id.tar.gz" .)
-    sed "s|^DEFAULT_ARCHIVE=''\$|DEFAULT_ARCHIVE='lepton-x86_64-steamdeck-$id.tar.gz'|" "$template" \
-        > "$out/lepton-x86_64-steamdeck-$id.install.sh"
-    (cd "$out" && sha256sum "lepton-x86_64-steamdeck-$id.tar.gz" "lepton-x86_64-steamdeck-$id.install.sh") \
-        > "$out/lepton-x86_64-steamdeck-$id.tar.gz.sha256"
+    (cd "$payload" && tar -czf "$out/${prefix}$id.tar.gz" .)
+    sed "s|^DEFAULT_ARCHIVE=''\$|DEFAULT_ARCHIVE='${prefix}$id.tar.gz'|" "$template" \
+        > "$out/${prefix}$id.install.sh"
+    (cd "$out" && sha256sum "${prefix}$id.tar.gz" "${prefix}$id.install.sh") \
+        > "$out/${prefix}$id.tar.gz.sha256"
 }
 make_bundle base
-[[ -z "$(tar -tzf "$work/bundles/lepton-x86_64-steamdeck-base.tar.gz" | grep -E '(^|/)adb$' || true)" ]]
-shipped="$work/bundles/lepton-x86_64-steamdeck-base.install.sh"
+[[ -z "$(tar -tzf "$work/bundles/lepton-x86_64-base.tar.gz" | grep -E '(^|/)adb$' || true)" ]]
+shipped="$work/bundles/lepton-x86_64-base.install.sh"
 
 good_sha="$(fake_adb_zip "$work/good")"
 other_sha="$(fake_adb_zip "$work/other-version" 36.0.0-1)"
@@ -61,7 +61,7 @@ export FAKE_CURL_LOG="$work/curl.log" FAKE_ADB_ZIP="$work/good/platform-tools.zi
 deck() {
     local installer="$1"; shift
     env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u FAKE_CURL_FAIL LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 \
-        HOME="$home" PATH="$work/bin:$PATH" ${FAKE_FAIL:+FAKE_CURL_FAIL=1} bash "$installer" --allow-non-amd "$@"
+        HOME="$home" PATH="$work/bin:$PATH" ${FAKE_FAIL:+FAKE_CURL_FAIL=1} bash "$installer" --install-profile steamos --allow-non-amd "$@"
 }
 # Fails, says why, and leaves no install, registration, settings or temp files.
 expect_clean_failure() {
@@ -131,7 +131,7 @@ expect_local_reject "$shipped" "$work/good/platform-tools.zip" 'does not match t
 expect_local_reject "$pinned" "$work/not-a-zip.zip" 'does not contain adb'
 
 # Older bundles that still carry the pinned adb install offline, unchanged.
-make_bundle legacy "$work/good/src/platform-tools/adb"
+make_bundle legacy "$work/good/src/platform-tools/adb" lepton-x86_64-steamdeck-
 pin_installer "$work/bundles/lepton-x86_64-steamdeck-legacy.install.sh" "$work/bundles/legacy-pinned.install.sh" "$good_sha"
 rm -f "$work/curl.log"
 FAKE_FAIL=1 deck "$work/bundles/legacy-pinned.install.sh" > "$work/legacy.log"
@@ -140,7 +140,7 @@ grep -q 'ADB 37.0.1-15733141 from the bundle verified' "$work/legacy.log"
 [[ -x "$data/lepton_x86_64_legacy/tools/platform-tools/adb" ]]
 # ...but a bundled adb that is not the pinned one is replaced by a download.
 make_bundle tampered "$work/other-version/src/platform-tools/adb"
-pin_installer "$work/bundles/lepton-x86_64-steamdeck-tampered.install.sh" "$work/bundles/tampered-pinned.install.sh" "$good_sha"
+pin_installer "$work/bundles/lepton-x86_64-tampered.install.sh" "$work/bundles/tampered-pinned.install.sh" "$good_sha"
 rm -f "$work/curl.log"
 deck "$work/bundles/tampered-pinned.install.sh" > "$work/tampered.log"
 [[ $(wc -l < "$work/curl.log") == 1 ]]

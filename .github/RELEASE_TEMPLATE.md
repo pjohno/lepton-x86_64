@@ -22,14 +22,14 @@ Intel) are not supported.
 **First time** (Steam Deck, Desktop Mode):
 
 1. Download these three files into the same folder (for example `Downloads`):
-   - `lepton-x86_64-steamdeck-{{VERSION}}.tar.gz`
-   - `lepton-x86_64-steamdeck-{{VERSION}}.tar.gz.sha256`
-   - `lepton-x86_64-steamdeck-{{VERSION}}.install.sh`
+   - `lepton-x86_64-{{VERSION}}.tar.gz`
+   - `lepton-x86_64-{{VERSION}}.tar.gz.sha256`
+   - `lepton-x86_64-{{VERSION}}.install.sh`
 2. Run the installer. In Dolphin, right-click an empty part of that folder,
    choose **Open Terminal Here**, and enter:
 
    ```
-   bash lepton-x86_64-steamdeck-{{VERSION}}.install.sh
+   bash lepton-x86_64-{{VERSION}}.install.sh
    ```
 
 The installer needs an internet connection; it doesn't need root or a password.

@@ -36,7 +36,7 @@ mkdir -p "$out"
 # make_bundle VERSION [COMMIT] [extra payload path] — writes the three files.
 make_bundle() {
     local version="$1" commit="${2:-$(git -C "$fake" rev-parse HEAD)}" extra="${3:-}"
-    local name="lepton-x86_64-steamdeck-$version" payload="$work/payload-$version"
+    local name="lepton-x86_64-$version" payload="$work/payload-$version"
     rm -rf -- "$payload" "$out/$name".*
     mkdir -p "$payload/compat_tool" "$payload/tools"
     printf '#!/bin/sh\n' > "$payload/compat_tool/lepton"
@@ -89,15 +89,15 @@ grep -q 'Installer matches the source commit' "$work/out.log"
 
 # Refusals: dirty checkout, missing or altered files, contents, provenance, size.
 touch "$fake/untracked"; expect_fail 'uncommitted changes' --check --version "$V" --unsigned; rm "$fake/untracked"
-mv "$out/lepton-x86_64-steamdeck-$V.install.sh" "$work/held"
+mv "$out/lepton-x86_64-$V.install.sh" "$work/held"
 expect_fail 'Missing release file' --check --version "$V" --unsigned
-mv "$work/held" "$out/lepton-x86_64-steamdeck-$V.install.sh"
-echo '# extra' >> "$out/lepton-x86_64-steamdeck-$V.install.sh"
+mv "$work/held" "$out/lepton-x86_64-$V.install.sh"
+echo '# extra' >> "$out/lepton-x86_64-$V.install.sh"
 expect_fail 'Checksum verification failed' --check --version "$V" --unsigned
-(cd "$out" && sha256sum "lepton-x86_64-steamdeck-$V.tar.gz" "lepton-x86_64-steamdeck-$V.install.sh" > "lepton-x86_64-steamdeck-$V.tar.gz.sha256")
+(cd "$out" && sha256sum "lepton-x86_64-$V.tar.gz" "lepton-x86_64-$V.install.sh" > "lepton-x86_64-$V.tar.gz.sha256")
 expect_fail 'installer differs' --check --version "$V" --unsigned
 make_bundle "$V"
-echo "$(printf '0%.0s' {1..64})  other.sh" >> "$out/lepton-x86_64-steamdeck-$V.tar.gz.sha256"
+echo "$(printf '0%.0s' {1..64})  other.sh" >> "$out/lepton-x86_64-$V.tar.gz.sha256"
 expect_fail 'exactly the archive and the installer' --check --version "$V" --unsigned
 for extra in tools/platform-tools/adb compat_tool/images/rootfs/vendor/apex/com.google.android.widevine.apex \
              compat_tool/images/rootfs/system/lib64/libndk_translation.so \
@@ -146,7 +146,7 @@ publish --execute --version "$V" --unsigned || { cat "$work/out.log"; exit 1; }
 grep -q "Draft release $V is ready for review" "$work/out.log"
 [[ "$(release_field "$V" 'r["draft"], r["prerelease"], r["target_commitish"]')" == "(True, True, '$commit')" ]]
 [[ "$(release_field "$V" 'sorted(a["name"] for a in r["assets"])')" == \
-   "['lepton-x86_64-steamdeck-$V.install.sh', 'lepton-x86_64-steamdeck-$V.tar.gz', 'lepton-x86_64-steamdeck-$V.tar.gz.sha256']" ]]
+   "['lepton-x86_64-$V.install.sh', 'lepton-x86_64-$V.tar.gz', 'lepton-x86_64-$V.tar.gz.sha256']" ]]
 release_field "$V" 'r["body"]' | grep -q "Source commit: \`$commit\`"
 release_field "$V" 'r["body"]' | grep -q 'NOT signed'
 # Running it again resumes: nothing is uploaded twice.
@@ -158,7 +158,7 @@ grep -q 'Already uploaded' "$work/out.log"
 # An interrupted upload is detected and only replaced on request.
 W=v0.1.1-alpha
 make_bundle "$W"
-FAKE_GH_TRUNCATE="lepton-x86_64-steamdeck-$W.tar.gz" expect_fail 'do not match the local files' --execute --version "$W" --unsigned
+FAKE_GH_TRUNCATE="lepton-x86_64-$W.tar.gz" expect_fail 'do not match the local files' --execute --version "$W" --unsigned
 expect_fail 'rerun with --replace-draft-assets' --execute --version "$W" --unsigned
 publish --execute --version "$W" --unsigned --replace-draft-assets || { cat "$work/out.log"; exit 1; }
 grep -q -- '--clobber' "$FAKE_GH_LOG"
@@ -189,19 +189,19 @@ make_bundle "$S"
 expect_fail 'sign this release' --check --version "$S" --unsigned
 expect_fail 'not listed in allowed_signers' --check --version "$S" --signing-key "$work/other-key"
 publish --check --version "$S" --signing-key "$work/key" || { cat "$work/out.log"; exit 1; }
-[[ ! -e "$out/lepton-x86_64-steamdeck-$S.tar.gz.sha256.sig" ]]   # --check does not sign
+[[ ! -e "$out/lepton-x86_64-$S.tar.gz.sha256.sig" ]]   # --check does not sign
 publish --execute --version "$S" --signing-key "$work/key" || { cat "$work/out.log"; exit 1; }
-sig="$out/lepton-x86_64-steamdeck-$S.tar.gz.sha256.sig"
+sig="$out/lepton-x86_64-$S.tar.gz.sha256.sig"
 ssh-keygen -Y verify -f "$fake/compat_tool/release-keys/allowed_signers" -I lepton-release -n lepton-release \
-    -s "$sig" < "$out/lepton-x86_64-steamdeck-$S.tar.gz.sha256" > /dev/null
+    -s "$sig" < "$out/lepton-x86_64-$S.tar.gz.sha256" > /dev/null
 [[ "$(release_field "$S" 'len(r["assets"])')" == 4 ]]
 release_field "$S" 'r["body"]' | grep -q 'Signed:'
 publish --publish --version "$S" || { cat "$work/out.log"; exit 1; }   # existing signature is checked
 # A signature by an untrusted key is refused.
 T=v0.3.1-alpha
 make_bundle "$T"
-cp "$out/lepton-x86_64-steamdeck-$T.tar.gz.sha256" "$work/m"
+cp "$out/lepton-x86_64-$T.tar.gz.sha256" "$work/m"
 ssh-keygen -q -Y sign -f "$work/other-key" -n lepton-release "$work/m"
-mv "$work/m.sig" "$out/lepton-x86_64-steamdeck-$T.tar.gz.sha256.sig"
+mv "$work/m.sig" "$out/lepton-x86_64-$T.tar.gz.sha256.sig"
 expect_fail 'is not a valid signature' --check --version "$T"
 echo 'PASS: publish-release: read-only --check, refusals (dirty tree, files, checksums, contents, provenance, branch, tag, size, signing), draft creation and verified upload, resume, interrupted upload, publish (prerelease/latest), no changes to published releases, signed releases'

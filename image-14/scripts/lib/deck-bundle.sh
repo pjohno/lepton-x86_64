@@ -24,9 +24,9 @@ fi
 
 outdir="$(realpath -m -- "$outdir")"
 [[ "$outdir" != / && "$outdir" != "$repo" ]] || { echo "ERROR: unsafe bundle output directory" >&2; exit 1; }
-archive="$outdir/lepton-x86_64-steamdeck-${bundle_id}.tar.gz"
+archive="$outdir/lepton-x86_64-${bundle_id}.tar.gz"
 checksum="$archive.sha256"
-installer="$outdir/lepton-x86_64-steamdeck-${bundle_id}.install.sh"
+installer="$outdir/lepton-x86_64-${bundle_id}.install.sh"
 
 # Write the per-bundle Deck installer: the generic installer with this archive
 # name as its default, so the Deck user runs a single command.

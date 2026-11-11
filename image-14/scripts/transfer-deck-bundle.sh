@@ -52,8 +52,8 @@ if [[ "$MODE" == --check ]]; then
         case "${ARGS[i]}" in --bundle-id) id="${ARGS[i+1]}" ;; --bundle-dir) dir="${ARGS[i+1]}" ;; esac
     done
     [[ -n "$dir" ]] || fail 'Set LEPTON_OUTPUT_DIR in .build-env or pass --bundle-dir'
-    archive="lepton-x86_64-steamdeck-$id.tar.gz"
-    [[ -f "$dir/$archive" && -f "$dir/$archive.sha256" && -f "$dir/lepton-x86_64-steamdeck-$id.install.sh" ]] ||
+    archive="lepton-x86_64-$id.tar.gz"
+    [[ -f "$dir/$archive" && -f "$dir/$archive.sha256" && -f "$dir/lepton-x86_64-$id.install.sh" ]] ||
         fail "Bundle $id not found in $dir (archive, .sha256 and .install.sh are needed)"
     ( cd "$dir" && sha256sum --quiet -c "$archive.sha256" ) || fail 'Checksum mismatch'
     printf '[PASS] Bundle %s is complete and verified; nothing was sent\n' "$id"
