@@ -15,6 +15,9 @@ With either override, BOTH destinations must be new, outside the original
 artifact directories, and disjoint from sources/each other. Pass both options
 to preserve the existing images and rootfs. Symlink paths are refused.
 Only packaged outputs are isolated: incremental compilation updates aosp/out/.
+This is an explicit image-only workflow: BinderFS, Weston and a sysbake
+systemd session are not required. To check full bundle host capability first,
+run preflight-x86_64.sh (default workflow: complete).
 No reset, installclean or full clean is performed. --check changes no outputs.
 --execute compiles Android, then packages its images and rootfs.
 --package-only packages existing AOSP product images; no Podman build, Soong,

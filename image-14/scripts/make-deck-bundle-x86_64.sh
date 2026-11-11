@@ -19,6 +19,7 @@ SYSBAKE_TIMEOUT=600
 DEPLOY_ARGS=()
 PROVISION_ARGS=()
 BUNDLE_ARGS=()
+CAPABILITY_ARGS=()
 
 usage() {
     cat <<'HELP'
@@ -46,7 +47,8 @@ Options:
   --sysbake-timeout SECONDS               (default 600)
   --deck-ip IPv4              Transfer archive, checksum and installer after packaging
 
---check validates inputs and destinations without writing anything.
+--check checks bundle/sysbake host capabilities (including BinderFS), inputs
+and destinations. Probes use disposable files/namespaces; no stage is created.
 The archive does not contain Google's adb: the Deck installer downloads it.
 Afterwards on the Deck: bash ~/Downloads/lepton-deck-bundles/<name>.install.sh
 HELP
@@ -64,7 +66,7 @@ while (($#)); do
         --deck-ip) DECK_IP="${2:?--deck-ip requires IPv4}"; shift 2 ;;
         --rootfs-source|--ndk-payload|--google-images|--services-jar)
             DEPLOY_ARGS+=("$1" "${2:?$1 requires a value}"); shift 2 ;;
-        --with-ndk|--with-gapps|--with-widevine) DEPLOY_ARGS+=("$1"); shift ;;
+        --with-ndk|--with-gapps|--with-widevine) DEPLOY_ARGS+=("$1"); CAPABILITY_ARGS+=("$1"); shift ;;
         --tool-id|--tool-name) BUNDLE_ARGS+=("$1" "${2:?$1 requires a value}"); shift 2 ;;
         --from-stage|--adb-zip) PROVISION_ARGS+=("$1" "${2:?$1 requires a value}"); shift 2 ;;
         --sysbake-rendering) SYSBAKE_RENDERING="${2:?}"; shift 2 ;;
@@ -101,10 +103,16 @@ info "Bundle: $ARCHIVE"
 info "Sysbake: $SYSBAKE_RENDERING rendering"
 [[ -z "$DECK_IP" ]] || info "Transfer to: deck@$DECK_IP (after packaging)"
 
+step 'Check: complete bundle host capabilities'
+command -v python3 >/dev/null || fail 'Missing preflight executable: python3 (install python3)'
+[[ -z "$DECK_IP" ]] || CAPABILITY_ARGS+=(--transfer)
+python3 "$SCRIPT_DIR/internal/check-host-capabilities.py" --workflow bundle \
+    --workspace "$LEPTON_WORKSPACE" --rendering "$SYSBAKE_RENDERING" "${CAPABILITY_ARGS[@]}" || fail 'Bundle/sysbake host capabilities failed; no stage was created'
+
 step 'Check: stage inputs'
 bash "$SCRIPT_DIR/internal/deploy-compat-x86_64.sh" --check --stage-dir "$STAGE" "${DEPLOY_ARGS[@]}"
 if [[ "$MODE" == --check ]]; then
-    info 'Tool provisioning, sysbake and packaging checks need the stage; they run during --execute'
+    info 'Bundle/sysbake host capabilities checked. Generated stage assets and Android boot are validated during --execute.'
     printf '[PASS] Bundle pipeline preflight passed; nothing was changed\n'
     exit 0
 fi

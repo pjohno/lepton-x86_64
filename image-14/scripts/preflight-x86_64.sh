@@ -3,7 +3,24 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-MODE="${1:-fresh}"
+MODE=fresh
+WORKFLOW=complete
+HOST_ONLY=false
+CAPABILITY_ARGS=()
+while (($#)); do
+    case "$1" in
+        fresh|existing|full) MODE="$1"; shift ;;
+        --workflow) WORKFLOW="${2:?--workflow requires complete, images, packaging or bundle}"; shift 2 ;;
+        --host-only) HOST_ONLY=true; shift ;;
+        --with-gapps|--with-ndk|--with-widevine|--transfer) CAPABILITY_ARGS+=("$1"); shift ;;
+        -h|--help)
+            echo 'Usage: preflight-x86_64.sh [fresh|existing|full] [--workflow complete|images|packaging|bundle] [--host-only]'
+            echo 'Default: complete host capabilities, including BinderFS/systemd/sysbake. Modes select build-state checks; full also requires compiled images.'
+            echo '--workflow images/packaging checks no BinderFS or sysbake session. --host-only checks no checkout or generated artifacts.'
+            exit 0 ;;
+        *) echo "Unknown preflight argument: $1" >&2; exit 2 ;;
+    esac
+done
 CONFIG="$ROOT/.build-env"
 
 pass() { printf '[PASS] %s\n' "$*"; }
@@ -31,6 +48,10 @@ fi
 # This is a trusted, developer-controlled local configuration.
 source "$CONFIG"
 BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder:latest}"
+if [[ "$HOST_ONLY" == true ]]; then
+    command -v python3 >/dev/null || { echo '[FAIL] Missing preflight executable: python3 (install python3)'; exit 1; }
+    exec python3 "$ROOT/image-14/scripts/internal/check-host-capabilities.py" --workflow "$WORKFLOW" --workspace "${LEPTON_OUTPUT_DIR:-/tmp}" --jobs "${LEPTON_BUILD_JOBS:-1}" --min-free-gib "${LEPTON_MIN_FREE_GIB:-0}" "${CAPABILITY_ARGS[@]}"
+fi
 case "$BUILDER" in
     lepton-builder:latest|lepton-builder-ubuntu26:latest) ;;
     *) echo "[FAIL] Unsupported source builder: $BUILDER" >&2; exit 1 ;;
@@ -53,6 +74,8 @@ fi
 
 source "$ROOT/image-14/scripts/lib/workspace.sh"
 lepton_workspace
+command -v python3 >/dev/null || { echo '[FAIL] Missing preflight executable: python3 (install python3)'; exit 1; }
+python3 "$ROOT/image-14/scripts/internal/check-host-capabilities.py" --workflow "$WORKFLOW" --workspace "$LEPTON_WORKSPACE" --jobs "$LEPTON_BUILD_JOBS" --min-free-gib "$LEPTON_MIN_FREE_GIB" "${CAPABILITY_ARGS[@]}" || exit 1
 TARGET="$LEPTON_AOSP_DIR"
 PARENT="$(dirname "$TARGET")"
 LOGS="$LEPTON_LOG_DIR"
@@ -160,28 +183,6 @@ fi
 
 # The current image builder uses configurable -jN, not taskset.
 info "CPU affinity is not required by the current build workflow"
-
-# Host prerequisites.
-for tool in git podman rsync realpath findmnt df awk cmp python3 tee mktemp simg2img sqfs2tar; do
-    if command -v "$tool" >/dev/null 2>&1; then
-        pass "Host tool: $tool"
-    else
-        fail "Missing host tool: $tool"
-        if [[ "$tool" == simg2img ]]; then
-            info 'Install the host package providing simg2img (Android sparse-image tools) before starting the build'
-        elif [[ "$tool" == sqfs2tar ]]; then
-            info 'Install squashfs-tools-ng (provides sqfs2tar) before starting the build; it is needed to package the Android rootfs'
-        fi
-    fi
-done
-
-# Packaging is part of every image build, not only the optional full check.
-source "$ROOT/image-14/scripts/lib/packaging-fuse.sh"
-if lepton_packaging_requirements; then
-    lepton_fuse_smoke_test || fail 'Unprivileged FUSE packaging smoke test failed (see operation above)'
-else
-    fail 'Rootfs packaging prerequisites are missing (see above)'
-fi
 
 # Container builder.
 if command -v podman >/dev/null 2>&1; then

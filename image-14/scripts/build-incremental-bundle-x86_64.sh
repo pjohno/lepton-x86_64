@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
-MODE=''; ID=''; OUTPUT=''; BUNDLE_ARGS=()
+MODE=''; ID=''; OUTPUT=''; BUNDLE_ARGS=(); CAPABILITY_ARGS=(); SYSBAKE_RENDERING=software
 usage() {
     cat <<'HELP'
 Usage: bash image-14/scripts/build-incremental-bundle-x86_64.sh --check|--execute --bundle-id ID --output-dir NEW_DIR [bundle options]
@@ -28,8 +28,9 @@ while (($#)); do
         --check|--execute) [[ -z "$MODE" ]] || fail 'Choose one mode'; MODE="$1"; shift ;;
         --bundle-id) ID="${2:?}"; shift 2 ;;
         --output-dir) OUTPUT="${2:?}"; shift 2 ;;
-        --with-ndk|--with-gapps|--with-widevine) BUNDLE_ARGS+=("$1"); shift ;;
+        --with-ndk|--with-gapps|--with-widevine) BUNDLE_ARGS+=("$1"); CAPABILITY_ARGS+=("$1"); shift ;;
         --ndk-payload|--google-images|--services-jar|--tool-id|--tool-name|--from-stage|--adb-zip|--sysbake-rendering|--sysbake-timeout)
+            [[ "$1" != --sysbake-rendering ]] || SYSBAKE_RENDERING="${2:?}"
             BUNDLE_ARGS+=("$1" "${2:?}"); shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "Unknown option: $1" ;;
@@ -42,6 +43,11 @@ lepton_workspace
 OUTPUT="$(lepton_output_path "$OUTPUT")"
 [[ ! -e "$OUTPUT" && ! -L "$OUTPUT" ]] || fail "Output directory already exists: $OUTPUT"
 lepton_output_outside "$OUTPUT" "$ROOT" "$LEPTON_AOSP_DIR" "$LEPTON_IMAGES_DIR" "$LEPTON_ROOTFS_DIR" "$LEPTON_STAGES_DIR" "$LEPTON_DECK_BUNDLE_DIR" "$LEPTON_LOG_DIR" "$LEPTON_GOOGLE_INPUTS_DIR" || fail 'Unsafe output directory'
+# This wrapper promises a complete bundle, so reject missing sysbake/kernel
+# capabilities before starting incremental Android compilation as well.
+python3 "$SCRIPT_DIR/internal/check-host-capabilities.py" --workflow complete \
+    --workspace "$LEPTON_WORKSPACE" --rendering "$SYSBAKE_RENDERING" \
+    --jobs "${LEPTON_BUILD_JOBS:-1}" --min-free-gib "${LEPTON_MIN_FREE_GIB:-0}" "${CAPABILITY_ARGS[@]}" || fail 'Complete bundle host capabilities failed; no compilation started'
 # Image preflight is read-only and checks the exact hwcomposer/source content.
 bash "$SCRIPT_DIR/build-images-x86_64.sh" --check --images-dir "$OUTPUT/images" --rootfs-dir "$OUTPUT/rootfs"
 if [[ "$MODE" == --check ]]; then

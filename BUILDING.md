@@ -43,9 +43,139 @@ need them when debugging a failed step or
   `squashfs-tools-ng`, `e2fsprogs`/`fuse2fs`, `fuse3`, `util-linux` and `unzip`
   packages.
 
+### Complete bundle versus image-only prerequisites
+
+By default, preflight checks the **complete installable-bundle host**, including
+native tool compilation, Android sysbake and packaging. This applies to both
+`--check` and `--execute` in `do_build_x86_64.sh`, to the incremental bundle
+wrapper, and to `make-deck-bundle-x86_64.sh`. The complete wrappers refuse to
+start Android compilation/source preparation when mandatory host capabilities
+are unavailable, even if the builder image or checkout does not exist yet.
+
+Host capability and build-state checks are separate:
+
+| Invocation | Host capabilities | Required generated state |
+| --- | --- | --- |
+| `preflight-x86_64.sh fresh` (default) | Complete build and bundle | Fresh checkout path; no compiled images |
+| `preflight-x86_64.sh existing` | Complete build and bundle | Prepared checkout/checkpoints; no compiled images |
+| `preflight-x86_64.sh full` | Complete build and bundle | Legacy full-state check: prepared checkout and compiled images |
+| `preflight-x86_64.sh --host-only` | Complete build and bundle | No checkout, builder image or generated Android assets |
+| `preflight-x86_64.sh fresh --workflow images` | Compilation and rootfs packaging | Fresh checkout path; no BinderFS/sysbake session required |
+| `preflight-x86_64.sh --host-only --workflow packaging` | Rootfs extraction/packaging | No checkout, BinderFS, user systemd manager or Podman store required by this host check |
+| `make-deck-bundle-x86_64.sh --check --bundle-id ID` | Native tool compilation and isolated sysbake/bundling | Existing packaged rootfs; stage assets are checked after creation |
+
+`--host-only` still reads your trusted `.build-env` for the workspace and
+resource settings. Existing `fresh`, `existing` and `full` invocations retain
+their build-state meanings; `full` is **not** the mode to use before a clean
+build. Use `--workflow images` explicitly for an image-only preflight.
+
+The report collects missing commands and failed probes together and prints
+separate readiness lines for compilation, rootfs packaging and a full bundle.
+Unselected stages say **NOT CHECKED**, rather than claiming they are ready.
+Required tools include Cargo, rustc, cc, make/binutils, attr (`getfattr` and
+`setfattr`), headless Weston, `ip`, rootless Podman and its UID/GID helpers,
+`fuse-overlayfs`, the appropriate FUSE helpers, and the core shell utilities
+used by provisioning/sysbake. Optional Google, NDK and transfer options add
+applicable extraction/ELF/SSH checks. Missing-tool reports name Fedora and
+Ubuntu packages; kernel/session errors are reported separately.
+
+The probes compile tiny C/Rust programs, exercise workspace `user.*` xattrs,
+start/stop a disposable headless Weston, test rootless Podman with private
+storage and subordinate-ID mappings, and mount/unmount temporary FUSE
+filesystems. They use no downloaded container image, do not touch the normal
+Podman store, do not start/stop user services, and do not modify existing build
+outputs. Rust toolchain auto-install is disabled during these probes.
+An AMD render node is required only when `--sysbake-rendering amd` is selected;
+the default software sysbake does not require a GPU.
+
+### BinderFS and WSL/systemd
+
+A complete bundle needs the running kernel to expose `binder` in
+`/proc/filesystems`. An installed `binder_linux` module file or a kernel config
+setting alone is insufficient. If BinderFS is registered, preflight tests a
+private rootless mount namespace and allocates/opens its own `binder`,
+`hwbinder` and `vndbinder` devices through `binder-control`. It never loads a
+kernel module or mounts/changes the host's `/dev/binderfs`. See the
+[Linux BinderFS documentation](https://kernel.org/doc/html/v6.16/admin-guide/binderfs.html)
+for namespace and device-allocation behavior. No sudo is used for preflight.
+A registered filesystem that cannot be used under the rootless kernel/security
+policy is a blocking failure for bundling, as is absent kernel support.
+
+Standard WSL kernels, including the reported
+`6.6.87.2-microsoft-standard-WSL2` configuration, may lack BinderFS. Userspace
+package installation cannot add a missing kernel capability. A Binder-enabled
+custom WSL kernel or native Linux host may be required for sysbake; preflight
+never installs/builds modules or changes the kernel automatically.
+
+Isolated sysbake also requires systemd as PID 1, a working `systemctl --user`,
+an idle sysbake slice, and a private, user-owned mode-0700 runtime directory at
+`/run/user/$(id -u)`. WSLg's `/mnt/wslg/runtime-dir` is incompatible with this
+isolated workflow. If WSL runs `init(DISTRO)` instead of systemd, configure
+systemd manually in `/etc/wsl.conf` and restart the distribution from Windows.
+After systemd starts and the user session/runtime directory exists, use a build
+terminal with the correct runtime, verifying it before starting a long build:
+
+```bash
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+stat -c '%U %a %n' "$XDG_RUNTIME_DIR"
+systemctl --user show-environment >/dev/null
+bash image-14/scripts/preflight-x86_64.sh --host-only
+```
+
+If that shell inherited a WSLg D-Bus address, verify the systemd user bus exists
+at `$XDG_RUNTIME_DIR/bus` and set `DBUS_SESSION_BUS_ADDRESS` to
+`unix:path=$XDG_RUNTIME_DIR/bus` in the build terminal. Do not create a fake
+runtime directory or change kernel/device permissions to bypass a failed
+check. These instructions do not change WSLg's global environment.
+
+### Deliberately split compilation and bundling across hosts
+
+BinderFS and the sysbake systemd session are **not** prerequisites for preparing
+AOSP, compiling Android, or packaging its images. To build images under WSL
+and finish sysbake on native Linux, use the individual commands explicitly:
+
+```bash
+# On the compilation host, from the repository root:
+bash image-14/scripts/preflight-x86_64.sh fresh --workflow images
+bash image-14/scripts/prepare-x86_64.sh --execute
+bash image-14/scripts/build-images-x86_64.sh --execute
+# If only rootfs packaging needs recovery:
+bash image-14/scripts/build-images-x86_64.sh --package-only
+```
+
+For an existing prepared checkout, select `existing --workflow images` and
+skip preparation/reset when no source re-preparation is needed. Transfer the
+packaged rootfs **including its `.lepton-image-provenance`** to the bundle
+host, then use a matching source checkout there:
+
+```bash
+bash image-14/scripts/preflight-x86_64.sh --host-only --workflow bundle
+bash image-14/scripts/make-deck-bundle-x86_64.sh --check \
+  --bundle-id split-test --rootfs-source /path/to/transferred/rootfs
+bash image-14/scripts/make-deck-bundle-x86_64.sh --execute \
+  --bundle-id split-test --rootfs-source /path/to/transferred/rootfs
+```
+
+These scope choices do not bypass ownership, path-safety, locking, image
+validation or overwrite protections. Complete wrappers always require the
+complete host; there is no blanket `--force` switch. Network downloads,
+optional payload integrity, generated stage assets and actual Android boot are
+still checked at their appropriate phases; no preflight can prove an Android
+boot before its images exist. Restricted namespace/PID visibility or security
+policy may prevent functional probes, which then fail with diagnostics rather
+than claiming full readiness.
+
+Host-only regression tests (temporary fixtures; no Android build or root):
+
+```bash
+python3 tests/test-build-preflight.py -v
+python3 tests/test-build-integration.py
+python3 tests/test-rootfs-packaging.py
+```
+
 ### FUSE packaging requirements (including Fedora under WSL)
 
-All preflight modes check rootfs packaging tools and read/write access to
+Complete/image preflight scopes check rootfs packaging tools and read/write access to
 `/dev/fuse` before a long compile. They also create a small disposable ext4
 image and test an unprivileged `fuse2fs` mount and unmount. This verifies helper
 execution and mount permission, beyond checking that the device exists. No

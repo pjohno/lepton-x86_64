@@ -46,6 +46,7 @@ class PackagingTests(unittest.TestCase):
         scripts = ('build-images-x86_64.sh', 'preflight-x86_64.sh', 'lib/workspace.sh',
                    'lib/packaging-fuse.sh', 'lib/package-images.sh', 'lib/image-provenance.sh',
                    'internal/check-active-compilation.py', 'internal/validate-android-images.py',
+                   'internal/check-host-capabilities.py', 'internal/probe-binderfs.py',
                    'internal/package-repro-rootfs.sh', 'internal/patch-binderfs-init.sh')
         for name in scripts:
             dest = self.repo / 'image-14/scripts' / name
@@ -274,7 +275,7 @@ echo radv > "$2/vendor/lib64/hw/vulkan.radeon.so"
 
     def test_normal_preflight_modes_run_packaging_checks(self):
         for mode in ('fresh', 'existing'):
-            result = subprocess.run(['bash', str(self.repo / 'image-14/scripts/preflight-x86_64.sh'), mode],
+            result = subprocess.run(['bash', str(self.repo / 'image-14/scripts/preflight-x86_64.sh'), mode, '--workflow', 'images'],
                                     env={**self.env, 'FUSE_FAIL': '1'}, text=True, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('FUSE mount permission/helper smoke test failed', result.stdout + result.stderr)

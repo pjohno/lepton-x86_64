@@ -35,7 +35,9 @@ its aosp/ checkout must not exist yet before running either command.
 The other build scripts source the same .build-env; this wrapper does not
 silently override their settings or reuse an existing AOSP build.
 
---check: inspect host requirements and fresh output paths; change nothing.
+--check: check complete host capabilities (BinderFS, systemd, rootless Podman,
+         packaging and native/sysbake tools) and fresh output paths; no outputs
+         are created. Disposable capability probes are cleaned up.
 --execute: prepare AOSP, compile system/vendor, package rootfs, stage host
            files, provision Deck utilities, generate isolated sysbake, and
            create/check a local Steam Deck bundle.
@@ -90,32 +92,6 @@ source "$CONFIG"
 source "$IMAGE_DIR/scripts/lib/workspace.sh"
 lepton_workspace
 : "${LEPTON_BUILD_TARGET:?Set LEPTON_BUILD_TARGET in .build-env}"
-[[ "$WITH_NDK" == true || -z "$NDK_PAYLOAD" ]] || fail '--ndk-payload requires --with-ndk'
-DEPLOY_ARGS=()
-if [[ "$WITH_NDK" == true ]]; then
-    NDK_PAYLOAD="$(realpath -e -- "${NDK_PAYLOAD:-${LEPTON_NDK_PAYLOAD:-}}")" || fail 'An existing local NDK payload is required'
-    [[ -d "$NDK_PAYLOAD" && -f "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" && -f "$NDK_PAYLOAD/system/lib64/libndk_translation.so" ]] || fail 'Incomplete extracted NDK payload'
-    (cd "$NDK_PAYLOAD" && sha256sum -c "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" >/dev/null) || fail 'NDK payload hash verification failed'
-    DEPLOY_ARGS=(--with-ndk --ndk-payload "$NDK_PAYLOAD")
-fi
-
-[[ "$WITH_GAPPS" == true || -z "$GOOGLE_IMAGES" ]] || fail '--google-images requires --with-gapps'
-if [[ "$WITH_GAPPS" == true ]]; then
-    GOOGLE_IMAGES="$(realpath -e -- "${GOOGLE_IMAGES:-${LEPTON_GOOGLE_IMAGES:-}}")" || fail 'Local Google logical images required'
-    source "$IMAGE_DIR/scripts/lib/google-services.sh"
-    google_services_check "$GOOGLE_IMAGES" true true
-    DEPLOY_ARGS+=(--with-gapps --google-images "$GOOGLE_IMAGES")
-fi
-BUNDLE_ARGS=()
-if [[ -n "$TOOL_ID" ]]; then
-    [[ "$TOOL_ID" =~ ^[A-Za-z0-9_]{1,96}$ ]] || fail 'Invalid tool ID'
-    BUNDLE_ARGS+=(--tool-id "$TOOL_ID")
-fi
-if [[ -n "$TOOL_NAME" ]]; then
-    [[ "$TOOL_NAME" != *$'\n'* && "$TOOL_NAME" != *$'\r'* ]] || fail 'Invalid tool name'
-    BUNDLE_ARGS+=(--tool-name "$TOOL_NAME")
-fi
-
 BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder-ubuntu26:latest}"
 [[ "$BUILDER" == 'lepton-builder-ubuntu26:latest' ]] ||
     fail 'The clean AMD x86_64 workflow requires lepton-builder-ubuntu26:latest'
@@ -157,14 +133,41 @@ BUILDER_FILE="$BUILDER_DIR/Containerfile.ubuntu26"
 [[ -f "$IMAGE_DIR/scripts/internal/provision-deck-tools.sh" &&
    -f "$BUILDER_DIR/Containerfile.deck-tools" ]] || fail 'Missing Deck tools source files'
 
-for cmd in bash git podman rsync realpath df awk grep sha256sum curl unzip \
-           python3 make cargo cc weston systemctl getfattr setfattr \
-           timeout flock fuse-overlayfs simg2img sqfs2tar fuse2fs \
-           fusermount3 tar gzip; do
-    command -v "$cmd" >/dev/null 2>&1 || fail "Missing host dependency: $cmd"
-done
-[[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]] ||
-    fail 'FUSE is not accessible to the current user'
+# Check every end-to-end host capability even when no builder or checkout
+# exists. No source preparation, image pull or Android compiler runs before this.
+command -v python3 >/dev/null || fail 'Missing preflight executable: python3 (install python3)'
+CAPABILITY_ARGS=()
+[[ "$WITH_GAPPS" == false ]] || CAPABILITY_ARGS+=(--with-gapps)
+[[ "$WITH_NDK" == false ]] || CAPABILITY_ARGS+=(--with-ndk)
+python3 "$IMAGE_DIR/scripts/internal/check-host-capabilities.py" --workflow complete \
+    --workspace "$LEPTON_WORKSPACE" --rendering "$SYSBAKE_RENDERING" \
+    --jobs "${LEPTON_BUILD_JOBS:-1}" --min-free-gib "${LEPTON_MIN_FREE_GIB:-200}" "${CAPABILITY_ARGS[@]}" || fail 'Complete bundle host capabilities are missing; no expensive work started'
+
+[[ "$WITH_NDK" == true || -z "$NDK_PAYLOAD" ]] || fail '--ndk-payload requires --with-ndk'
+DEPLOY_ARGS=()
+if [[ "$WITH_NDK" == true ]]; then
+    NDK_PAYLOAD="$(realpath -e -- "${NDK_PAYLOAD:-${LEPTON_NDK_PAYLOAD:-}}")" || fail 'An existing local NDK payload is required'
+    [[ -d "$NDK_PAYLOAD" && -f "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" && -f "$NDK_PAYLOAD/system/lib64/libndk_translation.so" ]] || fail 'Incomplete extracted NDK payload'
+    (cd "$NDK_PAYLOAD" && sha256sum -c "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" >/dev/null) || fail 'NDK payload hash verification failed'
+    DEPLOY_ARGS=(--with-ndk --ndk-payload "$NDK_PAYLOAD")
+fi
+
+[[ "$WITH_GAPPS" == true || -z "$GOOGLE_IMAGES" ]] || fail '--google-images requires --with-gapps'
+if [[ "$WITH_GAPPS" == true ]]; then
+    GOOGLE_IMAGES="$(realpath -e -- "${GOOGLE_IMAGES:-${LEPTON_GOOGLE_IMAGES:-}}")" || fail 'Local Google logical images required'
+    source "$IMAGE_DIR/scripts/lib/google-services.sh"
+    google_services_check "$GOOGLE_IMAGES" true true
+    DEPLOY_ARGS+=(--with-gapps --google-images "$GOOGLE_IMAGES")
+fi
+BUNDLE_ARGS=()
+if [[ -n "$TOOL_ID" ]]; then
+    [[ "$TOOL_ID" =~ ^[A-Za-z0-9_]{1,96}$ ]] || fail 'Invalid tool ID'
+    BUNDLE_ARGS+=(--tool-id "$TOOL_ID")
+fi
+if [[ -n "$TOOL_NAME" ]]; then
+    [[ "$TOOL_NAME" != *$'\n'* && "$TOOL_NAME" != *$'\r'* ]] || fail 'Invalid tool name'
+    BUNDLE_ARGS+=(--tool-name "$TOOL_NAME")
+fi
 
 info "Source commit: $(git -C "$REPO" rev-parse HEAD)"
 info "Android checkout (must be new): $TARGET"
@@ -186,7 +189,7 @@ if [[ "$MODE" == --check ]]; then
         bash "$IMAGE_DIR/scripts/preflight-x86_64.sh" fresh
         bash "$IMAGE_DIR/scripts/prepare-x86_64.sh" --check
     else
-        info 'Full preflight requires the builder image; it will run after builder creation'
+        info 'Host capabilities checked. Builder image is absent; --execute will create it before source/build-state validation.'
     fi
     pass 'Fresh pipeline paths/dependencies checked; no changes made'
     exit 0
