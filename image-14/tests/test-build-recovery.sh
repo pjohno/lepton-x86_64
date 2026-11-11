@@ -15,8 +15,8 @@ fail() { echo "FAIL: $*" >&2; [[ ! -f "$work/out.log" ]] || cat "$work/out.log" 
 fake="$work/repo"
 mkdir -p "$fake/image-14/scripts/lib" "$fake/image-14/scripts/internal"
 cp "$repo/image-14/scripts/build-images-x86_64.sh" "$fake/image-14/scripts/"
-cp "$repo/image-14/scripts/lib/workspace.sh" "$fake/image-14/scripts/lib/"
-cp "$repo/image-14/scripts/internal/check-build-outputs.py" "$fake/image-14/scripts/internal/"
+cp "$repo/image-14/scripts/lib/"{workspace.sh,packaging-fuse.sh,package-images.sh} "$fake/image-14/scripts/lib/"
+cp "$repo/image-14/scripts/internal/"{check-build-outputs.py,check-active-compilation.py} "$fake/image-14/scripts/internal/"
 ws="$work/ws"; aosp="$ws/aosp"; state="$aosp/.lepton-clean14-state"; out="$aosp/out"
 cat > "$fake/.build-env" <<ENV
 LEPTON_OUTPUT_DIR=$ws

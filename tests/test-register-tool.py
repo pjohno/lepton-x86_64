@@ -27,9 +27,38 @@ class RegistrationTests(unittest.TestCase):
         (self.root / 'compat_tool/sysbake/system/packages.xml').touch()
         (self.root / 'BUNDLE.json').write_text(json.dumps(dict(tool_id='lepton_gapps_v1', display_name='Lepton "GApps"')))
 
-    def register(self, execute=False):
+    def register(self, execute=False, replace=False):
         with contextlib.redirect_stdout(io.StringIO()):
-            return module.register(self.root, self.home, execute)
+            return module.register(self.root, self.home, execute, replace)
+
+    def expected(self, from_os):
+        return ('"compatibilitytools"\n{\n  "compat_tools"\n  {\n    "lepton_gapps_v1"\n    {\n'
+                '      "install_path" ' + json.dumps(str(self.root / 'compat_tool')) + '\n'
+                '      "display_name" "Lepton \\"GApps\\""\n'
+                '      "from_oslist" "' + from_os + '"\n      "to_oslist" "linux"\n    }\n  }\n}\n')
+
+    def test_registers_android_to_linux(self):
+        target = self.register(True)
+        self.assertEqual(target.read_text(), self.expected('android'))
+        self.assertNotIn('windows', target.read_text())
+
+    def test_legacy_windows_registration_is_migrated_in_place(self):
+        target = self.register(True)
+        target.write_text(self.expected('windows'))
+        self.register()  # --check reports the update but changes nothing
+        self.assertEqual(target.read_text(), self.expected('windows'))
+        self.register(True)  # plain --execute, as a --replace reinstall runs it
+        self.assertEqual(target.read_text(), self.expected('android'))
+
+    def test_legacy_registration_for_another_path_is_not_migrated(self):
+        target = self.register(True)
+        other = self.expected('windows').replace(str(self.root), '/elsewhere')
+        target.write_text(other)
+        with self.assertRaisesRegex(ValueError, 'already registered elsewhere'):
+            self.register(True)
+        with self.assertRaisesRegex(ValueError, 'already registered elsewhere'):
+            self.register(True, replace=True)
+        self.assertEqual(target.read_text(), other)
 
     def test_check_creates_no_files(self):
         self.register()

@@ -6,9 +6,11 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 fake="$work/repo"
-mkdir -p "$fake/image-14/scripts/lib" "$work/bin" "$work/ws"
+mkdir -p "$fake/image-14/scripts/lib" "$fake/image-14/scripts/internal" "$work/bin" "$work/ws"
 cp "$repo/image-14/scripts/preflight-x86_64.sh" "$fake/image-14/scripts/"
-cp "$repo/image-14/scripts/lib/workspace.sh" "$fake/image-14/scripts/lib/"
+cp "$repo/image-14/scripts/lib/"{workspace.sh,packaging-fuse.sh} "$fake/image-14/scripts/lib/"
+# Host tools are checked by the shared capability checker (also used by do_build).
+cp "$repo/image-14/scripts/internal/"{check-host-capabilities.py,probe-binderfs.py} "$fake/image-14/scripts/internal/"
 cat > "$fake/.build-env" <<ENV
 LEPTON_OUTPUT_DIR=$work/ws
 LEPTON_BUILD_TARGET=aosp_lepton_x86_64-ap2a-userdebug
@@ -52,12 +54,13 @@ for mode in fresh existing full; do
     if PATH="$work/bin" /bin/bash "$fake/image-14/scripts/preflight-x86_64.sh" "$mode" > "$work/result" 2>&1; then
         echo "FAIL: $mode accepted missing simg2img"; exit 1
     fi
-    grep -Fq '[FAIL] Missing host tool: simg2img' "$work/result"
-    grep -Fq 'Install the host package providing simg2img' "$work/result"
+    grep -Fq '[FAIL] Missing rootfs packaging executable: simg2img' "$work/result"
+    grep -Fq 'android-tools' "$work/result"                 # Fedora package
+    grep -Fq 'android-sdk-libsparse-utils' "$work/result"   # Ubuntu package
     printf '#!/bin/bash\nexit 0\n' > "$work/bin/simg2img"; chmod +x "$work/bin/simg2img"
     # Full mode additionally checks the real FUSE device; no device is created.
     PATH="$work/bin" /bin/bash "$fake/image-14/scripts/preflight-x86_64.sh" "$mode" > "$work/result" 2>&1 || true
-    grep -Fq '[PASS] Host tool: simg2img' "$work/result"
-    if grep -Fq 'Missing host tool: simg2img' "$work/result"; then exit 1; fi
+    grep -Fq 'Rootfs packaging executables' "$work/result"   # the check ran
+    if grep -Fq 'executable: simg2img' "$work/result"; then exit 1; fi
 done
 echo 'PASS: simg2img checked in fresh, existing and full preflight, with installation guidance'

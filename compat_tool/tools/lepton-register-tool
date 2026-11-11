@@ -21,10 +21,15 @@ def register(root, home, execute=False, replace=False):
         raise ValueError('Extract a complete bundle before registration')
     # JSON string escaping is compatible with these quoted VDF string values.
     q = lambda value: json.dumps(str(value), ensure_ascii=False)
-    body = ('"compatibilitytools"\n{\n  "compat_tools"\n  {\n    ' + q(tool) + '\n    {\n'
-            '      "install_path" ' + q(runtime) + '\n'
-            '      "display_name" ' + q(name) + '\n'
-            '      "from_oslist" "windows"\n      "to_oslist" "linux"\n    }\n  }\n}\n')
+    def vdf(from_os):
+        return ('"compatibilitytools"\n{\n  "compat_tools"\n  {\n    ' + q(tool) + '\n    {\n'
+                '      "install_path" ' + q(runtime) + '\n'
+                '      "display_name" ' + q(name) + '\n'
+                '      "from_oslist" ' + q(from_os) + '\n      "to_oslist" "linux"\n    }\n  }\n}\n')
+    body = vdf('android')
+    # The exact Windows -> Linux file earlier versions wrote for this same tool,
+    # path and name; it is refreshed in place without --replace.
+    legacy = vdf('windows')
     target = home / '.local/share/Steam/compatibilitytools.d' / (tool + '.vdf')
     if target.is_symlink():
         raise ValueError('Refusing a symlink registration: ' + str(target))
@@ -36,7 +41,7 @@ def register(root, home, execute=False, replace=False):
         # --replace may only refresh a registration for this same install path
         # (e.g. a new display name after an in-place update), never another install.
         same_path = re.search(r'"install_path"\s*' + re.escape(q(runtime)), current)
-        if not (replace and same_path):
+        if not (current == legacy or (replace and same_path)):
             raise ValueError('Tool ID already registered elsewhere; choose another --tool-id when packaging')
         if execute:
             target.write_text(body)
