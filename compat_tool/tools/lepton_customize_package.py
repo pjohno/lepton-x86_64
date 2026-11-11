@@ -291,9 +291,12 @@ def validate_sysbake(root, state, core):
     for name in ('misc/ethernet/ipconfig.txt', 'misc/apexdata/com.android.tethering/misc/ethernet/ipconfig.txt',
                  'lepton-onboot', 'lepton-on-app-exit'):
         core.require(not (baked / name).exists(), f'Unexpected host state baked into Android data: {name}')
-    records = checked(core, L.scan_directory, baked)
+    sockets = []
+    records = checked(core, L.scan_directory, baked, sockets)
     entries = checked(core, L.parse_xattrs, regular(root, L.XATTRS, core).read_bytes())
-    checked(core, L.check_xattr_paths, entries, lambda path: path == 'sysbake' or path[len('sysbake/'):] in records)
+    unarchived = checked(core, L.check_xattr_paths, entries, records)
+    core.require(set(unarchived) <= {'sysbake/' + name for name in sockets},
+                 'sysbake.xattrs names files that are missing from sysbake')
     return records
 
 
@@ -443,10 +446,13 @@ def check_components(root, state, core):
 def stage_integrity(root, state, core):
     """Android rootfs, sysbake and xattrs must be exactly what was baked/restored."""
     rootfs = checked(core, L.scan_directory, root / L.ROOTFS)
-    baked = checked(core, L.scan_directory, root / L.SYSBAKE)
+    baked = checked(core, L.scan_directory, root / L.SYSBAKE, [])
     xattrs = regular(root, L.XATTRS, core)
     entries = checked(core, L.parse_xattrs, xattrs.read_bytes())
-    checked(core, L.check_xattr_paths, entries, lambda path: path == 'sysbake' or path[len('sysbake/'):] in baked)
+    unarchived = checked(core, L.check_xattr_paths, entries, baked)
+    if unarchived:
+        print(f'NOTE: sysbake.xattrs records {len(unarchived)} path(s) that are not archived '
+              '(Android sockets; tar never stores them): ' + ', '.join(unarchived[:5]))
     android, sysbake = state.get('android') or {}, state.get('sysbake') or {}
     core.require(android.get('rootfs_tree_sha256') == L.tree_digest(rootfs),
                  'The Android rootfs differs from the one this sysbake belongs to. Modified Android needs a new '
@@ -581,6 +587,8 @@ def package_main(args, core):
                 continue
             entries.append(name)
             info = (root / name).lstat()
+            if stat.S_ISSOCK(info.st_mode) and name.startswith(L.SYSBAKE):
+                continue  # Android sockets are never archived (as with GNU tar).
             core.require(stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode), f'Unsupported stage entry: {name}')
             size += info.st_size
     for name in entries:
@@ -670,6 +678,150 @@ def write_archive(root, archive, entries, generated):
     return names
 
 
+# ---------------------------------------------------------------- restore
+COMPLETE_REQUIRED = (
+    'BUNDLE.json', 'compat_tool/lepton', 'compat_tool/lepton-x86_64-entry', 'compat_tool/toolmanifest.vdf',
+    *('compat_tool/liblepton/' + name for name in RUNTIME_SCRIPTS),
+    INSTALLER, 'compat_tool/tools/lepton-register-tool', 'compat_tool/tools/lepton-manage-installs',
+    'compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure',
+    L.ROOTFS + 'system/build.prop', L.ROOTFS + 'vendor/build.prop', L.ROOTFS + 'system/framework/services.jar',
+    L.ROOTFS + 'system/etc/init/hw/init.rc', L.ROOTFS + 'system/bin/sh', L.ROOTFS + 'vendor/lib64/hw/vulkan.radeon.so',
+    L.SYSBAKE + 'system/packages.xml', L.XATTRS,
+    'tools/bin/inotifywait', 'tools/native/inotifywait', 'tools/lib/libinotifytools.so.0')
+COMPLETE_EXECUTABLES = ('compat_tool/lepton', 'compat_tool/lepton-x86_64-entry', L.ROOTFS + 'system/bin/sh',
+                        'compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure',
+                        'tools/bin/inotifywait', 'tools/native/inotifywait')
+
+
+def complete_keep(core):
+    """Stage 2's retained set plus the original sysbake and its xattr record."""
+    def keep(name):
+        if name in ('compat_tool/sysbake', L.XATTRS) or name.startswith(L.SYSBAKE):
+            return True
+        return core.retained(name)
+    return keep
+
+
+def validate_complete(bundle, core):
+    """A complete installable bundle: Android rootfs plus its validated sysbake.
+
+    Optional components are allowed, but BUNDLE.json must describe the rootfs.
+    """
+    for name in COMPLETE_REQUIRED:
+        bundle.regular(name)
+    for name in COMPLETE_EXECUTABLES:
+        core.require(bundle.members[bundle.regular(name)].mode & 0o111, f'Executable bit missing: {name}')
+    small = ['BUNDLE.json', L.ROOTFS + 'system/build.prop', L.ROOTFS + 'vendor/build.prop',
+             L.SYSBAKE + 'system/packages.xml', L.XATTRS, 'compat_tool/toolmanifest.vdf']
+    data = {name: bundle.read(name) for name in sorted(small, key=lambda n: bundle.members[bundle.regular(n)].offset_data)}
+    metadata = json.loads(data['BUNDLE.json'], object_pairs_hook=core.unique_keys)
+    core.require(isinstance(metadata, dict) and type(metadata.get('format_version')) is int and
+                 metadata['format_version'] == 2, 'Unsupported BUNDLE.json format (expected format_version 2)')
+    for field, pattern in [('bundle_id', r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}'), ('tool_id', r'[A-Za-z0-9_]{1,96}'),
+                           ('install_directory', r'[A-Za-z0-9][A-Za-z0-9._-]{0,95}')]:
+        core.require(isinstance(metadata.get(field), str) and re.fullmatch(pattern, metadata[field]),
+                     f'Invalid BUNDLE.json {field}')
+    flags = checked(core, L.metadata_components, metadata)
+    props = core.properties(data[L.ROOTFS + 'system/build.prop'])
+    core.require(props.get('ro.build.version.sdk') == '34' and props.get('ro.product.cpu.abi') == 'x86_64',
+                 'Expected Android 14/API 34 x86_64 rootfs')
+
+    def kind_of(name):
+        member = bundle.members.get(L.ROOTFS + name)
+        if member is None:
+            return None
+        return 'd' if member.isdir() else 'l' if member.issym() else 'f'
+    actual = checked(core, L.detect_components, kind_of, lambda name: bundle.read(L.ROOTFS + name))
+    for name in L.COMPONENTS:
+        core.require(actual[name] == flags[name], f'BUNDLE.json {name}={str(flags[name]).lower()} does not match '
+                     f'the rootfs ({"present" if actual[name] else "absent"})')
+    core.require(props.get('ro.dalvik.vm.native.bridge') == ('libndk_translation.so' if flags['ndk'] else '0'),
+                 'Native bridge property does not match the bundle NDK flag')
+    for name, member in bundle.members.items():
+        if name.startswith(tuple(L.ROOTFS + part + '/' for part in ('data', 'cache', 'metadata'))):
+            core.require(not member.isreg(), f'User state found in rootfs: {name}')
+        core.require(not (bundle.keep(name) and re.search(r'(^|/)(id_(rsa|ecdsa|ed25519)|signing-key[^/]*)$', name)),
+                     f'Private key material in bundle: {name}')
+    packages = data[L.SYSBAKE + 'system/packages.xml']
+    core.require(packages.startswith((b'ABX\x00', b'<?xml', b'<packages')), 'Bundle sysbake packages.xml is not Android XML')
+    core.require(bundle.members.get('compat_tool/sysbake', tarfile.TarInfo()).isdir(), 'Bundle sysbake is not a directory')
+    entries = checked(core, L.parse_xattrs, data[L.XATTRS])
+    records = {}
+    for name, member in bundle.members.items():
+        if name.startswith(L.SYSBAKE):
+            records[name[len(L.SYSBAKE):]] = ('d' if member.isdir() else 'l' if member.issym() else 'f', 0, '')
+    unarchived = checked(core, L.check_xattr_paths, entries, records)
+    if unarchived:
+        print(f'NOTE: sysbake.xattrs records {len(unarchived)} path(s) not stored in the archive '
+              '(Android sockets; tar never stores them): ' + ', '.join(unarchived[:5]), flush=True)
+    core.require(b'/lepton-x86_64-entry %verb%' in data['compat_tool/toolmanifest.vdf'],
+                 'Bundle toolmanifest.vdf does not start lepton-x86_64-entry')
+    return metadata, data['BUNDLE.json'], flags
+
+
+def restore_main(args, core):
+    import ctypes
+    import platform
+    core.require(platform.system() == 'Linux' and platform.machine() == 'x86_64', 'A Linux x86_64 host is required')
+    core.require(hasattr(ctypes.CDLL(None), 'memfd_create') and hasattr(ctypes.CDLL(None), 'renameat2'),
+                 'Linux memfd and glibc renameat2 support are required')
+    destination = core.destination_path(args.stage_dir)
+    args.bundle, args.checksum = Path(args.bundle), Path(args.checksum)
+    args.signature = Path(args.signature) if args.signature else None
+    args.trusted_signers = Path(args.trusted_signers) if args.trusted_signers else None
+    core.require(args.bundle.is_file() and args.checksum.is_file(), 'Bundle and checksum must be regular files')
+    temporary = None
+    with args.bundle.open('rb') as archive:
+        digest, manifest, signature, trust = core.verify_release(args, archive)
+        bundle = core.Bundle(archive, keep=complete_keep(core))
+        try:
+            bundle.space(destination.parent)
+            metadata, metadata_bytes, flags = validate_complete(bundle, core)
+            print(f'PASS: complete bundle {metadata["bundle_id"]}; Android rootfs, sysbake and xattr record validated; '
+                  'components: ' + ', '.join(f'{n}={str(flags[n]).lower()}' for n in L.COMPONENTS), flush=True)
+            if args.check:
+                print('PASS: restore preflight; no files changed')
+                return
+            temporary = Path(tempfile.mkdtemp(prefix='.lepton-customize-', dir=destination.parent))
+            os.chown(temporary, -1, os.getgid())
+            os.chmod(temporary, 0o700)
+            directories = bundle.extract(temporary)
+            core.write_source_provenance(temporary, bundle, args.bundle.name, metadata_bytes, manifest, signature, digest, trust)
+            for path, member in sorted(directories.items(), key=lambda item: len(item[0].parts), reverse=True):
+                os.chmod(path, member.mode & 0o7777)
+                os.utime(path, (member.mtime, member.mtime))
+            print('Verifying the restored rootfs and sysbake against a second read of the archive...', flush=True)
+            scan = checked(core, L.ArchiveScan, args.bundle)
+            core.require(scan.sha256 == digest, 'Source archive changed during restoration; refusing publication')
+            rootfs = checked(core, L.scan_directory, temporary / L.ROOTFS)
+            baked = checked(core, L.scan_directory, temporary / L.SYSBAKE, [])
+            # Parent directories an archive does not list are created implicitly.
+            for label, disk, archived in (('Android rootfs', rootfs, scan.rootfs), ('sysbake', baked, scan.sysbake)):
+                implicit = {name for name in set(disk) - set(archived) if disk[name][0] == 'd'}
+                core.require({k: v for k, v in disk.items() if k not in implicit} == archived,
+                             f'Restored {label} differs from the archive')
+            xattrs = (temporary / L.XATTRS).read_bytes()
+            core.require(xattrs == scan.files.get(L.XATTRS), 'Restored sysbake.xattrs differs from the archive')
+            fingerprint = L.stage_fingerprint(temporary)['fingerprint']
+            core.require(fingerprint == scan.fingerprint()['fingerprint'], 'Restored runtime fingerprint inputs differ')
+            state = dict(format_version=1, state='restored-complete', sysbake_required=False,
+                         source_bundle_id=metadata['bundle_id'], components=flags,
+                         android=dict(rootfs_tree_sha256=L.tree_digest(rootfs)),
+                         sysbake=dict(origin='source-bundle', tree_sha256=L.tree_digest(baked),
+                                      xattrs_sha256=hashlib.sha256(xattrs).hexdigest()),
+                         runtime_fingerprint=fingerprint)
+            (temporary / 'STAGE.json').write_text(json.dumps(state, indent=2) + '\n')
+            core.publish(temporary, destination)
+            temporary = None
+        finally:
+            bundle.tar.close()
+            if temporary is not None:
+                core.cleanup(temporary)
+    print(f'PASS: restored complete stage: {destination}\n'
+          'Android and its original sysbake are retained; repackage with lepton-customize package (no sysbake).\n'
+          'To change Android, create a new prepared stage instead (this stage refuses injection).')
+
+
 # ---------------------------------------------------------------- CLI
 def main(argv, core, command):
     parser = argparse.ArgumentParser(prog=f'lepton-customize {command}', description=__doc__)
@@ -677,7 +829,15 @@ def main(argv, core, command):
     mode.add_argument('--check', action='store_true', help='validate only; nothing changes')
     mode.add_argument('--execute', action='store_true')
     parser.add_argument('--stage-dir', required=True)
-    if command == 'adb':
+    if command == 'restore':
+        parser.add_argument('--bundle', required=True, help='complete bundle .tar.gz')
+        parser.add_argument('--checksum', required=True, help='its .tar.gz.sha256 manifest')
+        parser.add_argument('--signature', help='manifest SSH signature (default: CHECKSUM.sig when present)')
+        trust = parser.add_mutually_exclusive_group()
+        trust.add_argument('--trusted-signers', help='allowed_signers file instead of the installed release keys')
+        trust.add_argument('--allow-unsigned', action='store_true',
+                           help='accept an unsigned manifest for a bundle you built yourself (integrity only)')
+    elif command == 'adb':
         parser.add_argument('--adb-zip', help="already downloaded official Google platform-tools ZIP (offline)")
     elif command == 'sysbake':
         parser.add_argument('--rendering', choices=('software', 'amd'), default='software')
@@ -691,4 +851,4 @@ def main(argv, core, command):
     core.require(os.geteuid() != 0, 'Run as an unprivileged user (without sudo)')
     if command == 'sysbake':
         core.require(args.timeout > 0, '--timeout must be positive')
-    {'adb': adb_main, 'sysbake': sysbake_main, 'package': package_main}[command](args, core)
+    {'adb': adb_main, 'sysbake': sysbake_main, 'package': package_main, 'restore': restore_main}[command](args, core)

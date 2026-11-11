@@ -36,6 +36,7 @@ def load(name, path):
 
 BASE = load('customize_fixture', REPO / 'tests/test-customize.py')
 M = BASE.M
+L = load('bundle_lib', REPO / 'compat_tool/tools/lepton_bundle_lib.py')
 
 # Stands in for `./lepton sysbake`: writes Android-like system data with real
 # user.* xattrs. It carries the markers the isolated helper patches.
@@ -436,6 +437,186 @@ class SysbakePackageTests(Harness, unittest.TestCase):
         self.package(self.stage)
 
 
+XATTRS = b"""# file: sysbake
+user.default=0x01
+
+# file: sysbake/misc
+user.inode_cache=0x02
+
+# file: sysbake/system/packages.xml
+user.default="1"
+
+# file: sysbake/system/unsolzygotesocket
+user.default=0x03
+
+"""
+
+
+def complete_bundle(base):
+    """A complete base bundle as published: rootfs plus its original sysbake."""
+    base.put('compat_tool/sysbake', b'', 0o755, ('directory', ''))
+    base.put('compat_tool/sysbake/system', b'', 0o775, ('directory', ''))
+    base.put('compat_tool/sysbake/misc', b'', 0o2770, ('directory', ''))
+    base.put('compat_tool/sysbake/user', b'', 0o711, ('directory', ''))
+    base.put('compat_tool/sysbake/system/packages.xml', b'ABX\x00com.android.settings', 0o640)
+    base.put('compat_tool/sysbake/misc/state', b'android state', 0o600)
+    base.put('compat_tool/sysbake/user/current', b'', 0o777, ('symlink', '/data/user/0'))
+    base.put('compat_tool/sysbake.xattrs', XATTRS, 0o644)
+    base.put('tools/platform-tools/adb', b'old bundled adb', 0o755)
+    # Published bundles (tar -cf - .) list every directory.
+    for name in list(base.nodes):
+        for parent in Path(name).parents:
+            if str(parent) != '.' and str(parent) not in base.nodes:
+                base.put(str(parent), b'', 0o755, ('directory', ''))
+
+
+def scan(archive):
+    return L.ArchiveScan(archive)
+
+
+class RestoreTests(Harness, unittest.TestCase):
+    """Workflow B: complete bundle -> restored stage (sysbake kept) -> new bundle."""
+    @classmethod
+    def setUpClass(cls):
+        BASE.CustomizeTests.setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        BASE.CustomizeTests.tearDownClass()
+
+    def setUp(self):
+        self.base = BASE.CustomizeTests()
+        self.base.setUp()
+        self.addCleanup(self.base.doCleanups)
+        self.root, self.outside = self.base.root, self.base.outside
+        self.adb_sha, self.adb_zip = fake_adb(self.root / 'fake-adb')
+        extend_bundle(self.base, self.adb_sha)
+        complete_bundle(self.base)
+        self.base.write_bundle()
+        # A bootstrap made by extracting compat_tool/tools from a verified bundle.
+        for module in ('lepton_customize_inject.py', 'lepton_customize_package.py', 'lepton_bundle_lib.py'):
+            shutil.copyfile(REPO / 'compat_tool/tools' / module, self.base.bootstrap / module)
+        self.setup_host(self.root, self.base.env)
+        self.bundles = self.root / 'bundles'
+        self.restored = self.root / 'restored'
+
+    def restore(self, mode='--execute', *extra, archive=None, ok=True):
+        archive = archive or self.base.archive
+        result = subprocess.run([sys.executable, '-B', str(self.base.tool), 'restore', mode, '--bundle', str(archive),
+                                 '--checksum', str(archive) + '.sha256', '--stage-dir', str(self.restored), *extra],
+                                cwd=self.outside, env=self.host_env, capture_output=True, text=True)
+        output = result.stdout + result.stderr
+        (self.assertEqual if ok else self.assertNotEqual)(result.returncode, 0, output)
+        return output
+
+    def test_restore_check_writes_nothing(self):
+        before = sorted(str(p) for p in self.root.rglob('*'))
+        self.assertIn('restore preflight', self.restore('--check'))
+        self.assertEqual(before, sorted(str(p) for p in self.root.rglob('*')))
+
+    def test_restore_retains_rootfs_sysbake_and_xattrs(self):
+        original = self.base.archive.read_bytes()
+        output = self.restore()
+        self.assertIn('unsolzygotesocket', output)
+        self.assertEqual(self.base.archive.read_bytes(), original)
+        state = self.state(self.restored)
+        self.assertEqual((state['state'], state['sysbake_required'], state['sysbake']['origin']),
+                         ('restored-complete', False, 'source-bundle'))
+        self.assertEqual(state['components'], dict(gapps=False, ndk=False, widevine=False))
+        for name, (data, mode, link) in self.base.nodes.items():
+            if name.startswith(('compat_tool/sysbake', M.ROOTFS)):
+                path = self.restored / name
+                if link and link[0] == 'symlink':
+                    self.assertEqual(os.readlink(path), link[1])
+                elif link:
+                    self.assertTrue(path.is_dir())
+                    self.assertEqual(path.stat().st_mode & 0o7777, mode, name)
+                elif not path.is_symlink():
+                    self.assertEqual((path.read_bytes(), path.stat().st_mode & 0o7777), (data, mode), name)
+        self.assertEqual((self.restored / 'compat_tool/sysbake.xattrs').read_bytes(), XATTRS)
+        self.assertEqual(json.loads((self.restored / 'source-bundle/SOURCE.json').read_text())['sha256'], sha(original))
+        for name in ('BUNDLE.json', 'tools/platform-tools', 'compat_tool/install-profile', '.runtime-profile.google',
+                     'compatdata', 'tools/.ssh'):
+            self.assertFalse((self.restored / name).exists(), name)
+        self.assertIn('already exists', self.restore('--check', ok=False))
+
+    def test_repackaging_unchanged_stage_preserves_android_and_sysbake(self):
+        self.restore()
+        self.assertIn('keeps its original validated sysbake', self.sysbake(self.restored, ok=False))
+        self.package(self.restored, 'repacked')
+        before, after = scan(self.base.archive), scan(self.bundles / 'lepton-x86_64-repacked.tar.gz')
+        self.assertEqual(before.rootfs, after.rootfs)
+        self.assertEqual(before.sysbake, after.sysbake)
+        self.assertEqual(before.files[L.XATTRS], after.files[L.XATTRS])
+        self.assertEqual(before.fingerprint(), after.fingerprint())
+        old, new = before.metadata(), after.metadata()
+        self.assertNotEqual(old['bundle_id'], new['bundle_id'])
+        self.assertEqual({k: old[k] for k in ('gapps', 'ndk')}, {k: new[k] for k in ('gapps', 'ndk')})
+        self.assertIn('retained unchanged from the source bundle',
+                      self.read_member(self.bundles / 'lepton-x86_64-repacked.tar.gz', 'tools/BUNDLE-PROVENANCE.txt').decode())
+        # A second, differently named repack has the same runtime fingerprint.
+        self.package(self.restored, 'repacked-again')
+        self.assertEqual(scan(self.bundles / 'lepton-x86_64-repacked-again.tar.gz').fingerprint(), after.fingerprint())
+        # The new bundle restores again (its own installer, checksum and layout).
+        shutil.rmtree(self.restored, onerror=lambda f, p, e: (os.chmod(p, 0o700), f(p)))
+        self.restore(archive=self.bundles / 'lepton-x86_64-repacked.tar.gz')
+        self.assertEqual(self.state(self.restored)['source_bundle_id'], 'repacked')
+
+    def test_restored_stage_refuses_android_changes(self):
+        self.restore()
+        inputs = self.root / 'inputs'
+        inputs.mkdir()
+        output = self.run_tool(self.restored, 'inject', '--check', '--stage-dir', str(self.restored), '--output-stage',
+                               str(self.root / 'out'), '--google-inputs', str(inputs), '--with-gapps', ok=False)
+        self.assertIn('restored complete stage', output)
+        self.assertIn('fresh prepared stage', output)
+        target = self.restored / M.ROOTFS / 'system/etc/unchanged.conf'
+        target.write_bytes(b'edited Android with old sysbake')
+        self.assertIn('differs from the one this sysbake belongs to', self.package(self.restored, mode='--check', ok=False))
+
+    def test_restore_rejects_incomplete_or_inconsistent_bundles(self):
+        cases = {
+            'sysbake missing': lambda b: b.nodes.pop('compat_tool/sysbake/system/packages.xml'),
+            'gapps flag without GApps': lambda b: b.put('BUNDLE.json', json.dumps(dict(b.metadata, gapps=True)).encode(), 0o644),
+            'widevine flag without Widevine': lambda b: b.put('BUNDLE.json', json.dumps(dict(b.metadata, widevine=True)).encode(), 0o644),
+            'selinux xattr': lambda b: b.put('compat_tool/sysbake.xattrs', XATTRS + b'# file: sysbake/misc\nsecurity.selinux="x"\n', 0o644),
+            'escaping xattr path': lambda b: b.put('compat_tool/sysbake.xattrs', b'# file: sysbake/../etc\nuser.a=1\n', 0o644),
+            'xattr path without parent': lambda b: b.put('compat_tool/sysbake.xattrs', b'# file: sysbake/gone/x\nuser.a=1\n', 0o644),
+            'user data in rootfs': lambda b: b.put(M.ROOTFS + 'data/app/x.apk', b'x', 0o644),
+        }
+        for label, change in cases.items():
+            with self.subTest(label):
+                saved = dict(self.base.nodes)
+                change(self.base)
+                self.base.write_bundle()
+                self.restore('--check', ok=False)
+                self.assertFalse(self.restored.exists())
+                self.base.nodes = saved
+        self.base.write_bundle()
+        self.restore('--check')
+
+    def test_failed_restore_publishes_nothing_and_keeps_input(self):
+        P = load('restore_test', REPO / 'compat_tool/tools/lepton_customize_package.py')
+        original = self.base.archive.read_bytes()
+        args = mock.Mock(stage_dir=str(self.restored), bundle=str(self.base.archive), checksum=str(self.base.checksum),
+                         signature=None, trusted_signers=None, allow_unsigned=False, check=False, execute=True)
+
+        def interrupted(*_):
+            raise M.InvalidBundle('Interrupted by signal 15')
+        with mock.patch.dict(os.environ, self.host_env, clear=True), mock.patch.object(M, 'publish', interrupted):
+            with self.assertRaises(M.InvalidBundle):
+                P.restore_main(args, M)
+        self.assertFalse(self.restored.exists())
+        self.assertFalse(list(self.root.glob('.lepton-customize-*')))
+        self.assertEqual(self.base.archive.read_bytes(), original)
+
+    def test_stage2_still_refuses_complete_customised_or_prepares_base(self):
+        # The original Stage 2 workflow discards sysbake from the same archive.
+        self.base.cli()
+        self.assertFalse((self.base.stage / 'compat_tool/sysbake').exists())
+        self.assertEqual(self.state(self.base.stage)['state'], 'prepared')
+
+
 INJECT = load('inject_fixture', REPO / 'tests/test-customize-inject.py')
 
 
@@ -489,6 +670,32 @@ class CustomizedWorkflowTests(Harness, INJECT.InjectionTests):
         apk = self.output / M.ROOTFS / 'system/product/priv-app/Phonesky/Phonesky.apk'
         apk.write_bytes(b'tampered')
         self.assertRegex(self.package(self.output, mode='--check', ok=False), 'provenance|differs')
+
+    def test_restore_customised_bundle_keeps_flags_and_repackages(self):
+        self.customize(('gapps',))
+        self.sysbake(self.output, env=dict(self.host_env, FAKE_SYSBAKE_GMS='1'))
+        self.package(self.output, 'gapps-local')
+        archive = self.bundles / 'lepton-x86_64-gapps-local.tar.gz'
+        restored = self.root / 'restored'
+        # Installed release keys make unsigned local bundles an explicit choice.
+        (self.output / 'compat_tool/release-keys/allowed_signers').write_text(
+            'lepton-release namespaces="lepton-release" ' + Path(str(self.base.keys) + '.pub').read_text())
+        refused = self.run_tool(self.output, 'restore', '--check', '--bundle', str(archive), '--checksum',
+                                str(archive) + '.sha256', '--stage-dir', str(restored), ok=False)
+        self.assertIn('--allow-unsigned', refused)
+        self.run_tool(self.output, 'restore', '--execute', '--allow-unsigned', '--bundle', str(archive), '--checksum',
+                      str(archive) + '.sha256', '--stage-dir', str(restored))
+        state = self.state(restored)
+        self.assertEqual(state['components'], dict(gapps=True, ndk=False, widevine=False))
+        self.assertTrue(json.loads((restored / 'source-bundle/SOURCE.json').read_text())['unsigned_override'])
+        self.package(restored, 'gapps-local-2')
+        again = self.bundles / 'lepton-x86_64-gapps-local-2.tar.gz'
+        self.assertTrue(json.loads(self.read_member(again, 'BUNDLE.json'))['gapps'])
+        first, second = L.ArchiveScan(archive), L.ArchiveScan(again)
+        self.assertEqual((first.rootfs, first.sysbake, first.fingerprint()), (second.rootfs, second.sysbake, second.fingerprint()))
+        names = self.members(again)
+        self.assertIn('./compat_tool/provenance/sources/v0.2.0-alpha/SOURCE.json', names)
+        self.assertIn('./compat_tool/provenance/sources/gapps-local/SOURCE.json', names)
 
     def test_component_record_must_match_rootfs(self):
         self.customize(('gapps',))

@@ -328,6 +328,8 @@ def run(args, core):
         cache = core.destination_path(safe_path(args.save_google_inputs, core, existing=False))
         for path in (source, output, google):
             disjoint(cache, path, core)
+    # Refuse unsuitable stage types before asking for host tools.
+    view = StageView(source, core)
     tools = {'bash', 'readelf', 'rsync', 'python3', 'sha256sum', 'realpath', 'find', 'grep', 'sort', 'mktemp', 'debugfs', 'dirname', 'mkdir', 'chmod', 'rm'}
     if args.google_zip:
         tools.update(('lpunpack', 'sfdisk', 'dd', 'unzip', 'debugfs', 'cut', 'mv', 'rm', 'mkdir', 'chmod', 'cat', 'basename'))
@@ -343,7 +345,6 @@ def run(args, core):
             tools.update(('awk', 'sed'))
     for tool in sorted(tools):
         core.require(shutil.which(tool), f'Missing host command: {tool}; install {PACKAGES.get(tool, "coreutils/findutils/grep as appropriate")}')
-    view = StageView(source, core)
     stage, metadata, _ = view.validate()
     check_write_paths(source, selected, core)
     helpers = source / 'tools/customize'

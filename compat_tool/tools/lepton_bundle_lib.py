@@ -64,8 +64,12 @@ def tree_digest(records):
     return digest.hexdigest()
 
 
-def scan_directory(root):
-    """Records for everything below root (root itself excluded). Never follows links."""
+def scan_directory(root, sockets=None):
+    """Records for everything below root (root itself excluded). Never follows links.
+
+    Unix sockets left by Android are skipped, as tar skips them when bundles
+    are made; their names are appended to `sockets` when a list is given.
+    """
     root = Path(root)
     require(root.is_dir() and not root.is_symlink(), f'Missing directory: {root}')
     records = {}
@@ -85,6 +89,9 @@ def scan_directory(root):
                 records[relative] = ('d', mode, '')
             elif stat.S_ISLNK(info.st_mode):
                 records[relative] = ('l', 0, os.readlink(path))
+            elif stat.S_ISSOCK(info.st_mode):
+                if sockets is not None:
+                    sockets.append(relative)
             elif stat.S_ISREG(info.st_mode):
                 try:
                     records[relative] = ('f', mode, file_sha256(path))
@@ -300,10 +307,20 @@ def parse_xattrs(data):
     return entries
 
 
-def check_xattr_paths(entries, exists):
-    """Every recorded path must name an entry of the sysbake tree."""
-    missing = [path for path in entries if not exists(path)]
-    require(not missing, 'sysbake.xattrs names paths missing from sysbake: ' + ', '.join(sorted(missing)[:5]))
+def check_xattr_paths(entries, records):
+    """Recorded paths must name sysbake entries (records are sysbake-relative).
+
+    Android sockets are recorded by getfattr but never archived, so a path may
+    be absent only directly inside an existing directory. Returns those paths.
+    """
+    def kind(path):
+        if path == 'sysbake':
+            return 'd'
+        return (records.get(path[len('sysbake/'):]) or (None,))[0]
+    missing = sorted(path for path in entries if kind(path) is None)
+    orphaned = [path for path in missing if kind(path.rsplit('/', 1)[0]) != 'd']
+    require(not orphaned, 'sysbake.xattrs names paths outside the sysbake tree: ' + ', '.join(orphaned[:5]))
+    return missing
 
 
 # ---------------------------------------------------------------- components
