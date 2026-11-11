@@ -47,3 +47,18 @@ grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
 grep -q 'if lepton_dma_heap_usable && \[\[ "${LEPTON_CODEC2:-auto}" != false \]\]; then' "$ROOT/compat_tool/liblepton/mounting.sh"
 grep -q 'podman_mount_entry "$(lepton_dma_heap_device)" "/dev/dma_heap/system" rw' "$ROOT/compat_tool/liblepton/mounting.sh"
 printf 'PASS: Android URL routing default, explicit Steam opt-in, codec opt-in, DMA-heap Codec2 audio and legacy SDK properties, so replacements\n'
+
+# Local window policy crosses Podman via the generated property file, not env.
+LEPTON_LOCAL_DISPLAY_ACTIVE=1 setup_props
+if grep -q '^ro.lepton.local_' "$work/lepton.prop"; then echo 'FAIL: sysbake received local display policy'; exit 1; fi
+is_sysbake() { return 1; }
+app_wants_flatscreen() { return 0; }
+LEPTON_LOCAL_DISPLAY_ACTIVE=0 setup_props
+if grep -q '^ro.lepton.local_' "$work/lepton.prop"; then echo 'FAIL: Deck received local display policy'; exit 1; fi
+LEPTON_LOCAL_DISPLAY_ACTIVE=1 LEPTON_LOCAL_FULLSCREEN=1 LEPTON_LOCAL_OUTPUT=DP-1 setup_props
+grep -qx 'ro.lepton.local_display=true' "$work/lepton.prop"
+grep -qx 'ro.lepton.local_fullscreen=1' "$work/lepton.prop"
+grep -qx 'ro.lepton.local_output=DP-1' "$work/lepton.prop"
+LEPTON_LOCAL_DISPLAY_ACTIVE=1 LEPTON_LOCAL_FULLSCREEN=0 setup_props
+grep -qx 'ro.lepton.local_fullscreen=0' "$work/lepton.prop"
+echo 'PASS: local fullscreen/windowed policy reaches Android properties; Deck and sysbake excluded'

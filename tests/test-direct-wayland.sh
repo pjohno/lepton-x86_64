@@ -19,6 +19,7 @@ GAME
 cat > "$work/bin/game" <<'GAME'
 #!/bin/bash
 printf 'game %s %s\n' "$GAMESCOPE_WAYLAND_DISPLAY" "$SteamAppId" >> "$LOG"
+printf 'policy %s %s\n' "${LEPTON_LOCAL_FULLSCREEN:-unset}" "${LEPTON_LOCAL_OUTPUT:-unset}" >> "$LOG"
 if [[ -n "${HOLD:-}" ]]; then
     trap 'echo terminated >> "$LOG"; exit 0' TERM
     touch "$READY"
@@ -37,6 +38,26 @@ launcher="$repo/compat_tool/tools/lepton-direct-wayland"
 "${base[@]}" "$launcher" game > "$work/out"
 grep -qx 'game wayland-test 123' "$work/log"
 grep -q 'no Gamescope' "$work/out"
+# Only the profile-selected direct path enables fullscreen policy.
+cat > "$work/bin/kscreen-doctor" <<'KDE'
+#!/bin/bash
+printf '%s\n' '{"outputs":[{"name":"off","enabled":false,"primary":true},{"name":"DP-2","enabled":true,"priority":2},{"name":"DP-1","enabled":true,"priority":1}]}'
+KDE
+chmod +x "$work/bin/kscreen-doctor"
+for mode in default 0 1; do
+    : > "$work/log"
+    extra=(); [[ "$mode" == default ]] || extra=(LEPTON_LOCAL_FULLSCREEN="$mode")
+    "${base[@]}" LEPTON_LOCAL_DISPLAY_ACTIVE=1 "${extra[@]}" "$launcher" game > "$work/out"
+    expected="$mode"; [[ "$mode" != default ]] || expected=1
+    grep -qx "policy $expected DP-1" "$work/log"
+done
+for mode in '' 2 -1 yes; do
+    : > "$work/log"
+    if "${base[@]}" LEPTON_LOCAL_DISPLAY_ACTIVE=1 LEPTON_LOCAL_FULLSCREEN="$mode" "$launcher" game > "$work/out" 2>&1; then exit 1; else result=$?; fi
+    [[ "$result" == 2 ]]
+    grep -q 'LEPTON_LOCAL_FULLSCREEN must be' "$work/out"
+    if grep -q '^game ' "$work/log"; then exit 1; fi
+done
 # Missing environment, a missing socket and a regular file all refuse to start.
 touch "$work/not-a-socket"
 for extra in WAYLAND_DISPLAY= XDG_RUNTIME_DIR= WAYLAND_DISPLAY=missing WAYLAND_DISPLAY=not-a-socket; do

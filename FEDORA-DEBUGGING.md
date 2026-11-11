@@ -28,6 +28,14 @@ See [profile, deployment, rollback and geometry limitations](compat_tool/LOCAL-D
 Direct routing is a new Fedora test version; rendering, redraw, scaling, pointer
 alignment, focus and exit/relaunch need manual validation before release.
 
+Phase 2 adds a local-only native fullscreen request and physical/logical scale
+negotiation through an isolated hwcomposer patch. Use
+`LEPTON_LOCAL_FULLSCREEN=0 %command%` to compare the original direct geometry.
+The existing Gamescope fallback stays windowed. See the local routing document
+for the component-only build, read-only overlay deployment and runtime commands.
+A fresh Phase 1 baseline on 2026-11-11 passed without the issue #8 redraw/focus
+freeze; do not interpret that as proof that all games or Phase 2 are validated.
+
 ## Testing the Steam Gamescope bridge
 
 The desktop mouse fix changes the bridge script only; an existing installed
@@ -620,3 +628,16 @@ group ownership outside Podman's user mapping, missing MAIN/LAUNCHER intent
 fields, and an older software stage without GBM HAL masking. Host SELinux
 policy/enforcement was not changed. Do not infer an SELinux failure from every
 Android permission message; inspect the first fatal error.
+
+### Phase 2 native Wayland test (2026-11-11)
+
+At KDE 125% on DP-1 (3440×1440 physical), Steam launched the local profile
+with native fullscreen requested. 2048 reported a 3440×1440 Android surface;
+the user confirmed the game covered the Plasma panels and input/redraw worked.
+Normal exit retained the profile. The original rootfs was not replaced: the
+test used a read-only overlay for the component-only hwcomposer build. The subsequent live session confirmed hwcomposer's acknowledged state:
+`fullscreen=1 logical=2752x1152 buffer=3440x1440 scale=1.2500`.
+Android `wm size`, DisplayManager and SurfaceFlinger agreed on 3440×1440.
+Use `logcat -b all` to include the early hwcomposer configure diagnostics.
+See [local desktop validation](compat_tool/LOCAL-DESKTOP.md#fedora-validation-record)
+for the implementation, remaining hardware tests and diagnostic commands.

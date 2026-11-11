@@ -23,6 +23,8 @@ if [[ -d "$ROOT/tools/bin" ]]; then
     export PATH="$ROOT/tools/bin:$PATH"
 fi
 export APP_WANTS_FLATSCREEN="${APP_WANTS_FLATSCREEN:-true}"
+# Only this tool's profile may enable the Android local display policy.
+export LEPTON_LOCAL_DISPLAY_ACTIVE=0
 
 # True if this process already runs inside a lepton-gamescope-bridge.
 inside_bridge() {
@@ -67,6 +69,7 @@ if [[ "${1:-}" == waitforexitandrun && "${LEPTON_NO_BRIDGE:-false}" != true ]] &
             # The local fallback is always a safe desktop window by default.
             export LEPTON_DISPLAY_MODE=desktop LEPTON_DESKTOP_DIRECT=0
         else
+            export LEPTON_LOCAL_DISPLAY_ACTIVE=1
             exec "$TOOL/tools/lepton-direct-wayland" "$TOOL/lepton" "$@"
         fi
     fi

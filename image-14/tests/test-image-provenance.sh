@@ -42,7 +42,11 @@ for entry in "${LEPTON_CUSTOM_PATCHES[@]}"; do
     if [[ ! -d "$project/.git" ]]; then
         mkdir -p "$project" && git -C "$project" init -q
         git -C "$project" config user.email t@example.invalid; git -C "$project" config user.name T
-        printf 'base\n' > "$project/source.c"; git -C "$project" add -A; git -C "$project" commit -qm base
+        printf 'base\n' > "$project/source.c"
+        for copied in "${LEPTON_COPIED_TREES[@]}"; do
+            [[ "${copied#*|}" != "${entry%%|*}" ]] || cp "$project/source.c" "$fake/${copied%%|*}/source.c"
+        done
+        git -C "$project" add -A; git -C "$project" commit -qm base
     fi
     # Each patch adds its own file to the project.
     name="${entry#*|}"

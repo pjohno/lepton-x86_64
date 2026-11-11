@@ -18,11 +18,32 @@ For the windowed Gamescope fallback, use LEPTON_LOCAL_USE_GAMESCOPE=1 %command%.
     exit 1
 fi
 lepton_check_binder || exit 1
+if [[ "${LEPTON_LOCAL_DISPLAY_ACTIVE:-0}" == 1 ]]; then
+    case "${LEPTON_LOCAL_FULLSCREEN-1}" in
+        0|1) export LEPTON_LOCAL_FULLSCREEN="${LEPTON_LOCAL_FULLSCREEN-1}" ;;
+        *) echo 'ERROR: LEPTON_LOCAL_FULLSCREEN must be 0 (windowed) or 1 (fullscreen)' >&2; exit 2 ;;
+    esac
+    export LEPTON_LOCAL_OUTPUT=""
+    if command -v kscreen-doctor >/dev/null 2>&1; then
+        LEPTON_LOCAL_OUTPUT="$(kscreen-doctor -j 2>/dev/null | python3 -c '
+import json, re, sys
+try:
+    outputs = [o for o in json.load(sys.stdin).get("outputs", []) if o.get("enabled") and o.get("connected", True)]
+    outputs.sort(key=lambda o: (not o.get("primary", False), o.get("priority", 999), o.get("id", 999)))
+    name = outputs[0].get("name", "") if outputs else ""
+    print(name if re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", name) else "")
+except (ValueError, TypeError, KeyError):
+    print("")
+' || true)"
+        export LEPTON_LOCAL_OUTPUT
+    fi
+    echo "Lepton local display: native fullscreen=$LEPTON_LOCAL_FULLSCREEN; output=${LEPTON_LOCAL_OUTPUT:-compositor-selected}; compositor controls geometry/scale"
+fi
 message_file="$(mktemp "$XDG_RUNTIME_DIR/lepton-message.XXXXXX")"
 export LEPTON_MESSAGE_FILE="$message_file"
 trap cleanup_message_file EXIT
 export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"
-echo "Lepton display: desktop Wayland ($WAYLAND_DISPLAY), no Gamescope; geometry unchanged"
+echo "Lepton display: desktop Wayland ($WAYLAND_DISPLAY), no Gamescope"
 status=0
 "$@" &
 child=$!

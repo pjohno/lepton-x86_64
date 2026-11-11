@@ -173,8 +173,8 @@ uses the Deck installer with a persistent `local-desktop` installation profile: 
 **Lepton: Add Android game** to the application menu.
 
 Local installs now launch directly through host Wayland by default, without
-nested Gamescope. Geometry is unchanged in this phase; fullscreen and physical
-resolution are not yet implemented. Use `LEPTON_LOCAL_USE_GAMESCOPE=1 %command%`
+nested Gamescope. Phase 2 requests native fullscreen and negotiates physical buffer dimensions
+through the local hwcomposer patch; runtime verification is required. Use `LEPTON_LOCAL_USE_GAMESCOPE=1 %command%`
 for the existing windowed Gamescope fallback. Normal Deck installs keep their
 existing paths. See [local desktop routing](compat_tool/LOCAL-DESKTOP.md) for
 profile persistence, upgrades, limitations and launcher-only deployment.
