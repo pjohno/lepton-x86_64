@@ -7,6 +7,7 @@ for test_name in test-build-pipeline-cli test-deploy-compat-rootfs-source test-d
     bash "$repo/image-14/tests/$test_name.sh"
 done
 bash "$repo/image-14/tests/test-build-recovery.sh"
+bash "$repo/image-14/tests/test-preflight-tools.sh"
 python3 -B "$repo/image-14/tests/test-source-reset.py"
 bash "$repo/compat_tool/liblepton/ndk_auxv/test.sh"
 python3 -B "$repo/tests/test-build-integration.py"
