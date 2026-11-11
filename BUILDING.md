@@ -39,9 +39,47 @@ need them when debugging a failed step or
   is checked before each step.
 - 24 GB RAM works with `LEPTON_BUILD_JOBS=6`. The first build takes many hours;
   later builds are incremental.
-- Host commands, all checked by the preflight in step 2: `git podman rsync python3 simg2img sqfs2tar fuse2fs fusermount3 unzip`, plus `lpunpack sfdisk debugfs` for the Google inputs. On Fedora they come from the `android-tools`,
+- Host commands, all checked by the preflight in step 2: `git podman rsync python3 simg2img sqfs2tar fuse2fs fusermount fusermount3 unzip`, plus `lpunpack sfdisk debugfs` for the Google inputs. On Fedora they come from the `android-tools`,
   `squashfs-tools-ng`, `e2fsprogs`/`fuse2fs`, `fuse3`, `util-linux` and `unzip`
   packages.
+
+### FUSE packaging requirements (including Fedora under WSL)
+
+All preflight modes check rootfs packaging tools and read/write access to
+`/dev/fuse` before a long compile. They also create a small disposable ext4
+image and test an unprivileged `fuse2fs` mount and unmount. This verifies helper
+execution and mount permission, beyond checking that the device exists. No
+Android image or existing output is mounted by this smoke test.
+
+Both `fusermount` (FUSE 2) and `fusermount3` (FUSE 3) are checked. The helper
+matching the installed `fuse2fs` library dependency is required; unknown/static
+implementations conservatively require both. They are not interchangeable.
+The installed `fuse2fs` may invoke the legacy helper even when FUSE 3 is already
+installed. On Fedora, including Fedora under WSL, fix the
+missing FUSE 2 helper with:
+
+```bash
+sudo dnf install fuse fuse-libs
+```
+
+Other Fedora packaging tools come from `fuse3`, `e2fsprogs`/`fuse2fs`,
+`squashfs-tools-ng`, `android-tools`, `rsync`, `unzip`, `util-linux`, `coreutils`
+and `python3`. On Ubuntu, install `fuse2fs`, `e2fsprogs`, `squashfs-tools-ng`,
+`android-sdk-libsparse-utils`, `rsync`, `unzip`, `util-linux`, `coreutils` and
+`python3`, plus `fuse` for a FUSE 2 implementation or `fuse3` for FUSE 3.
+Ubuntu releases differ: check `ldd "$(command -v fuse2fs)"`,
+`command -v fusermount fusermount3` and package dependencies before installing `fuse`/`fuse3`; some releases make those packages conflict. Do not
+work around this by symlinking the two executables.
+
+WSL needs a kernel/environment supporting FUSE (normally WSL2), an exposed
+`/dev/fuse`, and permission for the build user to read/write it and mount FUSE
+filesystems. A container also needs the device and suitable mount policy.
+Installing utilities alone cannot fix a missing device or kernel restriction.
+The preflight distinguishes missing tools, device access, mount failures and
+unmount failures. It does not use sudo for mounting or compilation. If an
+unmount fails, its temporary directory is retained and reported; inspect the
+mount/processes before unmounting it with the matching helper. Do not delete a
+still-mounted temporary tree.
 
 ## 0. One-time setup
 
@@ -245,6 +283,73 @@ Pulling host-only changes does not require an Android reset or rebuild.
 `image-14/do_build_x86_64.sh` is for a fresh checkout and refuses an existing
 one; use the incremental wrapper below to reuse the checkout.
 
+### Compile, package, check or repair
+
+| `build-images-x86_64.sh` option | Purpose |
+| --- | --- |
+| `--execute` | Compile Android, then copy images, package rootfs and write provenance |
+| `--package-only` | Package existing compiled AOSP images; no Podman build, Soong, Ninja or compilation |
+| `--repair` | Detect and remove damaged compiled outputs; follow with a successful `--execute` |
+| `--check` | Validate build and packaging prerequisites without changing output artifacts; the FUSE probe uses disposable temporary files |
+
+If compilation finished but packaging failed (for example, missing
+`fusermount`), fix the reported host dependency and run:
+
+```bash
+bash image-14/scripts/build-images-x86_64.sh --package-only
+```
+
+This reads **only** `system.img` and `vendor.img` from the configured AOSP
+checkout's `out/target/product/lepton_x86_64/`, validates their sparse/SquashFS
+structure, copies them, writes SHA256 checksums and `BUILD-INFO.txt`, and
+packages the rootfs with its matching `.lepton-image-provenance`. It never
+falls back to old workspace images. Keep the prepared sources matching the
+compiled products so source attribution is meaningful; an older build without
+workflow markers cannot reveal every possible out-of-band source/image change.
+
+Both commands use the same packaging transaction. New images, rootfs and
+metadata are staged beside their destinations, preserving existing valid
+outputs until packaging and validation succeed. Each directory is promoted by
+rename; failures and handled signals roll back the pair. Renaming two separate
+directories is not one atomic operation: SIGKILL/power loss during promotion
+can leave previous outputs in the reported `.lepton-image-package.*` and
+`.lepton-rootfs-package.*` backup directories. Inspect `RECOVERY.txt`, hashes
+and mount state before manually restoring backups. Stale temporary trees are
+reported and never automatically deleted, because they may still be mounted
+or hold the previous valid outputs. Successful repeated `--package-only` calls
+replace the default outputs consistently and clean their own temporary trees.
+
+The checkout's build lock covers compilation, packaging and repair. Packaging
+also refuses visible Ninja/Soong/Kati processes conservatively, and rejects
+interrupted/failed compilation markers. Finish a successful build in that
+case; do not delete markers to force packaging. A compiler outside the managed
+workflow can race process inspection; source-image hashes are rechecked before
+publishing, but do not start external builds concurrently. Restricted PID
+visibility can limit detection of external container processes.
+
+For isolated output recovery, preserve both original overrides:
+
+```bash
+source .build-env
+bash image-14/scripts/build-images-x86_64.sh --package-only \
+  --images-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/images" \
+  --rootfs-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/rootfs"
+```
+
+Explicit destinations must still be new. A failed transaction leaves them
+absent; if they already contain a successful build, choose new override paths.
+Omitting the overrides selects the normal workspace outputs. `--repair` is
+not a remedy for a missing packaging executable, failed FUSE mount or failed
+unmount, and does not package images.
+
+Host-only workflow regression tests use tiny image fixtures and mocked FUSE;
+they do not compile Android or require root:
+
+```bash
+python3 tests/test-rootfs-packaging.py -v
+python3 tests/test-build-integration.py
+```
+
 ### Reset and re-prepare the existing checkout
 
 Use this when the prepared Android sources no longer match the required
@@ -391,6 +496,9 @@ publish a release, merge the branch or change GitHub issue state.
 
 - Every step prints the path of its log. Logs live in the workspace's `logs/`
   and stay after failures.
+- A **rootfs packaging** failure after successful compilation can be retried
+  with `build-images-x86_64.sh --package-only` after fixing the reported host
+  tool, FUSE permission or unmount error. No Android compilation is needed.
 - A failed or stopped **build** can simply be run again; it continues where
   it stopped.
 - **Power cut, crash or forced shutdown during a build.** Avoid these if you

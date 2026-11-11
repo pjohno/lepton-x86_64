@@ -175,6 +175,14 @@ for tool in git podman rsync realpath findmnt df awk cmp python3 tee mktemp simg
     fi
 done
 
+# Packaging is part of every image build, not only the optional full check.
+source "$ROOT/image-14/scripts/lib/packaging-fuse.sh"
+if lepton_packaging_requirements; then
+    lepton_fuse_smoke_test || fail 'Unprivileged FUSE packaging smoke test failed (see operation above)'
+else
+    fail 'Rootfs packaging prerequisites are missing (see above)'
+fi
+
 # Container builder.
 if command -v podman >/dev/null 2>&1; then
     if podman image exists "$BUILDER"; then
@@ -273,21 +281,6 @@ fi
 if [[ "$MODE" == full ]]; then
     echo
     info "=== Full build and packaging prerequisites ==="
-
-    for tool in tar unzip fuse2fs fusermount3 rsync; do
-        if command -v "$tool" >/dev/null 2>&1; then
-            pass "Packaging tool: $tool"
-        else
-            fail "Missing packaging tool: $tool"
-        fi
-    done
-
-    if [[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]]; then
-        pass "FUSE device accessible"
-        info "Actual FUSE mounting is verified during packaging"
-    else
-        fail "FUSE device missing or inaccessible: /dev/fuse"
-    fi
 
     product="$TARGET/out/target/product/lepton_x86_64"
     for part in system vendor; do

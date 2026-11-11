@@ -5,7 +5,7 @@ set -Eeuo pipefail
 
 usage() {
   cat >&2 <<'HELP'
-Usage: bash image-14/scripts/build-images-x86_64.sh --check | --execute | --repair
+Usage: bash image-14/scripts/build-images-x86_64.sh --check | --execute | --package-only | --repair
 Compiles system.img and vendor.img in the prepared checkout (workspace aosp/),
 copies them to the workspace's images/ and packages them as rootfs/, the
 input of make-deck-bundle-x86_64.sh. Defaults are replaced on every build.
@@ -15,7 +15,13 @@ With either override, BOTH destinations must be new, outside the original
 artifact directories, and disjoint from sources/each other. Pass both options
 to preserve the existing images and rootfs. Symlink paths are refused.
 Only packaged outputs are isolated: incremental compilation updates aosp/out/.
-No reset, installclean or full clean is performed. --check changes nothing.
+No reset, installclean or full clean is performed. --check changes no outputs.
+--execute compiles Android, then packages its images and rootfs.
+--package-only packages existing AOSP product images; no Podman build, Soong,
+Ninja, envsetup or recompilation. It refuses active/interrupted compilation.
+Failed packaging preserves previous valid images/rootfs. Correct missing host
+packaging dependencies and rerun --package-only; --repair is for damaged
+compiled outputs, not packaging dependencies.
 
 A stopped or failed build continues where it stopped when run again. If a
 build was cut off (power cut, crash), --execute first deletes the files that
@@ -31,7 +37,7 @@ IMAGES_OVERRIDE=""
 ROOTFS_OVERRIDE=""
 while (($#)); do
   case "$1" in
-    --check|--execute|--repair) [[ -z "$ACTION" ]] || { usage; exit 2; }; ACTION="$1"; shift ;;
+    --check|--execute|--package-only|--repair) [[ -z "$ACTION" ]] || { usage; exit 2; }; ACTION="$1"; shift ;;
     --images-dir) IMAGES_OVERRIDE="${2:?--images-dir requires DIR}"; shift 2 ;;
     --rootfs-dir) ROOTFS_OVERRIDE="${2:?--rootfs-dir requires DIR}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -176,8 +182,9 @@ if [[ "$ISOLATED" == true ]]; then
   [[ ! -e "$RUNNING" ]] || fail 'Previous build was interrupted; inspect/repair it separately before an isolated build (no cleanup performed)'
 fi
 
-podman image exists "$BUILDER" ||
-  fail "Missing builder: $BUILDER"
+if [[ "$ACTION" != --package-only && "$ACTION" != --repair ]]; then
+  podman image exists "$BUILDER" || fail "Missing builder: $BUILDER"
+fi
 
 free_kib="$(df -Pk "$TARGET" | awk 'END {print $4}')"
 free_gib="$((free_kib / 1024 / 1024))"
@@ -188,6 +195,25 @@ info "Parallel jobs: $LEPTON_BUILD_JOBS"
 info "Available storage: $free_gib GiB"
 info "Builder: $BUILDER"
 
+# Check executable dependencies before invoking them or starting compilation.
+command -v python3 >/dev/null || fail 'Missing host executable: python3'
+command -v flock >/dev/null || fail 'Missing host executable: flock'
+source "$ROOT/image-14/scripts/lib/packaging-fuse.sh"
+if [[ "$ACTION" != --repair ]]; then
+  lepton_packaging_requirements || fail 'Rootfs packaging prerequisites failed'
+fi
+
+# Serialize compilation, recovery and repair using the same checkout lock.
+if [[ "$ACTION" != --check ]]; then
+  exec {BUILD_LOCK}>"$STATE/images.lock"
+  flock -n "$BUILD_LOCK" || fail 'Another image build or packaging operation is using this checkout; wait before retrying'
+  python3 "$ROOT/image-14/scripts/internal/check-active-compilation.py" || fail 'Active compilation; no outputs changed'
+fi
+if [[ "$ACTION" == --package-only ]]; then
+  [[ ! -e "$RUNNING" && ! -e "$STATE/build.failed" ]] ||
+    fail 'Interrupted or failed compilation detected; finish a successful --execute before packaging (do not delete compilation markers)'
+fi
+
 if [[ "$ACTION" == "--repair" ]]; then
   [[ -d "$TARGET/out" ]] || { info "[PASS] No build output yet; nothing to repair"; exit 0; }
   info "[START] Checking every compiled file in $TARGET/out for damage (a few minutes)"
@@ -195,6 +221,7 @@ if [[ "$ACTION" == "--repair" ]]; then
   python3 "$CHECK_OUTPUTS" "$TARGET/out" --delete \
     --report "$LOG_DIR/damaged-build-files-$(date -u +%Y%m%dT%H%M%SZ).txt" ||
     fail "Could not check the build output"
+  printf 'Repair inspected/deleted compiled outputs; a successful --execute is required before packaging\n' > "$STATE/build.failed"
   rm -f -- "$RUNNING"
   info "[PASS] Repair finished. Continue with: bash image-14/scripts/build-images-x86_64.sh --execute"
   exit 0
@@ -212,6 +239,9 @@ fi
 (( free_gib >= LEPTON_MIN_FREE_GIB )) ||
   fail "Insufficient free space"
 
+# Fail before any lengthy compilation if mounting cannot work on this host.
+lepton_fuse_smoke_test || fail 'Rootfs packaging FUSE mount/unmount test failed'
+
 if [[ "$ACTION" == "--check" ]]; then
   if [[ "$BUILDER" == lepton-builder-ubuntu26:latest ]]; then
     info "[PASS] Ubuntu 26.04 builder supplies glslangValidator"
@@ -227,17 +257,38 @@ if [[ "$ACTION" == "--check" ]]; then
   exit 0
 fi
 
-exec {BUILD_LOCK}>"$STATE/images.lock"
-flock -n "$BUILD_LOCK" || fail 'Another image build is using this checkout'
-if [[ "$ISOLATED" == true ]]; then
-  mkdir -p -- "$(dirname -- "$LEPTON_IMAGES_DIR")"
-  mkdir -- "$LEPTON_IMAGES_DIR" || fail 'Image destination appeared; refusing overwrite'
-  IMAGES_ID="$(stat -c '%d:%i' "$LEPTON_IMAGES_DIR")"
-  [[ ! -e "$LEPTON_ROOTFS_DIR" && ! -L "$LEPTON_ROOTFS_DIR" ]] || fail 'Rootfs destination appeared; refusing overwrite'
+# --execute and --package-only share exactly one packaging transaction.
+source "$ROOT/image-14/scripts/lib/package-images.sh"
+package_current_images() {
+  # Invoke as a normal command in a subshell, not in an if/|| expression:
+  # otherwise Bash disables errexit inside all the packaging functions.
+  local result
+  set +e
+  (set -e; lepton_package_images)
+  result=$?
+  set -e
+  if ((result)); then
+    if [[ "$ACTION" == --execute ]]; then
+      info '[FAIL] Android images compiled successfully, but rootfs packaging failed.'
+    else
+      info '[FAIL] Rootfs packaging failed; previous valid outputs were preserved.'
+    fi
+    info 'Fix the reported packaging dependency or error, then run:'
+    printf 'bash image-14/scripts/build-images-x86_64.sh --package-only'
+    if [[ "$ISOLATED" == true ]]; then printf ' --images-dir %q --rootfs-dir %q' "$LEPTON_IMAGES_DIR" "$LEPTON_ROOTFS_DIR"; fi
+    printf '\nNo Android recompilation is required.\n'
+    exit "$result"
+  fi
+}
+if [[ "$ACTION" == --package-only ]]; then
+  mkdir -p -- "$LOG_DIR"
+  LOG="$LOG_DIR/package-images-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
+  exec > >(exec {BUILD_LOCK}>&-; tee -a -- "$LOG") 2>&1
+  info "Persistent packaging log: $LOG"
+  package_current_images
+  info '[PASS] Existing Android images packaged; no compilation performed'
+  exit 0
 fi
-info "Packaged images: $LEPTON_IMAGES_DIR"
-info "Packaged rootfs: $LEPTON_ROOTFS_DIR"
-info 'Incremental compilation updates the shared aosp/out/; previous packaged artifacts are separate'
 
 # The legacy Ubuntu 22 builder needs the separately compiled glslang 14.
 # Ubuntu 26 supplies glslangValidator directly and must not use the legacy mount.
@@ -349,7 +400,7 @@ trap 'interrupt_build SIGTERM 143' TERM
 
 (
   exec {BUILD_LOCK}>&-
-  while sleep 60; do
+  while sleep 60 >/dev/null 2>&1; do
     info "[HEARTBEAT] Image build running for $(( (SECONDS-STARTED)/60 ))m; log: $LOG"
   done
 ) &
@@ -406,8 +457,8 @@ wait "$PODMAN_PID" || result=$?
 trap - INT TERM
 # The build ended by itself, so its files were written normally.
 rm -f -- "$RUNNING"
-
 if (( result != 0 )); then
+  printf 'Compilation failed (exit %s); log %s\n' "$result" "$LOG" > "$STATE/build.failed"
   # Typical errors from build files damaged by an earlier power cut or crash.
   if grep -Eq 'neither ET_REL nor LLVM bitcode|file format not recognized|file truncated|unexpected end of file|is not an object|not a valid ELF|error in opening zip|zip END header not found|archive has no index' "$LOG"; then
     info "[HINT] These errors usually mean build files were damaged, e.g. by a power cut or"
@@ -423,54 +474,10 @@ if (( result != 0 )); then
   fail "Android image build failed (exit $result); log: $LOG"
 fi
 
+rm -f -- "$RUNNING" "$STATE/build.failed"
 info "[PASS] Android image build completed"
 
-# Bundles are made from these images' flattened rootfs; replace whatever an
-# earlier build left so images/, rootfs/ and aosp/out never disagree.
-PRODUCT="$TARGET/out/target/product/lepton_x86_64"
-if [[ "$ISOLATED" == true ]]; then
-  HWC="$PRODUCT/vendor/lib64/hw/hwcomposer.waydroid.so"
-  if [[ ! -s "$HWC" ]] || ! grep -aFq 'Lepton local configure:' "$HWC"; then
-    fail 'Compiled hwcomposer is missing/stale; no packaged images copied'
-  fi
-fi
-# Recheck long-running build destinations before publishing any files.
-lepton_output_path "$LEPTON_IMAGES_DIR" >/dev/null || fail 'Image path changed during compilation'
-lepton_output_path "$LEPTON_ROOTFS_DIR" >/dev/null || fail 'Rootfs path changed during compilation'
-if [[ "$ISOLATED" == true ]]; then
-  [[ "$(stat -c '%d:%i' "$LEPTON_IMAGES_DIR")" == "$IMAGES_ID" ]] || fail 'Reserved image directory changed during compilation'
-fi
-info "[START] Copying images to $LEPTON_IMAGES_DIR"
-mkdir -p -- "$LEPTON_IMAGES_DIR"
-for part in system vendor; do
-  cp -f --sparse=always -- "$PRODUCT/$part.img" "$LEPTON_IMAGES_DIR/.$part.img.new"
-  mv -f -- "$LEPTON_IMAGES_DIR/.$part.img.new" "$LEPTON_IMAGES_DIR/$part.img"
-done
-( cd "$LEPTON_IMAGES_DIR" && sha256sum system.img vendor.img > SHA256SUMS )
-
-info "[START] Packaging the Android rootfs for bundles: $LEPTON_ROOTFS_DIR"
-if [[ -e "$LEPTON_ROOTFS_DIR" || -L "$LEPTON_ROOTFS_DIR" ]]; then
-  [[ "$ISOLATED" == false ]] || fail 'Rootfs destination appeared during compilation; refusing overwrite'
-  info "[INFO] Removing the rootfs packaged from the previous build"
-  podman unshare rm -rf -- "$LEPTON_ROOTFS_DIR"
-fi
-bash "$ROOT/image-14/scripts/internal/package-repro-rootfs.sh" "$TARGET" "$LEPTON_ROOTFS_DIR" ||
-  fail "Packaging the rootfs failed; log: $LOG"
-
-if [[ "$ISOLATED" == true ]]; then
-  cmp -s "$HWC" "$LEPTON_ROOTFS_DIR/vendor/lib64/hw/hwcomposer.waydroid.so" ||
-    fail 'Vendor image contains a different hwcomposer than the compiled artifact; refusing to mark this build ready'
-fi
-
-# Record what these images were built from (bundles carry it; releases check it).
-source "$ROOT/image-14/scripts/lib/image-provenance.sh"
-image_provenance_write "$ROOT" "$TARGET" "$LEPTON_ROOTFS_DIR" "$LEPTON_IMAGES_DIR/BUILD-INFO.txt" ||
-  fail "Could not record the image provenance; log: $LOG"
-for part in system vendor; do
-  printf '%s image SHA256: %s\n' "$part" "$(sha256sum "$LEPTON_IMAGES_DIR/$part.img" | cut -d' ' -f1)" >> "$LEPTON_IMAGES_DIR/BUILD-INFO.txt"
-done
-cp -- "$LEPTON_IMAGES_DIR/BUILD-INFO.txt" "$LEPTON_ROOTFS_DIR/.lepton-image-provenance"
-sed 's/^/[INFO]   /' "$LEPTON_IMAGES_DIR/BUILD-INFO.txt"
+package_current_images
 
 info "[PASS] Android images built and packaged"
 if [[ "$ISOLATED" == true ]]; then
