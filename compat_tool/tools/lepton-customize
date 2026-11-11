@@ -1,0 +1,572 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Prepare an independent customization stage from a verified base release.
+
+No bundle program is executed. --check writes no files. Extraction is manual:
+no ownership is restored and archive links are never followed while writing.
+"""
+import argparse
+import ctypes
+import errno
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import platform
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tarfile
+import tempfile
+
+HERE = Path(__file__).resolve().parent
+ROOTFS = 'compat_tool/images/rootfs/'
+SHIM = 'compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so'
+EXTRACTOR = 'compat_tool/liblepton/apk_extractor/bin/apk-info-extractor'
+INOTIFY = 'tools/native/inotifywait'
+INOTIFY_LIB = 'tools/lib/libinotifytools.so.0'
+RUNTIME = ('utils networking mounting app_metadata google_games properties baking '
+           'vulkan_layers perfetto performance_debugging gdb strace debug liblepton').split()
+REQUIRED = ['BUNDLE.json', 'tools/BUNDLE-PROVENANCE.txt', 'tools/IMAGE-PROVENANCE.txt',
+            'compat_tool/lepton', 'compat_tool/lepton-x86_64-entry', 'compat_tool/toolmanifest.vdf',
+            'compat_tool/tools/lepton-customize', 'compat_tool/release-keys/allowed_signers',
+            'tools/customize/internal/sysbake-isolated-x86_64.sh',
+            'tools/customize/internal/inject-ndk-translation.sh',
+            'tools/customize/internal/extract-ndk-translation.sh',
+            'tools/customize/lib/google-services.sh', 'tools/customize/lib/workspace.sh',
+            'tools/customize/prepare-google-inputs.sh',
+            'compat_tool/liblepton/ndk_auxv/runtime.sh', 'compat_tool/liblepton/ndk_auxv/arm64_hints.py',
+            'compat_tool/liblepton/soreplacements.txt',
+            'compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure',
+            'compat_tool/images/rootfs_overlay/system/bin/cmd',
+            'tools/bin/inotifywait', SHIM, EXTRACTOR, INOTIFY, INOTIFY_LIB,
+            ROOTFS + 'system/build.prop', ROOTFS + 'vendor/build.prop',
+            ROOTFS + 'system/etc/init/hw/init.rc', ROOTFS + 'system/bin/sh',
+            ROOTFS + 'vendor/lib64/hw/vulkan.radeon.so']
+REQUIRED += ['compat_tool/liblepton/' + name + '.sh' for name in RUNTIME]
+EXECUTABLES = ['compat_tool/lepton', 'compat_tool/lepton-x86_64-entry', EXTRACTOR,
+               INOTIFY, 'tools/bin/inotifywait', ROOTFS + 'system/bin/sh',
+               'compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure']
+GUEST_ROOTS = {'system', 'vendor', 'product', 'system_ext', 'odm', 'apex', 'data',
+               'mnt', 'dev', 'proc', 'sys', 'metadata', 'storage', 'linkerconfig',
+               'config', 'cache', 'sdcard'}
+MAX_INSPECT = 128 * 1024 * 1024
+
+
+class InvalidBundle(Exception):
+    pass
+
+
+def require(condition, message):
+    if not condition:
+        raise InvalidBundle(message)
+
+
+def sha256(stream):
+    stream.seek(0)
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+        digest.update(chunk)
+    stream.seek(0)
+    return digest.hexdigest()
+
+
+def read_small(path):
+    with path.open('rb') as stream:
+        data = stream.read(1024 * 1024 + 1)
+    require(len(data) <= 1024 * 1024, f'Input is too large: {path}')
+    return data
+
+
+def verify_release(args, archive):
+    manifest = read_small(args.checksum)
+    sums = {}
+    for line in manifest.decode('utf-8').splitlines():
+        if not line.strip():
+            continue
+        match = re.fullmatch(r'([0-9a-f]{64}) [ *]([^/\\\s]+)', line)
+        require(match and match[2] not in sums, 'Malformed or duplicate checksum entry')
+        sums[match[2]] = match[1]
+    name = args.bundle.name
+    require(name in sums, f'Checksum does not name {name}')
+    # Public manifests also cover the installer; downloading it is unnecessary.
+    require(name.endswith('.tar.gz') and set(sums) <= {name, name[:-7] + '.install.sh'},
+            'Checksum must describe only this archive and its release installer')
+    digest = sha256(archive)
+    require(digest == sums[name], 'Archive SHA256 does not match the supplied checksum')
+    signature_path = args.signature or Path(str(args.checksum) + '.sig')
+    signature = read_small(signature_path) if signature_path.exists() else None
+    require(args.signature is None or signature is not None, 'Supplied signature file is missing')
+    # Same installed trust roots, identity and namespace as lepton-release-manager.
+    # Never trust allowed_signers read from the input archive.
+    keys = next((p for p in (HERE / 'allowed_signers', HERE.parent / 'release-keys/allowed_signers')
+                 if p.is_file() and any(line.strip() and not line.lstrip().startswith('#')
+                                        for line in p.read_text().splitlines())), None)
+    authenticated = False
+    if keys:
+        require(signature is not None, 'Trusted release keys are installed; a checksum signature (.sig) is required')
+        require(shutil.which('ssh-keygen'), 'ssh-keygen is required to verify the release signature')
+        # Open the signature in memory too, to avoid changing it between reading
+        # and verifying. No temporary disk files are needed in --check mode.
+        with MemoryFile(signature) as fd:
+            result = subprocess.run(['ssh-keygen', '-Y', 'verify', '-f', str(keys),
+                                     '-I', 'lepton-release', '-n', 'lepton-release',
+                                     '-s', f'/proc/self/fd/{fd}'], input=manifest,
+                                    pass_fds=(fd,), capture_output=True)
+        require(result.returncode == 0, 'Release signature is NOT valid: ' + result.stderr.decode(errors='replace').strip())
+        authenticated = True
+    else:
+        require(signature is None, 'A signature is present but no trusted release keys are installed with this tool')
+    print('PASS: archive integrity (SHA256); ' + ('publisher signature verified' if authenticated else
+          'authenticity NOT verified (no trusted keys installed)'), flush=True)
+    return digest, manifest, signature, authenticated
+
+
+class MemoryFile:
+    """An anonymous RAM file for host tools; never writes into the filesystem."""
+    def __init__(self, data):
+        self.data = data
+
+    def __enter__(self):
+        libc = ctypes.CDLL(None, use_errno=True)
+        create = libc.memfd_create
+        create.argtypes = [ctypes.c_char_p, ctypes.c_uint]
+        create.restype = ctypes.c_int
+        self.fd = create(b'lepton-bundle-inspection', 1)  # MFD_CLOEXEC
+        if self.fd < 0:
+            raise OSError(ctypes.get_errno(), 'Anonymous inspection file failed')
+        try:
+            with os.fdopen(os.dup(self.fd), 'wb') as stream:
+                stream.write(self.data)
+            os.lseek(self.fd, 0, os.SEEK_SET)
+            return self.fd
+        except BaseException:
+            os.close(self.fd)
+            raise
+
+    def __exit__(self, *exc):
+        os.close(self.fd)
+
+
+def canonical(name):
+    require(not name.startswith('/') and '\\' not in name and
+            not any(ord(c) < 32 or ord(c) == 127 for c in name), f'Unsafe archive path: {name!r}')
+    parts = name.split('/')
+    require('..' not in parts, f'Archive path traversal: {name!r}')
+    return '/'.join(p for p in parts if p not in ('', '.'))
+
+
+def symbolic_target(name, target):
+    require(target and '\\' not in target and not any(ord(c) < 32 for c in target),
+            f'Invalid symlink: {name}')
+    absolute = target.startswith('/')
+    if absolute:
+        # Android rootfs links describe the guest namespace. Keep them verbatim,
+        # but never traverse one on the host during validation or extraction.
+        require(name.startswith(ROOTFS) and target.split('/')[1] in GUEST_ROOTS,
+                f'Absolute symlink outside Android namespace: {name} -> {target}')
+        parts = ROOTFS.rstrip('/').split('/')
+        floor = len(parts)
+        target = target.lstrip('/')
+    else:
+        parts = name.split('/')[:-1]
+        floor = 0
+    for part in target.split('/'):
+        if part == '..':
+            require(len(parts) > floor, f'Symlink escapes stage: {name}')
+            parts.pop()
+        elif part not in ('', '.'):
+            parts.append(part)
+    require(not absolute or (len(parts) > floor and parts[floor] in GUEST_ROOTS),
+            f'Absolute symlink outside Android namespace: {name}')
+    return '/'.join(parts)
+
+
+def retained(name):
+    parts = name.split('/')
+    if any(p.startswith(('.runtime-profile', '.sysbake-work', '.sysbake-partial')) or
+           p in {'.git', '.ssh', '.aws', '__pycache__', 'podman-storage', 'compatdata',
+                 'lepton-apkm', 'app_overlay', 'data_overlay'} for p in parts):
+        return False
+    if name in {'compat_tool/sysbake', 'compat_tool/sysbake.xattrs', 'compat_tool/install-profile'} or name.startswith('compat_tool/sysbake/'):
+        return False
+    if name.startswith(('tools/platform-tools/', 'compat_tool/liblepton/apk_extractor/target/')):
+        return False
+    if name == 'tools/licenses/google-platform-tools-NOTICE.txt':
+        return False
+    if parts[0] == 'compat_tool':
+        if len(parts) == 1:
+            return True
+        if parts[1] == 'images':
+            return len(parts) == 2 or parts[2] in {'rootfs', 'rootfs_overlay'}
+        return parts[1] in {'liblepton', 'tools', 'release-keys', 'provenance', 'lepton',
+                            'lepton-x86_64-entry', 'toolmanifest.vdf'} or (len(parts) == 2 and name.endswith('.md'))
+    if parts[0] == 'tools':
+        return len(parts) == 1 or parts[1] in {'bin', 'native', 'lib', 'licenses', 'customize'} or (len(parts) == 2 and name.endswith('.txt'))
+    return name == 'CUSTOMIZING.md' or name.startswith('tests/runtime/') and name.endswith(('.sh', '.py', '.md'))
+
+
+class Bundle:
+    def __init__(self, archive):
+        archive.seek(0)
+        self.tar = tarfile.open(fileobj=archive, mode='r:gz')
+        self.members = {}
+        try:
+            for member in self.tar:
+                name = canonical(member.name)
+                if not name:
+                    require(member.isdir(), 'Archive root must be a directory')
+                    continue
+                require(name not in self.members, f'Duplicate archive path: {name}')
+                require(member.isdir() or member.isreg() or member.issym() or member.islnk(),
+                        f'Unsupported archive entry (device/FIFO/special): {name}')
+                require(member.size >= 0, f'Negative archive entry size: {name}')
+                require(not member.sparse, f'Sparse archive entries are unsupported: {name}')
+                self.members[name] = member
+            # Consume the gzip trailer as well: tar's end marker precedes its CRC.
+            while self.tar.fileobj.read(1024 * 1024):
+                pass
+            for name, member in self.members.items():
+                for parent in PurePosixPath(name).parents:
+                    entry = self.members.get(str(parent))
+                    require(entry is None or entry.isdir(), f'Archive entry below a link/non-directory: {name}')
+                if member.issym():
+                    symbolic_target(name, member.linkname)
+                elif member.islnk():
+                    target = self.regular(canonical(member.linkname))
+                    require(not retained(name) or retained(target), f'Hardlink targets excluded data: {name}')
+        except BaseException:
+            self.tar.close()
+            raise
+
+    def regular(self, name):
+        seen = set()
+        while True:
+            require(name in self.members, f'Missing required bundle file or link target: {name}')
+            require(name not in seen and len(seen) < 40, f'Link cycle: {name}')
+            seen.add(name)
+            member = self.members[name]
+            if member.issym():
+                name = symbolic_target(name, member.linkname)
+            elif member.islnk():
+                name = canonical(member.linkname)
+            else:
+                require(member.isreg(), f'Expected a regular bundle file: {name}')
+                return name
+
+    def read(self, name):
+        member = self.members[self.regular(name)]
+        require(member.size <= MAX_INSPECT, f'Inspection file is too large: {name}')
+        with self.tar.extractfile(member) as stream:
+            data = stream.read()
+        require(len(data) == member.size, f'Truncated bundle file: {name}')
+        return data
+
+    def space(self, parent):
+        stats = os.statvfs(parent)
+        block = max(stats.f_frsize, 4096)
+        size = sum(((m.size + block - 1) // block + 1) * block
+                   for n, m in self.members.items() if retained(n))
+        needed = size + max(64 * 1024 * 1024, size // 20)
+        require(shutil.disk_usage(parent).free >= needed,
+                f'Insufficient disk space: need at least {needed // (1024 * 1024) + 1} MiB free')
+        return needed
+
+    def validate(self):
+        for name in REQUIRED:
+            self.regular(name)
+        for name in EXECUTABLES:
+            require(self.members[self.regular(name)].mode & 0o111, f'Executable bit missing: {name}')
+        # Reading in archive order limits backwards seeks in large gzip bundles.
+        names = sorted(set(REQUIRED), key=lambda n: self.members[self.regular(n)].offset_data)
+        data = {name: self.read(name) for name in names}
+        for name in REQUIRED:
+            require(data[name], f'Empty required bundle file: {name}')
+        metadata = json.loads(data['BUNDLE.json'], object_pairs_hook=unique_keys)
+        require(isinstance(metadata, dict) and type(metadata.get('format_version')) is int and
+                metadata['format_version'] == 2, 'Unsupported BUNDLE.json format (expected format_version 2)')
+        require(metadata.get('gapps') is False and metadata.get('ndk') is False and
+                metadata.get('widevine', False) is False, 'Source must be a standard base bundle (optional components disabled)')
+        for field, pattern in [('bundle_id', r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}'),
+                               ('tool_id', r'[A-Za-z0-9_]{1,96}'),
+                               ('install_directory', r'[A-Za-z0-9][A-Za-z0-9._-]{0,95}')]:
+            require(isinstance(metadata.get(field), str) and re.fullmatch(pattern, metadata[field]),
+                    f'Invalid BUNDLE.json {field}')
+        require(isinstance(metadata.get('display_name'), str) and metadata['display_name'].strip() and
+                not any(ord(c) < 32 or ord(c) == 127 for c in metadata['display_name']),
+                'Invalid BUNDLE.json display_name')
+        props = properties(data[ROOTFS + 'system/build.prop'])
+        require(props.get('ro.build.version.sdk') == '34' and props.get('ro.product.cpu.abi') == 'x86_64',
+                'Expected Android 14/API 34 x86_64 rootfs')
+        require(props.get('ro.dalvik.vm.native.bridge') == '0', 'Base rootfs must have its native bridge disabled')
+        for propfile in ('system/build.prop', 'vendor/build.prop'):
+            for key, value in properties(data[ROOTFS + propfile]).items():
+                if key.endswith(('.abilist', '.abilist64')):
+                    require(value == 'x86_64', f'Unexpected base ABI property: {key}={value}')
+                if key.endswith('.abilist32'):
+                    require(value == '', f'Unexpected 32-bit base ABI property: {key}={value}')
+        for name in self.members:
+            if name.startswith(tuple(ROOTFS + part + '/' for part in ('data', 'cache', 'metadata'))):
+                require(not self.members[name].isreg(), f'User state found in base rootfs: {name}')
+            if name.startswith(ROOTFS):
+                require(not re.search(r'libndk_translation|(?i:widevine)|PrebuiltGmsCore|Phonesky|GoogleServicesFramework', name),
+                        f'Optional component found in base rootfs: {name}')
+            require(not (retained(name) and re.search(r'(^|/)(id_(rsa|ecdsa|ed25519)|signing-key[^/]*)$', name)),
+                    f'Private key material in bundle: {name}')
+        for name in (ROOTFS + 'system/bin/sh', ROOTFS + 'vendor/lib64/hw/vulkan.radeon.so'):
+            android = elf_info(data[name], name)  # Never host-loaded.
+            require(not any(v.startswith('GLIBC_') for values in android['versions'].values() for v in values)
+                    and (android['interpreter'] is None or android['interpreter'].startswith(('/system/', '/apex/'))),
+                    f'Host binary found in Android rootfs: {name}')
+        shim = elf_info(data[SHIM], SHIM)
+        require(shim['type'] == 'DYN' and shim['soname'] == 'liblepton_ndk_auxv.so' and
+                not shim['needed'] and not shim['interpreter'] and not shim['versions'],
+                'Invalid dependency-free Android NDK shim')
+        require(data['tools/bin/inotifywait'].startswith(b'#!/bin/sh\n') and
+                b'/native/inotifywait' in data['tools/bin/inotifywait'] and
+                b'LD_LIBRARY_PATH' in data['tools/bin/inotifywait'], 'Invalid inotifywait wrapper')
+        validate_host_binaries({name: data[name] for name in (EXTRACTOR, INOTIFY, INOTIFY_LIB)})
+        return metadata, data['BUNDLE.json']
+
+    def extract(self, destination):
+        directories = {}
+        # Write only regular files/directories first; no archive symlink exists
+        # while file contents are being written. Hardlinks and symlinks follow.
+        for name, member in self.members.items():
+            if not retained(name):
+                continue
+            path = destination / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if member.isdir():
+                path.mkdir(exist_ok=True)
+                directories[path] = member
+            elif member.isreg():
+                with self.tar.extractfile(member) as source, path.open('xb') as target:
+                    shutil.copyfileobj(source, target)
+                os.chmod(path, member.mode & 0o7777)
+                os.utime(path, (member.mtime, member.mtime))
+        for name, member in self.members.items():
+            if not retained(name):
+                continue
+            path = destination / name
+            if member.islnk():
+                os.link(destination / self.regular(name), path)
+            elif member.issym():
+                os.symlink(member.linkname, path)
+        return directories
+
+
+def unique_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        require(key not in result, f'Duplicate JSON key: {key}')
+        result[key] = value
+    return result
+
+
+def properties(data):
+    result = {}
+    for line in data.decode('utf-8').splitlines():
+        if not line.strip() or line.lstrip().startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        require(key not in result, f'Duplicate Android property: {key}')
+        result[key] = value
+    return result
+
+
+def elf_info(data, name):
+    require(data.startswith(b'\x7fELF\x02\x01'), f'Invalid ELF64 little-endian binary: {name}')
+    with MemoryFile(data) as fd:
+        result = subprocess.run(['readelf', '-hW', '-lW', '-dW', '-VW', f'/proc/self/fd/{fd}'],
+                                pass_fds=(fd,), capture_output=True, env={**os.environ, 'LC_ALL': 'C'})
+    text = result.stdout.decode(errors='replace')
+    require(result.returncode == 0 and not result.stderr and
+            re.search(r'Machine: +Advanced Micro Devices X86-64\s*$', text, re.M) and re.search(r'^ +LOAD ', text, re.M),
+            f'Invalid or incompatible x86_64 ELF binary: {name}')
+    kind = re.search(r'Type: +(DYN|EXEC) ', text)
+    require(kind, f'Expected executable/shared ELF: {name}')
+    interp = re.search(r'Requesting program interpreter: ([^\]]+)', text)
+    soname = re.search(r'Library soname: \[([^\]]+)\]', text)
+    versions = {}
+    provider = None
+    needs = text.split('Version needs section', 1)
+    for line in needs[1].splitlines() if len(needs) == 2 else []:
+        file_match = re.search(r'File: (\S+)', line)
+        if file_match:
+            provider = file_match[1]
+        version_match = re.search(r'Name: (\S+)', line)
+        if provider and version_match:
+            versions.setdefault(provider, set()).add(version_match[1])
+    entry = re.search(r'Entry point address: +(0x[0-9a-fA-F]+)', text)
+    return dict(type=kind[1], entry=int(entry[1], 16) if entry else 0,
+                interpreter=interp[1] if interp else None,
+                needed=re.findall(r'Shared library: \[([^\]]+)\]', text), versions=versions,
+                soname=soname[1] if soname else None,
+                definitions=set(re.findall(r'Name: (\S+)', text.split('Version needs section', 1)[0])))
+
+
+def validate_host_binaries(binaries):
+    infos = {name: elf_info(data, name) for name, data in binaries.items()}
+    for name in (EXTRACTOR, INOTIFY):
+        require(infos[name]['entry'] != 0, f'Native executable has no entry point: {name}')
+    library = infos[INOTIFY_LIB]
+    require(library['type'] == 'DYN' and library['soname'] == 'libinotifytools.so.0', 'Invalid bundled inotify library')
+    require('libinotifytools.so.0' in infos[INOTIFY]['needed'], 'Native inotifywait does not use the bundled library')
+    cache = {}
+    ldconfig = shutil.which('ldconfig')
+    if ldconfig:
+        result = subprocess.run([ldconfig, '-p'], capture_output=True, text=True)
+        for line in result.stdout.splitlines():
+            match = re.search(r'^\s*(\S+) .*x86-64.* => (\S+)', line)
+            if match:
+                cache.setdefault(match[1], Path(match[2]))
+    resolved = {'libinotifytools.so.0': library}
+
+    def dependency(name):
+        if name not in resolved:
+            path = cache.get(name)
+            if not path:
+                path = next((p / name for p in map(Path, ('/lib64', '/usr/lib64',
+                             '/lib/x86_64-linux-gnu', '/usr/lib/x86_64-linux-gnu')) if (p / name).is_file()), None)
+            require(path and path.is_file(), f'Host runtime library missing: {name}')
+            resolved[name] = elf_info(path.read_bytes(), str(path))
+        return resolved[name]
+
+    queue = list(infos.values())
+    checked = set()
+    while queue:
+        info = queue.pop()
+        interpreter = info['interpreter']
+        if interpreter:
+            require(Path(interpreter).is_file() and os.access(interpreter, os.X_OK),
+                    f'Host ELF interpreter unavailable: {interpreter}')
+        for name in info['needed']:
+            require('/' not in name, f'Unsupported runtime dependency path: {name}')
+            provider = dependency(name)
+            missing = info['versions'].get(name, set()) - provider['definitions']
+            require(not missing, f'Host library {name} lacks required versions: {", ".join(sorted(missing))}')
+            if name not in checked:
+                checked.add(name)
+                queue.append(provider)
+
+
+def destination_path(value):
+    path = Path(os.path.abspath(value))
+    require(not path.exists() and not path.is_symlink(), f'Destination already exists: {path}')
+    require(path.parent.is_dir() and path.parent.resolve() == path.parent,
+            'Destination parent must exist without symlink ancestors')
+    require(os.access(path.parent, os.W_OK | os.X_OK), 'Destination parent is not writable')
+    for ancestor in (path.parent, *path.parent.parents):
+        require(not (ancestor / 'compat_tool/lepton').exists() and
+                not (ancestor.name == 'compat_tool' and (ancestor / 'lepton').exists()),
+                'Destination must be outside any installed/extracted Lepton compatibility tool')
+    require(path not in (Path.home().resolve(), Path('/')), 'Unsafe destination stage')
+    return path
+
+
+def publish(source, destination):
+    # os.rename would replace an existing empty directory. Linux NOREPLACE
+    # provides atomic publication even if a concurrent process creates it.
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = libc.renameat2
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1):
+        error = ctypes.get_errno()
+        if error == errno.EEXIST:
+            raise InvalidBundle('Destination appeared during staging; refusing overwrite')
+        raise OSError(error, 'Atomic stage publication failed')
+
+
+def cleanup(path):
+    if not path.exists():
+        return
+    # Rootfs directories may be mode 000. Only relax this private temporary copy.
+    for parent, dirs, files in os.walk(path, topdown=True, followlinks=False):
+        os.chmod(parent, 0o700)
+        for name in dirs:
+            child = Path(parent) / name
+            if not child.is_symlink():
+                os.chmod(child, 0o700)
+    shutil.rmtree(path)
+
+
+def run(args):
+    require(os.geteuid() != 0, 'Run as an unprivileged user (without sudo)')
+    require(platform.system() == 'Linux' and platform.machine() == 'x86_64', 'A Linux x86_64 host is required')
+    require(shutil.which('readelf'), 'readelf (binutils) is required; no compiler is needed')
+    require(hasattr(ctypes.CDLL(None), 'memfd_create') and hasattr(ctypes.CDLL(None), 'renameat2'),
+            'Linux memfd and glibc renameat2 support are required')
+    destination = destination_path(args.stage_dir)
+    require(args.bundle.is_file() and args.checksum.is_file(), 'Bundle and checksum must be regular files')
+    temporary = None
+    with args.bundle.open('rb') as archive:
+        digest, manifest, signature, authenticated = verify_release(args, archive)
+        bundle = Bundle(archive)
+        try:
+            bundle.space(destination.parent)
+            metadata, metadata_bytes = bundle.validate()
+            print(f'PASS: base bundle {metadata["bundle_id"]}; Android and precompiled tools validated', flush=True)
+            if args.check:
+                print('PASS: stage preflight; no files changed')
+                return
+            temporary = Path(tempfile.mkdtemp(prefix='.lepton-customize-', dir=destination.parent))
+            os.chown(temporary, -1, os.getgid())
+            os.chmod(temporary, 0o700)
+            directories = bundle.extract(temporary)
+            provenance = temporary / 'source-bundle'
+            provenance.mkdir()
+            (provenance / 'BUNDLE.json').write_bytes(metadata_bytes)
+            (provenance / 'SHA256SUMS').write_bytes(manifest)
+            if signature is not None:
+                (provenance / 'SHA256SUMS.sig').write_bytes(signature)
+            for filename in ('BUNDLE-PROVENANCE.txt', 'IMAGE-PROVENANCE.txt', 'PROVENANCE.txt'):
+                name = 'tools/' + filename
+                if name in bundle.members:
+                    (provenance / filename).write_bytes(bundle.read(name))
+            (provenance / 'SOURCE.json').write_text(json.dumps(dict(
+                archive=args.bundle.name, sha256=digest, authenticated=authenticated), indent=2) + '\n')
+            (temporary / 'STAGE.json').write_text(json.dumps(dict(
+                format_version=1, state='prepared', sysbake_required=True,
+                source_bundle_id=metadata['bundle_id']), indent=2) + '\n')
+            require(sha256(archive) == digest, 'Source archive changed during staging; refusing publication')
+            # Final directory modes/mtimes only after every write, deepest first.
+            for path, member in sorted(directories.items(), key=lambda item: len(item[0].parts), reverse=True):
+                os.chmod(path, member.mode & 0o7777)
+                os.utime(path, (member.mtime, member.mtime))
+            publish(temporary, destination)
+            temporary = None
+            print(f'PASS: independent working stage: {destination}\nFresh sysbake is still required; no components were injected.')
+        finally:
+            bundle.tar.close()
+            if temporary is not None:
+                cleanup(temporary)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--check', action='store_true', help='validate only; no files or downloads')
+    mode.add_argument('--execute', action='store_true', help='create an independent working stage')
+    parser.add_argument('--bundle', required=True, type=Path, help='downloaded base release .tar.gz')
+    parser.add_argument('--checksum', required=True, type=Path, help='release SHA256 manifest')
+    parser.add_argument('--signature', type=Path, help='manifest SSH signature (default: CHECKSUM.sig when present)')
+    parser.add_argument('--stage-dir', required=True, help='new stage; its parent must already exist')
+    args = parser.parse_args()
+    def interrupted(signum, frame):
+        raise InvalidBundle(f'Interrupted by signal {signum}; no partial stage is published')
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+    try:
+        run(args)
+        return 0
+    except (InvalidBundle, OSError, ValueError, tarfile.TarError, EOFError) as exc:
+        print(f'ERROR: {exc}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

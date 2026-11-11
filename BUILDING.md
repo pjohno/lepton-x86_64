@@ -503,6 +503,16 @@ existing runtime checks recognize a compatible translator. Future client-side
 customisation can reuse the binary without AOSP; that workflow is not yet
 implemented. See [shim details](compat_tool/liblepton/ndk_auxv/README.md).
 
+### Create a customisation stage from a downloaded base bundle
+
+Stage 2's bundled `compat_tool/tools/lepton-customize` validates a downloaded
+base archive and its checksum/signature, then creates an independent working
+stage without AOSP, `.build-env` or a compiler. It reuses the precompiled shim,
+APK extractor and inotify tools and excludes the original sysbake and saved
+profiles. Optional injection, fresh sysbake and final custom packaging are
+later stages. See [CUSTOMIZING.md](CUSTOMIZING.md) for the standalone CLI,
+trust model, supported Linux PC environment and staging layout.
+
 ### Repackage an existing stage without rebuilding Android
 
 For installer or host-script changes, reuse a complete stage, including its
