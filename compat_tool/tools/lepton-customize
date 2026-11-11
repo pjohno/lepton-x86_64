@@ -568,8 +568,28 @@ def run(args):
                 cleanup(temporary)
 
 
+def inject_main(argv):
+    import runpy
+    import zipfile
+    def interrupted(signum, frame):
+        raise InvalidBundle(f'Interrupted by signal {signum}; no partial stage is published')
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+    try:
+        # run_path compiles the companion without writing __pycache__ into the
+        # source stage. Helpers and shared Stage 2 validation stay standalone.
+        module = runpy.run_path(str(HERE / 'lepton_customize_inject.py'))
+        module['main'](argv, sys.modules[__name__])
+        return 0
+    except (InvalidBundle, OSError, ValueError, tarfile.TarError, EOFError, zipfile.BadZipFile, KeyError) as exc:
+        print(f'ERROR: {exc}', file=sys.stderr)
+        return 1
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    if len(sys.argv) > 1 and sys.argv[1] == 'inject':
+        return inject_main(sys.argv[2:])
+    parser = argparse.ArgumentParser(description=__doc__, epilog='Phase 3: lepton-customize inject --help')
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--check', action='store_true', help='validate only; no files or downloads')
     mode.add_argument('--execute', action='store_true', help='create an independent working stage')

@@ -51,7 +51,7 @@ dump_file() {
     local partition="$1" remote="$2" relative="$3" dest="$ROOTFS/$3"
     [[ ! -e "$dest" && ! -L "$dest" ]] || fail "Refusing to overwrite $relative"
     mkdir -p "$(dirname "$dest")"
-    debugfs -R "dump $remote $dest" "$IMAGES/$partition.img" >> "$LOG" 2>&1
+    debugfs -R "dump \"$remote\" \"$dest\"" "$IMAGES/$partition.img" >> "$LOG" 2>&1
     [[ -s "$dest" ]] || fail "Cannot extract $partition:$remote; inspect $LOG"
     chmod 0644 "$dest"
 }
@@ -147,11 +147,12 @@ widevine_inject() (
     [[ ! -e "$dest" && ! -L "$dest" ]] || fail "Refusing to overwrite vendor/apex/$name"
     work="$(mktemp -d)"
     trap 'rm -rf -- "$work"' EXIT
-    debugfs -R "dump $WIDEVINE_APEX $work/widevine.apex" "$IMAGES/vendor.img" >/dev/null 2>&1
+    debugfs -R "dump \"$WIDEVINE_APEX\" \"$work/widevine.apex\"" "$IMAGES/vendor.img" >/dev/null 2>&1
     unzip -q "$work/widevine.apex" apex_payload.img -d "$work"
     mkdir "$work/payload"
-    debugfs -R "rdump / $work/payload" "$work/apex_payload.img" >/dev/null 2>&1
+    debugfs -R "rdump / \"$work/payload\"" "$work/apex_payload.img" >/dev/null 2>&1
     rm -rf -- "$work/payload/lost+found"
+    [[ -z "$(find "$work/payload" -type l -print -quit)" ]] || fail 'Unexpected symlink in Widevine APEX'
     for file in apex_manifest.pb bin/hw/android.hardware.drm-service.widevine \
                 etc/$name.rc etc/vintf/$name.xml lib64/libcrypto.so; do
         [[ -s "$work/payload/$file" ]] || fail "Widevine APEX lacks $file"

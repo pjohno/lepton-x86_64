@@ -320,6 +320,8 @@ install -m 755 "$repo/compat_tool/tools/lepton-release-manager" \
 # deliberately left for the subsequent customization stages.
 install -m 755 "$repo/compat_tool/tools/lepton-customize" \
     "$tmp/payload/compat_tool/tools/lepton-customize"
+install -m 644 "$repo/compat_tool/tools/lepton_customize_inject.py" \
+    "$tmp/payload/compat_tool/tools/lepton_customize_inject.py"
 mkdir -p "$tmp/payload/tools/customize/internal" "$tmp/payload/tools/customize/lib"
 for helper in sysbake-isolated-x86_64.sh inject-ndk-translation.sh extract-ndk-translation.sh; do
     install -m 755 "$repo/image-14/scripts/internal/$helper" "$tmp/payload/tools/customize/internal/$helper"
@@ -431,7 +433,7 @@ install -m 644 "$repo/GAPPS.md" "$tmp/payload/GAPPS.md"
 for script in "${runtime_scripts[@]}"; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
-for tool in lepton-add-game lepton-release-manager lepton-manage-installs lepton-customize; do
+for tool in lepton-add-game lepton-release-manager lepton-manage-installs lepton-customize lepton_customize_inject.py; do
     python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$tmp/payload/compat_tool/tools/$tool"
 done
 grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/google_games.sh"

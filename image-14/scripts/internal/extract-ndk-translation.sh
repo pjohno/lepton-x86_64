@@ -71,7 +71,7 @@ copy_file() {
     local remote=$1 mode=$2 target="$payload/${1#/}"
     mkdir -p "$(dirname -- "$target")"
     [[ ! -e "$target" && ! -L "$target" ]] || fail "Duplicate extraction path: $remote"
-    debugfs -R "dump $remote $target" "$src" >>"$log" 2>&1 || fail "debugfs couldn't read $remote"
+    debugfs -R "dump \"$remote\" \"$target\"" "$src" >>"$log" 2>&1 || fail "debugfs couldn't read $remote"
     [[ -s "$target" ]] || fail "Missing or empty payload file: $remote (see $log)"
     chmod "$mode" "$target"
 }
@@ -87,7 +87,7 @@ grep -qx 'ro.dalvik.vm.native.bridge=libndk_translation.so' "$work/google-build.
 # Exact translator prefix excludes unrelated AIDL libraries ending in -ndk.so.
 mapfile -t ndk_files < <(
     dbls /system/lib64 |
-    awk -F/ '$3 ~ /^10/ && $6 ~ /^libndk_translation.*\.so$/ {print $6}' |
+    awk -F/ '$3 ~ /^10/ && $6 ~ /^libndk_translation[A-Za-z0-9_.-]*\.so$/ {print $6}' |
     sort -u
 )
 ((${#ndk_files[@]} >= 4)) || fail 'Too few libndk_translation libraries found'
@@ -102,7 +102,7 @@ done
 # Native ARM64 runtime libraries and launcher/linker (not x86 system libraries).
 mapfile -t arm64_libs < <(
     dbls /system/lib64/arm64 |
-    awk -F/ '$3 ~ /^10/ && $6 ~ /\.so$/ {print $6}' |
+    awk -F/ '$3 ~ /^10/ && $6 ~ /^[A-Za-z0-9_.-]+\.so$/ {print $6}' |
     sort -u
 )
 ((${#arm64_libs[@]} >= 20)) || fail 'ARM64 runtime library directory appears incomplete'

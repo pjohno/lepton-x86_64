@@ -511,8 +511,8 @@ Stage 2's bundled `compat_tool/tools/lepton-customize` validates a downloaded
 base archive and its checksum/signature, then creates an independent working
 stage without AOSP, `.build-env` or a compiler. It reuses the precompiled shim,
 APK extractor and inotify tools and excludes the original sysbake and saved
-profiles. Optional injection, fresh sysbake and final custom packaging are
-later stages. See [CUSTOMIZING.md](CUSTOMIZING.md) for the standalone CLI,
+profiles. Phase 3 adds `lepton-customize inject` for local NDK/GApps/Widevine
+inputs; fresh sysbake and final custom packaging remain Phase 4 work. See [CUSTOMIZING.md](CUSTOMIZING.md) for the standalone CLI,
 trust model, supported Linux PC environment and staging layout.
 
 ### Repackage an existing stage without rebuilding Android
