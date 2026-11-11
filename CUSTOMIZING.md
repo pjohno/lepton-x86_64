@@ -1,13 +1,32 @@
 # Customising a downloaded Lepton bundle
 
-The planned workflow for `v0.2.0-alpha` is:
+Two AOSP-free workflows start from a downloaded bundle:
 
-Download a base bundle → create an independent stage → inject optional
-components → generate a fresh sysbake → package a customised bundle.
+- **Workflow A, customise Android:** base bundle → prepared stage → inject
+  NDK/GApps/Widevine → fresh sysbake → new installable bundle.
+- **Workflow B, compatible repackaging:** existing bundle → restored complete
+  stage (its sysbake kept) → new installable bundle, with no Android rebuild
+  and no new sysbake.
 
-Stages 2 and 3 implement base staging and optional NDK/GApps/Widevine injection.
-Fresh sysbake, ADB provisioning and final customised packaging remain Phase 4
-work. Neither a prepared nor a customised working stage is installable yet.
+The downloaded bundle supplies the Android rootfs, launcher and precompiled
+runtime tools. No AOSP checkout, Cargo, C compiler, Android compilation or large
+source download is needed. `lepton-compare-bundles` verifies what changed.
+
+Bundles you make here are **local builds**: unsigned, marked
+`origin: lepton-customize`, and refused by the official release publisher.
+Bundles containing Google components (NDK translation, GApps, Widevine) from
+your own image are for **your personal use**; never present them as official
+Google-free Lepton releases.
+
+| Stage type (`STAGE.json` `state`) | Made by | Android changes | Sysbake |
+| --- | --- | --- | --- |
+| `prepared` | `lepton-customize --execute` | allowed (inject) | discarded; `sysbake_required: true` |
+| `customized` | `lepton-customize inject` | done | `sysbake_required: true` |
+| `baked` | `lepton-customize sysbake` | refused | fresh, validated, recorded |
+| `restored-complete` | `lepton-customize restore` | refused | original from the archive, `sysbake_required: false` |
+
+Only `baked` and `restored-complete` stages can be packaged. Both record digests
+of the rootfs, sysbake and `sysbake.xattrs`; packaging refuses if any changed.
 
 Run as an unprivileged user on a compatible **x86_64 Linux PC**, primarily Fedora or another glibc desktop.
 SteamOS customisation is experimental and is not a supported mainstream flow.
@@ -34,15 +53,14 @@ then verify the archive checksum before running code from it. Do not treat a
 key obtained from an unverified input archive as a new trust root.
 
 For a bundle you have already verified, you can unpack only the bootstrap
-files into a new directory:
+tools (`lepton-customize`, its Python companions and `lepton-compare-bundles`)
+and the release keys into a new directory:
 
 ```bash
 mkdir -p ~/lepton-customize-bootstrap
 tar -xzf ~/Downloads/lepton-x86_64-v0.2.0-alpha.tar.gz \
   -C ~/lepton-customize-bootstrap \
-  ./compat_tool/tools/lepton-customize \
-  ./compat_tool/tools/lepton_customize_inject.py \
-  ./compat_tool/release-keys/allowed_signers
+  ./compat_tool/tools ./compat_tool/release-keys
 ```
 
 The command uses the same installed trust keys, OpenSSH signing identity and
@@ -105,8 +123,8 @@ Handled interruptions and failures remove the temporary copy. A forced
 manually; the destination is never published partially.
 
 The source must be a new self-contained base bundle: Android 14/API 34,
-x86_64-only ABIs, disabled native bridge, `format_version: 2`, and `gapps: false`,
-`ndk: false`. Incomplete/older bundles are refused. The precompiled NDK shim,
+x86_64-only ABIs, disabled native bridge, `format_version: 2`, `gapps: false`,
+`ndk: false` and no Widevine (`widevine: false` or absent in older metadata). Incomplete/older bundles are refused. The precompiled NDK shim,
 APK extractor and packaged inotify wrapper, executable and library are reused
 byte-for-byte. There is no compilation and no ADB download.
 
@@ -136,7 +154,7 @@ filesystem and text utilities. On Fedora, these generally come from `bash`,
 bundle; install it separately as a host utility. Prepared-input injection does
 not need `lpunpack` or `sfdisk`. Widevine extraction needs `unzip` even with
 prepared inputs. Missing dependencies produce command/package guidance.
-Podman, a compositor and BinderFS are only needed in Phase 4. SteamOS-specific
+Podman, a compositor and BinderFS are only needed for sysbake. SteamOS-specific
 dependency installation is outside this workflow.
 
 ### Prepare and reuse Google inputs
@@ -258,23 +276,227 @@ can leave a private `.lepton-inject-*` sibling to remove manually.
 The output retains `source-bundle/` unchanged, has no root-level `BUNDLE.json`
 and contains no `sysbake` or `sysbake.xattrs`. `STAGE.json` keeps format version 1,
 records state `customized`, the three selected-component booleans, original
-bundle identity and Google source/package/partition checksums, and explicitly
-sets `sysbake_required: true`. Component evidence is under:
+bundle identity, Google source/package/partition checksums and the new rootfs
+tree digest, and explicitly sets `sysbake_required: true`. Component evidence is under:
 
 - `compat_tool/ndk-provenance/`: NDK report, payload hashes and extraction source.
 - `compat_tool/provenance/gapps/`: injected files, source images and configuration.
 - `compat_tool/provenance/widevine/`: flattened APEX hashes and L3 identification.
 - `compat_tool/provenance/google-inputs/`: original input metadata and image manifest.
 
-**The result is not installable until Phase 4 generates fresh sysbake and
-packages it.** Phase 3 does not boot Android, provision ADB, regenerate sysbake,
+**The result is not installable until a fresh sysbake is generated and the
+stage is packaged** (below). Injection does not boot Android, provision ADB,
 produce an archive or register a compatibility tool.
+
+## Stage ADB (optional)
+
+Sysbake and packaging do not need ADB. To test APKs against a stage before
+packaging (for example with `tests/runtime/run-apk.sh` and `LEPTON_ADB`),
+stage Google's pinned Platform-Tools `adb`:
+
+```bash
+# Verified download directly from Google (dl.google.com, HTTPS only)
+lepton-customize adb --execute --stage-dir ~/lepton-work/ndk-stage
+# Offline, with the same official ZIP downloaded earlier
+lepton-customize adb --execute --stage-dir ~/lepton-work/ndk-stage \
+  --adb-zip ~/Downloads/platform-tools_r37.0.1-linux.zip
+```
+
+The URL, SHA256 and version pins are read from the stage's own installer
+(`compat_tool/tools/lepton-install-bundle`), so they always match what the
+bundle installer accepts. Only `adb` and Google's `NOTICE.txt` are extracted;
+a mismatching hash or version changes nothing. Staged ADB lives in
+`tools/platform-tools/` and is **never packaged**; installers download it
+themselves. inotify-tools are reused from the bundle, never rebuilt.
+
+## Generate a fresh sysbake
+
+Android data must be baked again whenever Android changes. Run the bundled
+isolated sysbake helper on a `prepared` or `customized` stage:
+
+```bash
+lepton-customize sysbake --check   --stage-dir ~/lepton-work/ndk-stage
+lepton-customize sysbake --execute --stage-dir ~/lepton-work/ndk-stage \
+  [--rendering software|amd] [--timeout 600]
+```
+
+Host requirements are checked together and reported with Fedora/Ubuntu package
+names: rootless Podman with `newuidmap`/`newgidmap` (`shadow-utils`),
+`fuse-overlayfs`, headless Weston, attr (`getfattr`/`setfattr`), `rsync`,
+`flock`, `pkill`, Android Binder (BinderFS) kernel support, a running systemd
+user session (`systemctl --user is-system-running`) and `/run/user/UID`. On
+Fedora: `sudo dnf install podman fuse-overlayfs weston attr rsync util-linux
+procps-ng shadow-utils`. Software rendering is the default and needs no GPU;
+`--rendering amd` uses the AMD Vulkan driver.
+
+The helper uses a fresh private Podman graphroot/runroot inside the stage and
+a temporary headless Weston socket. It never touches your ordinary Podman
+containers or storage, and refuses to run while another isolated sysbake or
+`lepton-sysbake.slice` is active. It refuses to overwrite an existing sysbake.
+
+The result is validated before it is recorded: `system/packages.xml` must be
+Android XML, `sysbake.xattrs` may hold only user attributes for paths inside
+the sysbake (Android sockets are recorded but never archived), no host Ethernet
+configuration may be baked in, Google Play services must be registered exactly
+when GApps were injected, and the rootfs must not change during the run.
+`STAGE.json` then becomes `state: baked`, `sysbake_required: false`, with the
+rootfs, sysbake and xattr digests and runtime fingerprint.
+
+If sysbake fails, `STAGE.json` is unchanged and still requires sysbake.
+Diagnostics (`sysbake.log`, `weston.log`) stay in the stage's
+`.sysbake-work.*` folder. Output that fails validation is moved to
+`.sysbake-rejected-*` rather than deleted; neither is ever packaged. Remove them
+with `podman unshare rm -rf PATH` when no longer needed.
+
+## Package an installable bundle
+
+```bash
+lepton-customize package --check \
+  --stage-dir ~/lepton-work/ndk-stage \
+  --output-dir ~/lepton-work/bundles \
+  --bundle-id my-ndk-build
+
+lepton-customize package --execute \
+  --stage-dir ~/lepton-work/ndk-stage \
+  --output-dir ~/lepton-work/bundles \
+  --bundle-id my-ndk-build
+```
+
+This writes `lepton-x86_64-my-ndk-build.tar.gz`, its `.tar.gz.sha256` and
+`.install.sh`, compatible with the normal bundle installer and Steam
+compatibility-tool registration. Packaging uses only the stage: its validated
+scripts, precompiled binaries, installer template, rootfs and sysbake. There is
+no source checkout, `.build-env`, compilation or new sysbake.
+
+- The rootfs, sysbake and `sysbake.xattrs` must still match the digests
+  recorded by `sysbake` or `restore`; component flags (`gapps`, `ndk`,
+  `widevine`) must match what is actually installed in the rootfs and its
+  provenance manifests.
+- Choose a new bundle ID; the default tool ID is `lepton_custom_<ID>` and the
+  display name `Lepton x86_64 (custom) - <ID>` (`--tool-id`/`--tool-name` to
+  override). The source bundle's IDs are refused.
+- File types, permissions, symlinks and hardlinks are preserved. Temporary and
+  sysbake work folders, Podman storage, staged ADB, saved profiles, install
+  profiles and `STAGE.json`/`source-bundle/` are excluded.
+- Outputs are written in a private folder and published without overwriting;
+  the archive is read back and compared with the stage before publication.
+  An interrupted run leaves no outputs.
+- `tools/BUNDLE-PROVENANCE.txt` states that this is a local customised bundle,
+  names the source bundle and whether the sysbake is fresh or retained. A
+  customised rootfs is never described as compiled from a source checkout: its
+  base image record moves to `tools/BASE-IMAGE-PROVENANCE.txt`. Source
+  provenance is kept in `compat_tool/provenance/sources/<source-id>/`.
+- The archive is not signed with the official release identity.
+
+## Repackage an existing bundle without sysbake
+
+To change only host-side packaging (a new bundle/tool ID, or a bundle you no
+longer have a stage for), restore the archive as a complete stage. Unlike the
+prepared stage above, this keeps the Android rootfs, runtime overlays,
+`compat_tool/sysbake/`, `sysbake.xattrs`, precompiled utilities, launcher and
+registration assets and source provenance:
+
+```bash
+lepton-customize restore --execute \
+  --bundle ~/Downloads/lepton-x86_64-v0.2.0-alpha.tar.gz \
+  --checksum ~/Downloads/lepton-x86_64-v0.2.0-alpha.tar.gz.sha256 \
+  --stage-dir ~/lepton-work/restored-stage
+
+lepton-customize package --execute \
+  --stage-dir ~/lepton-work/restored-stage \
+  --output-dir ~/lepton-work/bundles --bundle-id v0.2.0-alpha-repack
+```
+
+Restore uses the same checksum/signature verification and secure extractor as
+stage creation (add `--allow-unsigned` for your own unsigned local bundles).
+Official and customised bundles are accepted, including older bundles.
+`BUNDLE.json` must describe the rootfs: a legacy file without `widevine`
+counts as false, unless the rootfs contains the Widevine APEX, which is then
+recorded as true. After extraction the rootfs and sysbake are compared with a
+second read of the archive. `STAGE.json` records `state: restored-complete`,
+`sysbake_required: false`, the component flags and digests; the original
+identity is in `source-bundle/`.
+
+A restored stage refuses `inject` and `sysbake`, and packaging refuses if its
+Android or sysbake changed. To customise Android, create a new prepared stage
+from the base bundle (which discards sysbake) and follow Workflow A. Matching
+content does not make arbitrary Android modifications safe.
+
+Unchanged Android and sysbake contents are preserved exactly. Changing only
+the bundle ID does not change the runtime fingerprint.
+
+## Compare bundles
+
+```bash
+lepton-compare-bundles lepton-x86_64-v0.2.0-alpha.tar.gz \
+  ~/lepton-work/bundles/lepton-x86_64-v0.2.0-alpha-repack.tar.gz \
+  [--json report.json] [--all]
+```
+
+Each archive is streamed once; nothing is extracted, installed or booted, and
+unsafe or malformed entries are rejected. The report covers, separately:
+
+- **Android rootfs** and **sysbake**: added/removed entries, content (SHA256),
+  types, symlink targets and permissions;
+- **sysbake.xattrs**: user extended attributes per path;
+- **runtime fingerprint inputs** (exactly what the launcher hashes);
+- **metadata**: `BUNDLE.json` flags, components found in each rootfs, other
+  changes and provenance;
+- **other files** (launcher/tooling/metadata).
+
+It then says whether the Android rootfs, sysbake, xattrs and fingerprint inputs
+are identical and whether differences are confined to launcher/tooling/metadata.
+Exit status: 0 identical runtime inputs, 1 different or incomplete, 2 invalid
+archive. This is evidence about content, not a promise that saved game profiles
+are compatible.
+
+## Complete examples
+
+Run the tools from a verified bundle (`~/lepton-customize-bootstrap` above,
+or the stage's own `compat_tool/tools/`). `C=~/lepton-customize-bootstrap/compat_tool/tools`.
+
+**Workflow A: NDK + GApps + Widevine from the base bundle.**
+
+```bash
+mkdir -p ~/lepton-work
+$C/lepton-customize --execute \
+  --bundle ~/Downloads/lepton-x86_64-v0.2.0-alpha.tar.gz \
+  --checksum ~/Downloads/lepton-x86_64-v0.2.0-alpha.tar.gz.sha256 \
+  --stage-dir ~/lepton-work/base-stage
+$C/lepton-customize inject --execute \
+  --stage-dir ~/lepton-work/base-stage --output-stage ~/lepton-work/full-stage \
+  --google-zip ~/Downloads/x86_64-34_r14.zip --save-google-inputs ~/lepton-work/google-inputs \
+  --with-ndk --with-gapps --with-widevine
+$C/lepton-customize sysbake --execute --stage-dir ~/lepton-work/full-stage
+$C/lepton-customize package --execute --stage-dir ~/lepton-work/full-stage \
+  --output-dir ~/lepton-work/bundles --bundle-id my-full-build
+$C/lepton-compare-bundles ~/Downloads/lepton-x86_64-v0.2.0-alpha.tar.gz \
+  ~/lepton-work/bundles/lepton-x86_64-my-full-build.tar.gz
+bash ~/lepton-work/bundles/lepton-x86_64-my-full-build.install.sh
+```
+
+**Workflow B: repackage without a stage you kept.**
+
+```bash
+$C/lepton-customize restore --execute \
+  --bundle ~/Downloads/lepton-x86_64-v0.2.0-alpha.tar.gz \
+  --checksum ~/Downloads/lepton-x86_64-v0.2.0-alpha.tar.gz.sha256 \
+  --stage-dir ~/lepton-work/restored-stage
+$C/lepton-customize package --execute --stage-dir ~/lepton-work/restored-stage \
+  --output-dir ~/lepton-work/bundles --bundle-id v0.2.0-alpha-repack
+$C/lepton-compare-bundles ~/Downloads/lepton-x86_64-v0.2.0-alpha.tar.gz \
+  ~/lepton-work/bundles/lepton-x86_64-v0.2.0-alpha-repack.tar.gz
+# RESULT: identical Android rootfs, sysbake, xattrs and fingerprint inputs;
+#         differences are confined to launcher/tooling/metadata.
+```
+
+Stages are disposable once packaged: `podman unshare rm -rf ~/lepton-work/full-stage`.
 
 ## Working stage layout
 
 ```text
 my-custom-stage/
-  STAGE.json                    prepared state; sysbake_required: true
+  STAGE.json                    stage type, components and digests (see table above)
   source-bundle/
     BUNDLE.json                 original identity, unchanged
     SHA256SUMS[.sig]            supplied integrity/authenticity evidence
@@ -291,7 +513,7 @@ my-custom-stage/
     native/inotifywait
     lib/libinotifytools.so.0
     licenses/
-    customize/                  helpers run by inject (Phase 3) and kept for Phase 4
+    customize/                  helpers run by inject and sysbake
   tests/runtime/                bundled runtime helpers, when present
 ```
 
@@ -310,7 +532,7 @@ never changed. The existing NDK shim remains inactive until the existing
 runtime checks recognise a compatible translator; Stage 2 changes no Android
 properties or optional components.
 
-## Developer boundaries and remaining dependencies
+## Developer boundaries and host dependencies
 
 Original release creation still uses `make-deck-bundle-x86_64.sh` and
 `deploy-compat-x86_64.sh`: these read `.build-env`, build the shim/APK extractor
@@ -318,15 +540,19 @@ and use the build workspace. `provision-deck-tools.sh --execute` still compiles
 inotify in its existing Debian container. **Client staging calls none of
 these scripts.** The existing inotify implementation is unchanged.
 
-The release packager (`deck-bundle.sh`) includes `lepton-customize`, this guide,
+The release packager (`deck-bundle.sh`) includes `lepton-customize` with its
+companions (`lepton_customize_inject.py`, `lepton_customize_package.py`,
+`lepton_bundle_lib.py`), `lepton-compare-bundles`, this guide,
 and the source-only helpers `tools/customize/internal/sysbake-isolated-x86_64.sh`,
 `internal/inject-ndk-translation.sh`, `internal/extract-ndk-translation.sh`,
 `lib/google-services.sh`, `lib/workspace.sh` and `prepare-google-inputs.sh`. These helpers operate on
 explicit directories, not an AOSP checkout. The input preparer needs an
-explicit `--output DIR` to avoid its build-workspace defaults. Phase 3 delegates
-to these helpers through the bundled `lepton_customize_inject.py` companion.
-The Stage 2 CLI remains compatible. No proprietary translator, GApps or
-Widevine payload is supplied in official bundles.
+explicit `--output DIR` to avoid its build-workspace defaults. Injection delegates
+to these helpers; sysbake runs the bundled isolated helper. The Stage 2 CLI
+remains compatible. No proprietary translator, GApps or Widevine payload is
+supplied in official bundles. `BUNDLE.json` component flags and the
+official packager's metadata come from the same detection code
+(`lepton_bundle_lib.py`).
 
 Offline regression tests use synthetic ext4/APK/APEX fixtures with the actual
 shell injectors. Positive synthetic NDK tests patch the expected digest only
@@ -341,15 +567,32 @@ LEPTON_TEST_GOOGLE_INPUTS=/absolute/path/to/prepared-google-inputs \
 
 Real Google inputs are never committed or required by the offline suite.
 
-Stage 4 must provision ADB with the existing pinned Google mechanism (or a
-matching offline ZIP), run the existing isolated sysbake on the new stage,
-and provide a stage-only packager. The existing isolated sysbake helper already
-accepts `--stage-dir` without build configuration, and requires a user systemd
-session, Podman, BinderFS, Weston, fuse-overlayfs, rsync and xattr utilities.
-Its checks can be run later, after ADB provisioning. The current release
-packager still refreshes files from a source checkout and requires a completed
-sysbake; it is deliberately not the client packaging path yet. Neither
-sysbake nor final custom packaging is invoked by `lepton-customize`. Phase 4
-must also distinguish the original base image provenance from the added
-components and keep Google-containing personal bundles out of the official
-Google-free publisher path.
+Client-side host dependencies: Python 3 and `readelf` for every operation;
+`ssh-keygen` for signed bundles; the Phase 3 tools above for injection; the
+sysbake requirements listed above (Podman, Weston, fuse-overlayfs, attr,
+BinderFS, systemd user session); `bash` for packaging. Restore and compare need
+only Python 3. SteamOS customisation remains **experimental** and is not a
+supported mainstream flow; primary targets are Fedora and compatible x86_64
+Linux PCs.
+
+Offline regression tests (no Android, network, Binder or GPU; the real bundled
+sysbake helper runs against Podman/Weston/systemd test doubles):
+
+```bash
+python3 -B tests/test-customize.py           # prepared stages
+python3 -B tests/test-customize-inject.py    # injection
+python3 -B tests/test-customize-package.py   # adb, sysbake, package, restore, install
+python3 -B tests/test-compare-bundles.py     # comparison
+```
+
+Optional real-data checks on Fedora:
+
+```bash
+# Workflow B with a real complete bundle (input untouched)
+LEPTON_TEST_COMPLETE_BUNDLE=/path/lepton-x86_64-ID.tar.gz [LEPTON_TEST_ALLOW_UNSIGNED=1] \
+  python3 -B tests/test-customize-package.py LocalBundleIntegration
+# Workflow A with real Podman, Weston, BinderFS and an Android boot
+LEPTON_TEST_BASE_BUNDLE=/path/lepton-x86_64-v0.2.0-alpha.tar.gz \
+LEPTON_TEST_GOOGLE_INPUTS=/path/google-inputs [LEPTON_TEST_COMPONENTS="ndk gapps widevine"] \
+  python3 -B tests/test-customize-package.py LocalSysbakeIntegration
+```

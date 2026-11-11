@@ -53,8 +53,14 @@ So `v0.1.0-alpha` < `v0.1.0-alpha.2` < `v0.1.0-alpha.10` < `v0.1.0-beta` <
   - no Widevine.
 - **No local data:** no saved profiles, build workspaces or keys.
 
-The publisher refuses an archive containing any of these. It also checks that
-the bundle's `BUNDLE.json` says `gapps: false` and `ndk: false`.
+The publisher refuses an archive containing any of these, whatever its
+metadata says. It also requires `BUNDLE.json` to say `gapps: false`,
+`ndk: false` and `widevine: false` (bundles made before the `widevine` field
+existed may omit it), and refuses local `lepton-customize` bundles
+(`origin: lepton-customize` or `Packaging: lepton-customize` provenance).
+Custom bundles with Google components are for personal use and are never
+official releases. `lepton-compare-bundles` shows what changed against the
+previous release before publishing.
 
 ## Launcher-only releases using a validated stage
 

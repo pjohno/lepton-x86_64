@@ -613,6 +613,23 @@ class RestoreTests(Harness, unittest.TestCase):
         self.base.write_bundle()
         self.restore('--check')
 
+    def test_legacy_metadata_without_widevine_field_records_installed_widevine(self):
+        apex = M.ROOTFS + 'vendor/apex/com.google.android.widevine/'
+        for name in L.WIDEVINE_FILES:
+            self.base.put(apex + name, b'com.google.android.widevine' if name == 'apex_manifest.pb' else b'x', 0o644)
+        self.base.write_bundle()
+        self.assertNotIn('widevine', self.base.metadata)
+        self.assertIn('recorded as widevine=true', self.restore())
+        self.assertTrue(self.state(self.restored)['components']['widevine'])
+        self.package(self.restored, 'legacy-repack')
+        metadata = json.loads(self.read_member(self.bundles / 'lepton-x86_64-legacy-repack.tar.gz', 'BUNDLE.json'))
+        self.assertIs(metadata['widevine'], True)
+        # An explicit false that contradicts the rootfs is still refused.
+        shutil.rmtree(self.restored, onerror=lambda f, p, e: (os.chmod(p, 0o700), f(p)))
+        self.base.put('BUNDLE.json', json.dumps(dict(self.base.metadata, widevine=False)).encode(), 0o644)
+        self.base.write_bundle()
+        self.assertIn('widevine=false does not match', self.restore('--check', ok=False))
+
     def test_failed_restore_publishes_nothing_and_keeps_input(self):
         P = load('restore_test', REPO / 'compat_tool/tools/lepton_customize_package.py')
         original = self.base.archive.read_bytes()
@@ -668,7 +685,7 @@ class CustomizedWorkflowTests(Harness, INJECT.InjectionTests):
         self.package(self.output, 'gapps-local')
         archive = self.bundles / 'lepton-x86_64-gapps-local.tar.gz'
         metadata = json.loads(self.read_member(archive, 'BUNDLE.json'))
-        self.assertEqual((metadata['gapps'], metadata['ndk']), (True, False))
+        self.assertEqual((metadata['gapps'], metadata['ndk'], metadata['widevine']), (True, False, True))
         image = self.read_member(archive, 'tools/IMAGE-PROVENANCE.txt').decode()
         self.assertIn('NOT compiled from a source checkout', image)
         self.assertIn('./tools/BASE-IMAGE-PROVENANCE.txt', self.members(archive))
@@ -681,6 +698,35 @@ class CustomizedWorkflowTests(Harness, INJECT.InjectionTests):
         self.install(self.bundles, 'gapps-local', home)
         self.assertTrue((home / '.local/share/lepton_custom_gapps_local/compat_tool/images/rootfs/'
                          'system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk').is_file())
+        env = (home / '.config/lepton-x86_64/lepton_custom_gapps_local.env').read_text()
+        self.assertIn('LEPTON_X86_GAPPS=true', env)
+        self.assertIn('LEPTON_X86_WIDEVINE=true', env)
+
+    def test_widevine_only_is_detected_independently(self):
+        self.customize(('widevine',))
+        self.sysbake(self.output)
+        self.package(self.output, 'drm-only')
+        archive = self.bundles / 'lepton-x86_64-drm-only.tar.gz'
+        metadata = json.loads(self.read_member(archive, 'BUNDLE.json'))
+        self.assertEqual((metadata['gapps'], metadata['ndk'], metadata['widevine']), (False, False, True))
+        self.assertEqual(metadata['tool_id'], 'lepton_custom_drm_only')
+        restored = self.root / 'restored'
+        self.run_tool(self.output, 'restore', '--execute', '--bundle', str(archive), '--checksum',
+                      str(archive) + '.sha256', '--stage-dir', str(restored))
+        self.assertEqual(self.state(restored)['components'], dict(gapps=False, ndk=False, widevine=True))
+        report = self.compare(self.base.archive, archive)
+        self.assertEqual(report['metadata']['components']['widevine'], dict(old=False, old_legacy=True, new=True))
+
+    def test_widevine_presence_comes_from_the_rootfs_layout(self):
+        self.customize(('widevine',))
+        self.sysbake(self.output)
+        apex = self.output / M.ROOTFS / 'vendor/apex/com.google.android.widevine'
+        library = apex / 'lib64/libcrypto.so'
+        library.unlink()
+        self.assertIn('Incomplete Widevine APEX', self.package(self.output, mode='--check', ok=False))
+        # A recorded flag never substitutes for the installed files.
+        shutil.rmtree(apex)
+        self.assertIn('does not match the stage record', self.package(self.output, mode='--check', ok=False))
 
     def test_injected_component_tampering_blocks_packaging(self):
         self.customize(('gapps',))

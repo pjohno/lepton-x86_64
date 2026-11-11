@@ -9,6 +9,28 @@ Nothing here downloads Google apps or games: you supply those files. The one
 exception is Google's Android Debug Bridge (`adb`), see
 [Google ADB](#google-adb-is-not-in-the-bundle) below.
 
+## Which command should I use?
+
+| You want to... | Use | Needs AOSP? | Sysbake |
+| --- | --- | --- | --- |
+| **Change Android itself** (sources, patches, framework, images) | The full or incremental AOSP image build below (`do_build_x86_64.sh`, `build-images-x86_64.sh`, `build-incremental-bundle-x86_64.sh`); `make-deck-bundle-x86_64.sh` then stages, bakes and packages | Yes | New sysbake (automatic) |
+| **Add or remove optional NDK/GApps/Widevine** | From the downloaded base bundle: `lepton-customize --execute` (prepared stage) → `lepton-customize inject` → `lepton-customize sysbake` → `lepton-customize package` ([CUSTOMIZING.md](CUSTOMIZING.md)) | No | New sysbake (required) |
+| **Repackage a compatible bundle, host files only** (new bundle/tool ID, unchanged Android) | `lepton-customize restore` (keeps the archive's sysbake) → `lepton-customize package` ([CUSTOMIZING.md](CUSTOMIZING.md#repackage-an-existing-bundle-without-sysbake)); from a build workspace stage, [repackage an existing stage](#repackage-an-existing-stage-without-rebuilding-android) | No | Original sysbake retained |
+
+Check what actually changed between an old and a new archive, without
+installing or extracting either:
+
+```bash
+compat_tool/tools/lepton-compare-bundles \
+  lepton-x86_64-old.tar.gz lepton-x86_64-new.tar.gz [--json report.json]
+```
+
+It reports the Android rootfs, sysbake, `sysbake.xattrs`, runtime fingerprint
+inputs, `BUNDLE.json` component flags/provenance and all other files
+separately, and exits 0 only when the Android rootfs, sysbake, xattrs and
+fingerprint inputs are identical. Identical content is evidence, not a
+guarantee that saved game profiles are compatible.
+
 ## The workspace
 
 Everything the build makes goes into one folder, the **workspace**, set by
@@ -508,7 +530,8 @@ for Android x86_64, even for base bundles. It ships outside the rootfs at
 `compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so` and is validated with
 `readelf` before staging and packaging. It is not Google's translator: base
 metadata remains `gapps: false`, `ndk: false`, and it stays inactive until the
-existing runtime checks recognize a compatible translator. Each stage compiles
+existing runtime checks recognize a compatible translator (BUNDLE.json records
+`widevine` as well; all three are detected from the rootfs). Each stage compiles
 its own copy directly into the stage; a shim built in the checkout for local
 testing is never copied into a stage or bundle. Client-side customisation
 reuses the bundled binary without AOSP ([CUSTOMIZING.md](CUSTOMIZING.md)). See
@@ -516,13 +539,14 @@ reuses the bundled binary without AOSP ([CUSTOMIZING.md](CUSTOMIZING.md)). See
 
 ### Create a customisation stage from a downloaded base bundle
 
-Stage 2's bundled `compat_tool/tools/lepton-customize` validates a downloaded
-base archive and its checksum/signature, then creates an independent working
-stage without AOSP, `.build-env` or a compiler. It reuses the precompiled shim,
-APK extractor and inotify tools and excludes the original sysbake and saved
-profiles. Phase 3 adds `lepton-customize inject` for local NDK/GApps/Widevine
-inputs; fresh sysbake and final custom packaging remain Phase 4 work. See [CUSTOMIZING.md](CUSTOMIZING.md) for the standalone CLI,
-trust model, supported Linux PC environment and staging layout.
+The bundled `compat_tool/tools/lepton-customize` works from a downloaded bundle
+without AOSP, `.build-env`, a compiler or Cargo: it creates a prepared stage
+(sysbake discarded), injects local NDK/GApps/Widevine inputs, provisions a
+stage-only ADB, runs the isolated sysbake and packages an installable bundle.
+`lepton-customize restore` instead keeps a complete bundle's sysbake for
+host-only repackaging. Custom bundles are local builds: they are unsigned,
+record `origin: lepton-customize`, and the release publisher refuses them. See
+[CUSTOMIZING.md](CUSTOMIZING.md) for the commands, trust model and stage layout.
 
 ### Repackage an existing stage without rebuilding Android
 
@@ -554,6 +578,8 @@ Android changes must already be present in the stage to appear in this bundle.
 Packaging preserves the validated staged shim and needs no AOSP Clang/compiler.
 Older stages without the shim must be regenerated through normal staging;
 missing/invalid binaries are rejected rather than taken from the checkout.
+Afterwards, `lepton-compare-bundles OLD.tar.gz NEW.tar.gz` confirms that only
+launcher/tooling/metadata changed.
 
 ## Incremental test bundle without replacing packaged outputs
 

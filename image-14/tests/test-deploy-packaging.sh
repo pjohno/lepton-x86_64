@@ -138,7 +138,7 @@ tar -xOf "$archive" ./BUNDLE.json > "$work/BUNDLE.json"
 python3 - "$work/BUNDLE.json" <<'PYMETA'
 import json, sys
 metadata = json.load(open(sys.argv[1]))
-assert metadata['gapps'] is False and metadata['ndk'] is False
+assert metadata['gapps'] is False and metadata['ndk'] is False and metadata['widevine'] is False
 assert metadata['tool_id'] == 'lepton_x86_64_fixture'
 assert metadata['install_directory'] == 'lepton_x86_64_fixture'
 PYMETA
@@ -351,7 +351,7 @@ import json, sys
 metadata = json.load(open(sys.argv[1]))
 assert metadata['tool_id'] == 'lepton_gapps_gapps_fixture'
 assert metadata['install_directory'] == metadata['tool_id']
-assert metadata['gapps'] is True and metadata['ndk'] is False
+assert metadata['gapps'] is True and metadata['ndk'] is False and metadata['widevine'] is False
 PYMETA
 # GApps installs get Google game icons pointing at their own install;
 # removing the install removes them.

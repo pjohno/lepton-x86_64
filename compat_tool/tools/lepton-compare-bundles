@@ -99,6 +99,12 @@ def compare(old_path, new_path):
             meta[side] = scan.metadata()
         except L.BundleError as exc:
             meta[side] = {'error': str(exc)}
+    installed = {}
+    for side, scan in (('old', old), ('new', new)):
+        try:
+            installed[side] = scan.components() if scan.rootfs else None
+        except L.BundleError as exc:
+            installed[side] = {'error': str(exc)}
     components = {}
     for name in L.COMPONENTS:
         values = {}
@@ -130,7 +136,7 @@ def compare(old_path, new_path):
         sysbake=compare_trees(old.sysbake, new.sysbake),
         sysbake_xattrs=compare_xattrs(old.files.get(L.XATTRS), new.files.get(L.XATTRS)),
         fingerprint=fingerprint,
-        metadata=dict(components=components, bundle_json_changes=bundle_changes,
+        metadata=dict(components=components, installed_components=installed, bundle_json_changes=bundle_changes,
                       provenance=dict(old=provenance_lines(old.files.get('tools/BUNDLE-PROVENANCE.txt')),
                                       new=provenance_lines(new.files.get('tools/BUNDLE-PROVENANCE.txt'))),
                       image_provenance=('absent' if image['old'] is None and image['new'] is None else
@@ -222,6 +228,18 @@ def human(report, limit):
         f"{name} {str(v['old']).lower()}{' (legacy: absent)' if v.get('old_legacy') else ''}"
         f" -> {str(v['new']).lower()}{' (legacy: absent)' if v.get('new_legacy') else ''}"
         for name, v in m['components'].items()))
+    for side in ('old', 'new'):
+        found = m['installed_components'][side]
+        if found is None:
+            text = 'no rootfs'
+        elif 'error' in found:
+            text = 'unsupported layout: ' + found['error']
+        else:
+            text = ', '.join(f'{n} {str(found[n]).lower()}' for n in L.COMPONENTS)
+            recorded = m['components']
+            if any(recorded[n][side] is not None and recorded[n][side] != found[n] for n in L.COMPONENTS):
+                text += '  (differs from BUNDLE.json)'
+        out.append(f'Installed in {side} rootfs: {text}')
     if m['bundle_json_changes']:
         out.append('BUNDLE.json changes:')
         out += [f'      {key}: {json.dumps(a)} -> {json.dumps(b)}' for key, (a, b) in m['bundle_json_changes'].items()]

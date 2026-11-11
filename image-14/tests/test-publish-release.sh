@@ -40,11 +40,13 @@ make_bundle() {
     rm -rf -- "$payload" "$out/$name".*
     mkdir -p "$payload/compat_tool" "$payload/tools"
     printf '#!/bin/sh\n' > "$payload/compat_tool/lepton"
-    printf '{"bundle_id": "%s", "tool_id": "lepton_x86_64_%s", "gapps": %s, "ndk": false}\n' \
-        "${BUNDLE_ID:-$version}" "$(tr '.-' '__' <<< "$version")" "${GAPPS:-false}" > "$payload/BUNDLE.json"
+    printf '{"bundle_id": "%s", "tool_id": "lepton_x86_64_%s", "gapps": %s%s%s%s}\n' \
+        "${BUNDLE_ID:-$version}" "$(tr '.-' '__' <<< "$version")" "${GAPPS:-false}" \
+        "${NDK-, \"ndk\": false}" "${WIDEVINE:+, \"widevine\": $WIDEVINE}" "${ORIGIN:+, \"origin\": \"$ORIGIN\"}" \
+        > "$payload/BUNDLE.json"
     local prop=9297b881810c2b0e12c92f6e2b46265813eb26ba6f46446dfd998c6ed6499810
-    printf 'Launcher source commit: %s\nLauncher working tree: %s\n%s  system/build.prop\n' \
-        "$commit" "${TREE:-clean}" "$prop" > "$payload/tools/BUNDLE-PROVENANCE.txt"
+    printf '%bLauncher source commit: %s\nLauncher working tree: %s\n%s  system/build.prop\n' \
+        "${PACKAGING:+Packaging: $PACKAGING\n}" "$commit" "${TREE:-clean}" "$prop" > "$payload/tools/BUNDLE-PROVENANCE.txt"
     if [[ "${NO_IMAGE_INFO:-}" != 1 ]]; then
         printf 'Image source commit: %s\nImage inputs: %s\nCopied folders: match\nLepton patches: %s\nRootfs build.prop SHA256: %s\n' \
             "${IMAGE_COMMIT:-$commit}" "${IMAGE_INPUTS:-clean}" "${IMAGE_PATCHES:-applied}" "${IMAGE_PROP:-$prop}" \
@@ -100,6 +102,7 @@ make_bundle "$V"
 echo "$(printf '0%.0s' {1..64})  other.sh" >> "$out/lepton-x86_64-$V.tar.gz.sha256"
 expect_fail 'exactly the archive and the installer' --check --version "$V" --unsigned
 for extra in tools/platform-tools/adb compat_tool/images/rootfs/vendor/apex/com.google.android.widevine.apex \
+             compat_tool/images/rootfs/vendor/apex/com.google.android.widevine/apex_manifest.pb \
              compat_tool/images/rootfs/system/lib64/libndk_translation.so \
              compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk \
              tools/signing-key; do
@@ -107,6 +110,16 @@ for extra in tools/platform-tools/adb compat_tool/images/rootfs/vendor/apex/com.
     expect_fail 'must not include' --check --version "$V" --unsigned
 done
 GAPPS=true make_bundle "$V"; expect_fail 'not describe a base bundle' --check --version "$V" --unsigned
+# Every Google component flag must be explicitly false (widevine may be absent in legacy metadata).
+WIDEVINE=true make_bundle "$V"; expect_fail 'not describe a base bundle' --check --version "$V" --unsigned
+NDK='' make_bundle "$V"; expect_fail 'not describe a base bundle' --check --version "$V" --unsigned
+NDK=', "ndk": "false"' make_bundle "$V"; expect_fail 'not describe a base bundle' --check --version "$V" --unsigned
+ORIGIN=lepton-customize make_bundle "$V"; expect_fail 'not describe a base bundle' --check --version "$V" --unsigned
+PACKAGING='lepton-customize package (local customised bundle)' make_bundle "$V"
+expect_fail 'local lepton-customize bundle' --check --version "$V" --unsigned
+# Metadata saying false never excuses Google content.
+WIDEVINE=false make_bundle "$V" "" compat_tool/images/rootfs/vendor/apex/com.google.android.widevine/bin/hw/x
+expect_fail 'must not include' --check --version "$V" --unsigned
 BUNDLE_ID=v0.0.9 make_bundle "$V"; expect_fail 'not describe a base bundle' --check --version "$V" --unsigned
 TREE=dirty make_bundle "$V"; expect_fail 'uncommitted changes; rebuild' --check --version "$V" --unsigned
 # Image provenance: present, clean, patches applied, same build, same inputs.

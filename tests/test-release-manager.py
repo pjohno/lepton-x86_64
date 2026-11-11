@@ -576,6 +576,13 @@ class InstalledTools(Base):
         self.assertEqual(tools["lepton_gapps_x"]["variant"], "GApps")
         self.assertIsNone(tools["lepton_gapps_x"]["version"])
 
+    def test_component_kind_includes_widevine_and_reads_legacy_metadata(self):
+        self.assertEqual(M.component_kind(dict(gapps=False, ndk=False)), "base")
+        self.assertEqual(M.component_kind(dict(gapps=False, ndk=False, widevine=False)), "base")
+        self.assertEqual(M.component_kind(dict(gapps=False, ndk=False, widevine=True)), "Widevine")
+        self.assertEqual(M.component_kind(dict(gapps=True, ndk=True, widevine=True)), "GApps + NDK + Widevine")
+        self.assertEqual(M.component_kind({}), "base")
+
 
 if __name__ == "__main__":
     unittest.main()

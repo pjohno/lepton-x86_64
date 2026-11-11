@@ -234,13 +234,16 @@ if not re.fullmatch(r'[A-Za-z0-9_]{1,96}', tool): raise SystemExit('invalid tool
 if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,95}', directory): raise SystemExit('invalid install_directory')
 if not name or any(c in name for c in '\x00\r\n'): raise SystemExit('invalid display_name')
 print(tool); print(name); print(directory); print(bundle)
-print(str(m.get('gapps', False)).lower()); print(str(m.get('ndk', False)).lower())
+# Older bundles have no widevine field: it was never installed in them.
+for flag in ('gapps', 'ndk', 'widevine'):
+    if not isinstance(m.get(flag, False), bool): raise SystemExit('invalid ' + flag)
+    print(str(m.get(flag, False)).lower())
 PY
 mapfile -t meta < "$TEMP.meta"
 rm -f -- "$TEMP.meta"
-(( ${#meta[@]} == 6 )) || fail 'Invalid BUNDLE.json'
+(( ${#meta[@]} == 7 )) || fail 'Invalid BUNDLE.json'
 TOOL_ID="${meta[0]}"; TOOL_NAME="${meta[1]}"; INSTALL_NAME="${meta[2]}"
-BUNDLE_ID="${meta[3]}"; HAS_GAPPS="${meta[4]}"; HAS_NDK="${meta[5]}"
+BUNDLE_ID="${meta[3]}"; HAS_GAPPS="${meta[4]}"; HAS_NDK="${meta[5]}"; HAS_WIDEVINE="${meta[6]}"
 MANAGE="$TEMP/compat_tool/tools/lepton-manage-installs"
 [[ -f "$MANAGE" ]] || fail 'Bundle lacks lepton-manage-installs'
 manage() { python3 "$MANAGE" "$@"; }
@@ -419,6 +422,7 @@ env_file="$CONFIG_DIR/$TOOL_ID.env"
     printf 'LEPTON_X86_INSTALL_DIR=%q\n' "$DEST"
     printf 'LEPTON_X86_GAPPS=%q\n' "$HAS_GAPPS"
     printf 'LEPTON_X86_NDK=%q\n' "$HAS_NDK"
+    printf 'LEPTON_X86_WIDEVINE=%q\n' "$HAS_WIDEVINE"
     if [[ "$amd" == true ]]; then printf 'LEPTON_X86_RENDERING=amd\n'; else printf 'LEPTON_X86_RENDERING=software\n'; fi
     printf 'LEPTON_X86_DISPLAY=desktop\n'
 } > "$env_file.tmp"

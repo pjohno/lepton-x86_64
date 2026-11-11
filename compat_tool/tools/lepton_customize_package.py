@@ -726,13 +726,18 @@ def validate_complete(bundle, core):
     core.require(props.get('ro.build.version.sdk') == '34' and props.get('ro.product.cpu.abi') == 'x86_64',
                  'Expected Android 14/API 34 x86_64 rootfs')
 
-    def kind_of(name):
-        member = bundle.members.get(L.ROOTFS + name)
-        if member is None:
-            return None
-        return 'd' if member.isdir() else 'l' if member.issym() else 'f'
-    actual = checked(core, L.detect_components, kind_of, lambda name: bundle.read(L.ROOTFS + name))
+    kinds = {name[len(L.ROOTFS):]: 'd' if member.isdir() else 'l' if member.issym() else 'f'
+             for name, member in bundle.members.items() if name.startswith(L.ROOTFS)}
+    actual = checked(core, L.detect_components, lambda name: L.implied_kind(kinds, name),
+                     lambda name: bundle.read(L.ROOTFS + name))
     for name in L.COMPONENTS:
+        if name == 'widevine' and name not in metadata and actual[name]:
+            # Bundles made before the field existed did not record Widevine;
+            # the installed APEX decides, and repackaging records it.
+            print('NOTE: legacy BUNDLE.json has no widevine field; the rootfs contains the Widevine APEX, '
+                  'recorded as widevine=true', flush=True)
+            flags[name] = True
+            continue
         core.require(actual[name] == flags[name], f'BUNDLE.json {name}={str(flags[name]).lower()} does not match '
                      f'the rootfs ({"present" if actual[name] else "absent"})')
     core.require(props.get('ro.dalvik.vm.native.bridge') == ('libndk_translation.so' if flags['ndk'] else '0'),

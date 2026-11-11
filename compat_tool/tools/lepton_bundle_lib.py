@@ -29,8 +29,9 @@ WIDEVINE_DIR = 'vendor/apex/' + WIDEVINE_NAME
 WIDEVINE_FILES = ('apex_manifest.pb', 'bin/hw/android.hardware.drm-service.widevine',
                   f'etc/{WIDEVINE_NAME}.rc', f'etc/vintf/{WIDEVINE_NAME}.xml', 'lib64/libcrypto.so')
 COMPONENTS = ('gapps', 'ndk', 'widevine')
-# Components recorded in BUNDLE.json.
-METADATA_COMPONENTS = ('gapps', 'ndk')
+# Components recorded in BUNDLE.json. Bundles made before widevine was
+# recorded lack the field; readers treat it as false (metadata_components).
+METADATA_COMPONENTS = COMPONENTS
 CHUNK = 1024 * 1024
 
 
@@ -132,7 +133,8 @@ class ArchiveScan:
     BUNDLE.json, provenance and the runtime fingerprint inputs. Unsafe or
     malformed entries are rejected.
     """
-    KEEP = {XATTRS, 'BUNDLE.json', 'tools/BUNDLE-PROVENANCE.txt', 'tools/IMAGE-PROVENANCE.txt'} | set(FINGERPRINT_INPUTS)
+    KEEP = {XATTRS, 'BUNDLE.json', 'tools/BUNDLE-PROVENANCE.txt', 'tools/IMAGE-PROVENANCE.txt',
+            ROOTFS + WIDEVINE_DIR + '/apex_manifest.pb'} | set(FINGERPRINT_INPUTS)
     MAX_KEEP = 256 * 1024 * 1024
 
     def __init__(self, path):
@@ -239,6 +241,10 @@ class ArchiveScan:
 
     def fingerprint(self):
         return fingerprint_from(lambda name: self.files.get(name))
+
+    def components(self):
+        """Optional components installed in the archived rootfs (not BUNDLE.json)."""
+        return records_components(self.rootfs, lambda name: self.files.get(ROOTFS + name, b''))
 
 
 def fingerprint_from(read):
@@ -362,8 +368,17 @@ def stage_components(rootfs):
     return detect_components(kind_of, lambda name: (rootfs / name).read_bytes())
 
 
+def implied_kind(kinds, name):
+    """Kind of an archived path; a directory may be implied by entries below it."""
+    kind = kinds.get(name)
+    if kind is None and any(other.startswith(name + '/') for other in kinds):
+        return 'd'
+    return kind
+
+
 def records_components(records, read):
-    return detect_components(lambda name: (records.get(name) or (None,))[0], read)
+    kinds = {name: record[0] for name, record in records.items()}
+    return detect_components(lambda name: implied_kind(kinds, name), read)
 
 
 def metadata_components(metadata):
