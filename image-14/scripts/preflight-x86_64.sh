@@ -162,13 +162,15 @@ fi
 info "CPU affinity is not required by the current build workflow"
 
 # Host prerequisites.
-for tool in git podman rsync realpath findmnt df awk cmp python3 tee mktemp simg2img; do
+for tool in git podman rsync realpath findmnt df awk cmp python3 tee mktemp simg2img sqfs2tar; do
     if command -v "$tool" >/dev/null 2>&1; then
         pass "Host tool: $tool"
     else
         fail "Missing host tool: $tool"
         if [[ "$tool" == simg2img ]]; then
             info 'Install the host package providing simg2img (Android sparse-image tools) before starting the build'
+        elif [[ "$tool" == sqfs2tar ]]; then
+            info 'Install squashfs-tools-ng (provides sqfs2tar) before starting the build; it is needed to package the Android rootfs'
         fi
     fi
 done
@@ -272,7 +274,7 @@ if [[ "$MODE" == full ]]; then
     echo
     info "=== Full build and packaging prerequisites ==="
 
-    for tool in sqfs2tar tar unzip fuse2fs fusermount3 rsync; do
+    for tool in tar unzip fuse2fs fusermount3 rsync; do
         if command -v "$tool" >/dev/null 2>&1; then
             pass "Packaging tool: $tool"
         else
