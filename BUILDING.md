@@ -28,7 +28,8 @@ image).
 
 You only run the scripts in `image-14/scripts/` itself. The ones in
 `image-14/scripts/internal/` are building blocks those scripts call; you only
-need them when debugging a failed step.
+need them when debugging a failed step or
+[repackaging an existing stage](#repackage-an-existing-stage-without-rebuilding-android).
 
 ## Requirements
 
@@ -118,9 +119,11 @@ What each step does:
    - If the download is interrupted, rerun with `--resume`.
    - `--reset` puts an existing checkout back to exactly the downloaded sources
      and then patches it again, with no new download. It also removes
-     previously installed build outputs. Use it after `git pull`, after
-     editing patches, or whenever you want a build that is known to come only
-     from this repository.
+     previously installed build outputs. Use it when the checkout needs to be
+     re-prepared for changed Android sources or patches, or when you want a
+     build that is known to come only from this repository. For an already
+     prepared checkout, use the [incremental workflow](#incremental-test-bundle-without-replacing-packaged-outputs)
+     below instead.
 3. **Build images** compiles `system.img` and `vendor.img` inside the builder
    container, copies them to `images/` and unpacks them to `rootfs/`,
    replacing those from any earlier build.
@@ -229,7 +232,25 @@ have already been made and tested.
 
 ## Rebuilding later
 
-After pulling new commits or changing patches:
+Choose the workflow according to what changed. Run commands from the repository
+root, keeping `.build-env` pointed at the existing workspace and AOSP checkout.
+
+| Change | Workflow |
+| --- | --- |
+| Android source changes already applied to a prepared checkout | [Incremental build](#incremental-test-bundle-without-replacing-packaged-outputs): reuse `aosp/` and `aosp/out/`, create new images, rootfs, stage and bundle |
+| Installer, launcher or host script changes; existing Android runtime is suitable | [Repackage the existing stage](#repackage-an-existing-stage-without-rebuilding-android): no compilation or sysbake regeneration |
+| Android patches or vendored sources changed and the checkout needs re-preparation | [Reset and re-prepare](#reset-and-re-prepare-the-existing-checkout) before building |
+
+Pulling host-only changes does not require an Android reset or rebuild.
+`image-14/do_build_x86_64.sh` is for a fresh checkout and refuses an existing
+one; use the incremental wrapper below to reuse the checkout.
+
+### Reset and re-prepare the existing checkout
+
+Use this when the prepared Android sources no longer match the required
+patches/vendor content. `--reset` discards checkout edits and runs
+`m installclean`; it keeps the downloaded checkout and compiled intermediates,
+but removes installed build outputs. It is not the ordinary incremental path.
 
 ```bash
 bash image-14/scripts/preflight-x86_64.sh existing
@@ -238,11 +259,43 @@ bash image-14/scripts/build-images-x86_64.sh --execute
 bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id base-YYYYMMDD
 ```
 
+### Repackage an existing stage without rebuilding Android
+
+For installer or host-script changes, reuse a complete stage, including its
+existing rootfs and sysbake. For example, refresh the fullscreen test bundle:
+
+```bash
+source .build-env
+
+bash image-14/scripts/internal/deploy-compat-x86_64.sh \
+  --package-only --check \
+  --stage-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/stage" \
+  --bundle-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/bundles" \
+  --bundle-id fullscreen-test-r2
+
+bash image-14/scripts/internal/deploy-compat-x86_64.sh \
+  --package-only --execute \
+  --stage-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/stage" \
+  --bundle-dir "$LEPTON_OUTPUT_DIR/fullscreen-test/bundles" \
+  --bundle-id fullscreen-test-r2
+```
+
+Replace the stage path with your existing complete stage. Choose a new bundle
+ID each time: packaging refuses to overwrite existing archives, checksums or
+installers. It copies the stage and refreshes the bundled host scripts from
+this repository, leaving the source stage unchanged. It neither compiles
+Android nor regenerates sysbake, and it does not transfer or install anything.
+Android changes must already be present in the stage to appear in this bundle.
+
 ## Incremental test bundle without replacing packaged outputs
 
 When the checkout is already prepared for this branch, use a new output folder
-instead of the fresh-checkout `do_build_x86_64.sh` workflow. Do not run
-`prepare --reset`, `installclean`, or a clean build for this case.
+instead of the fresh-checkout `do_build_x86_64.sh` workflow. The wrapper reuses
+the checkout at `LEPTON_AOSP_DIR` (default `$LEPTON_OUTPUT_DIR/aosp`) and its
+existing `out/` intermediates; Android rebuilds the affected targets. It does
+not download another checkout. Do not run `prepare --reset`, `installclean`,
+or a clean build for this case. If `fullscreen-test` already exists, choose a
+new output folder and bundle ID, such as `fullscreen-test-r2`, in both commands.
 
 ```bash
 source .build-env
