@@ -240,6 +240,15 @@ This writes `google-inputs/` in the workspace, where the bundle step finds it.
 Keep the zip itself outside the workspace. See [GAPPS.md](GAPPS.md) for what
 this adds.
 
+The preparer checks the ZIP's SDK `source.properties` before extracting: it must
+be revision 14, API 34, `x86_64`, `google_apis_playstore`. Other revisions are
+refused rather than only warned about. It also records provenance
+(`SOURCE.properties`, `BUILD.prop`, `SOURCE-IMAGES.sha256`). Builds keep working
+with an older `google-inputs/` that lacks these files, but `lepton-customize
+inject` needs them, so prepare once more for that. Inputs prepared with commit
+`5588b21` lack `libc++.so` and two other ARM64 libraries: prepare them again
+(see [CUSTOMIZING.md](CUSTOMIZING.md#prepare-and-reuse-google-inputs)).
+
 ## The build: five commands
 
 **Tip for long steps.** Steps 2 and 3 can take hours. To keep them running after

@@ -66,7 +66,10 @@ if [[ -z "$OUT" ]]; then
 fi
 # Without component flags retain the existing build workflow (all inputs).
 if [[ "$SELECTED" == false ]]; then WITH_NDK=true; WITH_GAPPS=true; WITH_WIDEVINE=true; fi
-for tool in unzip sfdisk dd lpunpack debugfs sha256sum python3 realpath mktemp; do
+host_tools=(unzip sfdisk dd lpunpack debugfs sha256sum python3 realpath mktemp)
+# NDK extraction checks the ARM64 payload's dependencies with readelf.
+[[ "$WITH_NDK" == false ]] || host_tools+=(readelf awk sed)
+for tool in "${host_tools[@]}"; do
     command -v "$tool" >/dev/null 2>&1 || fail "Missing host tool: $tool (see the README host requirements)"
 done
 ZIP="$(realpath -e -- "$ZIP")" || fail 'Zip not found'

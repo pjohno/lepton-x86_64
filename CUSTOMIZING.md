@@ -52,8 +52,13 @@ default it finds `CHECKSUM.sig`; `--signature FILE` selects an explicit file.
 Without installed keys, unsigned inputs can be checked for integrity only,
 with an explicit **authenticity NOT verified** message. A supplied signature
 without trusted keys is rejected. SHA256 alone does not prove publisher
-identity. The command never downloads keys or executes programs from the
-input bundle during validation.
+identity. Staging (`--check`/`--execute`) never downloads keys and never runs
+programs from the input bundle; it only reads and validates it.
+
+`lepton-customize inject` (Phase 3) is different: it runs the shell helpers in
+the source stage's `tools/customize/`, which came from that bundle. Those
+helpers are trusted exactly as far as the bundle was verified, so inject only
+into stages made from a bundle you verified or built yourself.
 
 Two explicit options cover bundles that were not signed by the release key:
 
@@ -125,9 +130,9 @@ independently authenticate a Google download.
 
 Phase 3 needs `bash`, Python 3, `readelf`, `rsync`, `debugfs` and normal checksum,
 filesystem and text utilities. On Fedora, these generally come from `bash`,
-`python3`, `binutils`, `rsync`, `e2fsprogs`, `coreutils`, `findutils`, `grep` and
-`gawk`. ZIP preparation additionally needs `unzip`, `sfdisk` (`util-linux`) and
-`lpunpack`, a host logical-partition unpacker. `lpunpack` is not supplied in the
+`python3`, `binutils`, `rsync`, `e2fsprogs`, `coreutils`, `findutils`, `grep`,
+`sed` and `gawk`. ZIP preparation additionally needs `unzip`, `sfdisk`
+(`util-linux`) and `lpunpack`, a host logical-partition unpacker. `lpunpack` is not supplied in the
 bundle; install it separately as a host utility. Prepared-input injection does
 not need `lpunpack` or `sfdisk`. Widevine extraction needs `unzip` even with
 prepared inputs. Missing dependencies produce command/package guidance.
@@ -156,6 +161,13 @@ payload and its manifest/provenance. Previously prepared inputs with this
 metadata can be reused without reading the ZIP again. Older input directories
 without this provenance must be prepared once with the updated helper.
 
+**Prepare NDK inputs again if they were made by the first Phase 3 helper
+(commit `5588b21`).** Its extractor silently skipped ARM64 libraries whose names
+contain `+` or `@`, including `libc++.so`, which most guest system libraries
+need. The fixed extractor keeps those names and refuses a payload in which any
+guest library dependency is missing. The payload manifest cannot reveal the
+problem by itself, because it was written by the same extraction.
+
 ### NDK only
 
 ```bash
@@ -166,7 +178,9 @@ without this provenance must be prepared once with the updated helper.
 ```
 
 Repeat with `--execute`. The reviewed translator SHA256 is mandatory. The
-complete ARM64 runtime payload is verified and copied, and the existing NDK
+ARM64 runtime payload is checked against its manifest and copied (at
+preparation, extraction also checks that every guest library dependency, such
+as `libc++.so`, is present), and the existing NDK
 injector changes the native bridge and system/vendor/ODM ABI properties in
 the new rootfs only. The bundled shim is never rebuilt. Existing automatic
 translator recognition still controls its activation. Unsupported versions,
@@ -277,7 +291,7 @@ my-custom-stage/
     native/inotifywait
     lib/libinotifytools.so.0
     licenses/
-    customize/                  existing helpers reserved for later stages
+    customize/                  helpers run by inject (Phase 3) and kept for Phase 4
   tests/runtime/                bundled runtime helpers, when present
 ```
 

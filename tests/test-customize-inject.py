@@ -72,7 +72,7 @@ class InjectionTests(unittest.TestCase):
         self.env = dict(self.base.env)
         bindir = self.root / 'host-tools'
         programs = ('bash rsync sha256sum realpath find grep sort xargs mktemp debugfs unzip wc cmp '
-                    'id mv rm mkdir chmod awk cut dd cat cp dirname basename').split()
+                    'id mv rm mkdir chmod awk sed cut dd cat cp dirname basename').split()
         for program in programs:
             (bindir / program).symlink_to(shutil.which(program))
         # Upgrade the bundle fixture with actual standalone code/helpers.
@@ -125,8 +125,13 @@ class InjectionTests(unittest.TestCase):
         for name in ('libndk_translation.so', 'libndk_translation_exec_region.so',
                      'libndk_translation_proxy_libEGL.so', 'libndk_translation_proxy_libvulkan.so'):
             files['system/lib64/' + name] = self.bridge
-        for name in ['libc.so', 'libnative_bridge_vdso.so'] + [f'fixture-{n}.so' for n in range(50)]:
+        # Real runtime names include '+' and '@'; they must survive extraction.
+        for name in (['libc.so', 'libnative_bridge_vdso.so', 'libstdc++.so', 'android.hardware.renderscript@1.0.so'] +
+                     [f'fixture-{n}.so' for n in range(50)]):
             files['system/lib64/arm64/' + name] = bytes(arm64)
+        # A guest library that depends on libc++.so, as libandroid.so does.
+        for name, data in self.arm64_dependency_pair().items():
+            files['system/lib64/arm64/' + name] = data
         for name in ('linker64', 'app_process64'):
             files['system/bin/arm64/' + name] = bytes(arm64)
         for name in ('ld.config.arm64.txt', 'cpuinfo.arm64.txt'):
@@ -375,8 +380,22 @@ class InjectionTests(unittest.TestCase):
         metadata = json.loads((self.source / 'STAGE.json').read_text())
         metadata['state'] = 'customized'
         (self.source / 'STAGE.json').write_text(json.dumps(metadata))
-        self.assertIn('clean Stage 2', self.cli(check=True, ok=False).stderr)
+        self.assertIn('already customized', self.cli(check=True, ok=False).stderr)
         self.assertFalse(self.output.exists())
+
+    def test_injected_output_as_source_gets_clear_refusal(self):
+        self.cli(('gapps',))
+        # Real NDK outputs also carry ndk-provenance, which previously produced
+        # a misleading "unexpected state" refusal.
+        (self.output / 'compat_tool/ndk-provenance').mkdir()
+        result = subprocess.run([sys.executable, '-B', str(self.source / 'compat_tool/tools/lepton-customize'),
+                                 'inject', '--check',
+                                 '--stage-dir', str(self.output), '--output-stage', str(self.root / 'again'),
+                                 '--google-inputs', str(self.inputs), '--with-gapps'],
+                                env=self.env, cwd=self.base.outside, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('already customized', result.stderr)
+        self.assertNotIn('unexpected state', result.stderr)
 
     def test_invalid_source_provenance_rejected_cleanly(self):
         path = self.source / 'source-bundle/SOURCE.json'
@@ -440,6 +459,78 @@ class InjectionTests(unittest.TestCase):
             (bindir / name).chmod(0o755)
         self.env.update(FIXTURE_IMAGES=str(self.images), UNPACK_LOG=str(self.root / 'unpack.log'))
         return path
+
+    def arm64_dependency_pair(self):
+        build = self.root / 'arm64-deps'
+        build.mkdir(exist_ok=True)
+        def compile(source, output, *flags):
+            subprocess.run(['cc', '-x', 'c', '-', '-o', str(build / output), '-shared', '-fPIC', '-nostdlib', *flags],
+                           input=source.encode(), check=True, capture_output=True)
+        compile('void cxx(void) {}', 'libc++.so', '-Wl,-soname,libc++.so')
+        compile('extern void cxx(void); void android(void) { cxx(); }', 'libandroid.so',
+                '-Wl,-soname,libandroid.so', '-Wl,--no-as-needed', '-x', 'none', str(build / 'libc++.so'))
+        result = {}
+        for name in ('libc++.so', 'libandroid.so'):
+            data = bytearray((build / name).read_bytes())
+            data[18:20] = (183).to_bytes(2, 'little')  # Present as AArch64.
+            result[name] = bytes(data)
+        return result
+
+    def test_zip_preparation_keeps_plus_and_at_names_and_checks_dependencies(self):
+        zip_path = self.zip_fixture()
+        prepared = self.root / 'names-prepared'
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(I, 'EXPECTED_TRANSLATOR', hashlib.sha256(self.bridge).hexdigest()):
+            I.command(['bash', self.source / 'tools/customize/prepare-google-inputs.sh',
+                       '--zip', zip_path, '--output', prepared, '--with-ndk'], M)
+        arm64 = prepared / 'ndk-translation/payload/system/lib64/arm64'
+        for name in ('libc++.so', 'libstdc++.so', 'android.hardware.renderscript@1.0.so', 'libandroid.so'):
+            self.assertTrue((arm64 / name).is_file(), name)
+        listed = (prepared / 'ndk-translation/SHA256SUMS').read_text()
+        self.assertIn('libc++.so', listed)
+        # Without libc++.so, libandroid.so's dependency is unmet: refuse.
+        subprocess.run(['debugfs', '-w', '-R', 'rm /system/lib64/arm64/libc++.so', str(self.images / 'system.img')],
+                       check=True, capture_output=True)
+        zip_path = self.zip_fixture()
+        with mock.patch.dict(os.environ, self.env, clear=True), self.assertRaises(M.InvalidBundle):
+            I.command(['bash', self.source / 'tools/customize/prepare-google-inputs.sh',
+                       '--zip', zip_path, '--output', self.root / 'names-refused', '--with-ndk'], M)
+        self.assertFalse((self.root / 'names-refused/ndk-translation/payload').exists())
+
+    def test_reused_inputs_without_arm64_dependencies_are_refused(self):
+        # Inputs made by the faulty 5588b21 extractor lack libc++.so but have a
+        # self-consistent manifest; reuse must still refuse them.
+        selected = dict(ndk=True, gapps=False, widevine=False)
+        payload = self.inputs / 'ndk-translation/payload/system/lib64/arm64'
+        needs_missing = self.arm64_dependency_on('libmissing.so')  # Host cc, before the restricted PATH.
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(I, 'EXPECTED_TRANSLATOR', hashlib.sha256(self.bridge).hexdigest()):
+            I.validate_inputs(self.inputs, selected, M)  # Complete payload passes.
+            (payload / 'libc++.so').rename(self.root / 'libc++.so')
+            self.refresh_inputs()
+            with self.assertRaisesRegex(M.InvalidBundle, 'lacks libc\\+\\+.so'):
+                I.validate_inputs(self.inputs, selected, M)
+            # A dependency other than libc++.so is also detected.
+            (self.root / 'libc++.so').rename(payload / 'libc++.so')
+            (payload / 'libc++.so').rename(payload / 'renamed.so')
+            (payload / 'libc++.so').write_bytes((payload / 'libc.so').read_bytes())
+            (payload / 'libandroid.so').write_bytes(needs_missing)
+            self.refresh_inputs()
+            with self.assertRaisesRegex(M.InvalidBundle, 'missing ARM64 dependencies \\(libmissing.so\\)'):
+                I.validate_inputs(self.inputs, selected, M)
+
+    def arm64_dependency_on(self, library):
+        build = self.root / ('dep-' + library)
+        build.mkdir()
+        stub = build / library
+        subprocess.run(['cc', '-x', 'c', '-', '-o', str(stub), '-shared', '-fPIC', '-nostdlib', '-Wl,-soname,' + library],
+                       input=b'void dep(void) {}', check=True, capture_output=True)
+        subprocess.run(['cc', '-x', 'c', '-', '-o', str(build / 'user.so'), '-shared', '-fPIC', '-nostdlib',
+                        '-Wl,--no-as-needed', '-x', 'none', str(stub)],
+                       input=b'extern void dep(void); void user(void) { dep(); }', check=True, capture_output=True)
+        data = bytearray((build / 'user.so').read_bytes())
+        data[18:20] = (183).to_bytes(2, 'little')
+        return bytes(data)
 
     def test_default_zip_preparation_preserves_all_component_build_workflow(self):
         zip_path = self.zip_fixture()

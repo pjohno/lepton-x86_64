@@ -24,7 +24,7 @@ PACKAGES = {'debugfs': 'e2fsprogs', 'rsync': 'rsync', 'unzip': 'unzip', 'sfdisk'
             'readelf': 'binutils', 'lpunpack': 'an Android logical-partition unpacker (host utility)',
             'python3': 'python3', 'bash': 'bash'}
 PACKAGES.update(dict.fromkeys('sha256sum realpath sort mktemp dirname mkdir chmod rm cat dd cut mv wc basename'.split(), 'coreutils'))
-PACKAGES.update(awk='gawk', cmp='diffutils', find='findutils', xargs='findutils', grep='grep')
+PACKAGES.update(awk='gawk', sed='sed', cmp='diffutils', find='findutils', xargs='findutils', grep='grep')
 
 
 def command(argv, core, env=None, capture=False):
@@ -98,6 +98,15 @@ class StageView:
         self.root, self.core = root, core
         self.snapshot = inventory(root, core)
         self.members = {}
+        state = root / 'STAGE.json'
+        if state.is_file() and not state.is_symlink():
+            try:
+                current = json.loads(core.read_small(state)).get('state')
+            except (ValueError, AttributeError):
+                current = None
+            core.require(current != 'customized',
+                         'This stage is already customized; inject into the clean prepared stage it came from, '
+                         'selecting all components in one operation')
         for name, (mode, size, _, _, link) in self.snapshot.items():
             core.require(name in {'STAGE.json', 'source-bundle', 'tests', 'tests/runtime'} or
                          name.startswith('source-bundle/') or core.retained(name),
@@ -205,6 +214,7 @@ def validate_inputs(inputs, selected, core):
         core.require(set(sums) == actual_files, 'Incomplete NDK payload or checksum inventory')
         for name, expected in sums.items():
             core.require(file_hash(payload / name, core) == expected, f'NDK payload checksum mismatch: {name}')
+        check_arm64_dependencies(payload, core)
         ndk_source = core.read_small(inputs / 'ndk-translation/SOURCE.txt').decode('utf-8')
         core.require(f'Source SHA256: {verified["system.img"]}\n' in ndk_source,
                      'NDK extraction provenance does not match logical system.img')
@@ -212,6 +222,27 @@ def validate_inputs(inputs, selected, core):
                 partitions=verified, manifest_sha256=file_hash(inputs / 'SOURCE-IMAGES.sha256', core),
                 metadata_sha256={name: file_hash(inputs / name, core)
                                  for name in ('SOURCE.txt', 'SOURCE.properties', 'BUILD.prop')})
+
+
+def check_arm64_dependencies(payload, core):
+    """Refuse payloads whose guest libraries need a library that is absent.
+
+    The payload manifest is written by the same extraction, so it cannot reveal
+    files the extractor skipped (inputs from commit 5588b21 lacked libc++.so).
+    """
+    libraries = payload / 'system/lib64/arm64'
+    for name in ('libc.so', 'libc++.so'):
+        core.require((libraries / name).is_file(),
+                     f'NDK payload lacks {name}; prepare the Google inputs again with the current helper')
+    elves = sorted(libraries.glob('*.so')) + sorted((payload / 'system/bin/arm64').iterdir())
+    missing = set()
+    for elf in elves:
+        text = command(['readelf', '-dW', elf], core, env={**os.environ, 'LC_ALL': 'C'}, capture=True).decode(errors='replace')
+        for needed in re.findall(r'\(NEEDED\).*\[([^\]]+)\]', text):
+            if needed != 'linux-vdso.so.1' and not (libraries / needed).is_file():
+                missing.add(needed)
+    core.require(not missing, 'NDK payload is missing ARM64 dependencies (' + ', '.join(sorted(missing)) +
+                 '); prepare the Google inputs again with the current helper')
 
 
 def check_write_paths(source, selected, core):
@@ -295,7 +326,7 @@ def run(args, core):
     if selected['ndk']:
         tools.update(('wc', 'cmp', 'cut', 'mv'))
         if args.google_zip:
-            tools.add('awk')
+            tools.update(('awk', 'sed'))
     for tool in sorted(tools):
         core.require(shutil.which(tool), f'Missing host command: {tool}; install {PACKAGES.get(tool, "coreutils/findutils/grep as appropriate")}')
     view = StageView(source, core)
@@ -344,15 +375,15 @@ def run(args, core):
         google_identity = validate_inputs(inputs, selected, core)
         preflight_components(source, inputs, selected, core)
         if args.check:
-            print('PASS: injection preflight; source/output unchanged (ZIP checks use disposable extracted inputs)')
+            print('PASS: injection preflight; source/output unchanged' +
+                  (' (ZIP checked by disposable temporary extraction)' if args.google_zip else ''))
             return
         if cache:
             core.publish(inputs, cache)
             inputs = cache
             print(f'PASS: validated Google inputs retained at {cache}', flush=True)
-        if work is None:
-            work = Path(tempfile.mkdtemp(prefix='.lepton-inject-', dir=output.parent))
-            os.chown(work, -1, os.getgid())
+        work = Path(tempfile.mkdtemp(prefix='.lepton-inject-', dir=output.parent))
+        os.chown(work, -1, os.getgid())
         env = {**os.environ, 'TMPDIR': str(work)}
         target = work / 'stage'
         target.mkdir(mode=0o700)
