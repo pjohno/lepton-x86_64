@@ -208,7 +208,8 @@ def symbolic_target(name, target):
 
 def retained(name):
     parts = name.split('/')
-    if any(p.startswith(('.runtime-profile', '.sysbake-work', '.sysbake-partial')) or
+    if any(p.startswith(('.runtime-profile', '.sysbake-work', '.sysbake-partial', '.sysbake-rejected',
+                         '.lepton-customize-', '.lepton-inject-', '.lepton-adb-', '.lepton-package-')) or
            p in {'.git', '.ssh', '.aws', '__pycache__', 'podman-storage', 'compatdata',
                  'lepton-apkm', 'app_overlay', 'data_overlay'} for p in parts):
         return False
@@ -227,7 +228,7 @@ def retained(name):
                             'lepton-x86_64-entry', 'toolmanifest.vdf'} or (len(parts) == 2 and name.endswith('.md'))
     if parts[0] == 'tools':
         return len(parts) == 1 or parts[1] in {'bin', 'native', 'lib', 'licenses', 'customize'} or (len(parts) == 2 and name.endswith('.txt'))
-    return name == 'CUSTOMIZING.md' or name.startswith('tests/runtime/') and name.endswith(('.sh', '.py', '.md'))
+    return name in ('CUSTOMIZING.md', 'GAPPS.md') or name.startswith('tests/runtime/') and name.endswith(('.sh', '.py', '.md'))
 
 
 class Bundle:
@@ -561,35 +562,48 @@ def run(args):
                 os.utime(path, (member.mtime, member.mtime))
             publish(temporary, destination)
             temporary = None
-            print(f'PASS: independent working stage: {destination}\nFresh sysbake is still required; no components were injected.')
+            print(f'PASS: independent working stage: {destination}\nFresh sysbake is still required; no components were injected.\n'
+                  'Next: lepton-customize inject (optional components) or lepton-customize sysbake')
         finally:
             bundle.tar.close()
             if temporary is not None:
                 cleanup(temporary)
 
 
-def inject_main(argv):
+COMPANIONS = {'inject': 'lepton_customize_inject.py', 'adb': 'lepton_customize_package.py',
+              'sysbake': 'lepton_customize_package.py', 'package': 'lepton_customize_package.py'}
+
+
+def companion_main(command, argv):
     import runpy
     import zipfile
     def interrupted(signum, frame):
-        raise InvalidBundle(f'Interrupted by signal {signum}; no partial stage is published')
+        raise InvalidBundle(f'Interrupted by signal {signum}; no partial stage or output is published')
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     try:
         # run_path compiles the companion without writing __pycache__ into the
         # source stage. Helpers and shared Stage 2 validation stay standalone.
-        module = runpy.run_path(str(HERE / 'lepton_customize_inject.py'))
-        module['main'](argv, sys.modules[__name__])
+        module = runpy.run_path(str(HERE / COMPANIONS[command]))
+        if command == 'inject':
+            module['main'](argv, sys.modules[__name__])
+        else:
+            module['main'](argv, sys.modules[__name__], command)
         return 0
     except (InvalidBundle, OSError, ValueError, tarfile.TarError, EOFError, zipfile.BadZipFile, KeyError) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
         return 1
 
 
+def inject_main(argv):
+    return companion_main('inject', argv)
+
+
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] == 'inject':
-        return inject_main(sys.argv[2:])
-    parser = argparse.ArgumentParser(description=__doc__, epilog='Phase 3: lepton-customize inject --help')
+    if len(sys.argv) > 1 and sys.argv[1] in COMPANIONS:
+        return companion_main(sys.argv[1], sys.argv[2:])
+    parser = argparse.ArgumentParser(description=__doc__, epilog='Later stages: lepton-customize '
+                                     '{inject,adb,sysbake,package} --help')
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--check', action='store_true', help='validate only; no files or downloads')
     mode.add_argument('--execute', action='store_true', help='create an independent working stage')

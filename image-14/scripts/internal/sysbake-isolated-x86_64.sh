@@ -51,11 +51,14 @@ grep -Fq 'ETHERNET_APEX_CONFIG=' "$TOOL/liblepton/mounting.sh" || fail 'Missing 
 for bin in podman weston systemctl rsync getfattr setfattr timeout python3 flock realpath mktemp fuse-overlayfs; do
     command -v "$bin" >/dev/null 2>&1 || fail "Missing host command: $bin"
 done
+# PATH is narrowed before Lepton runs; keep using the commands checked here.
+WESTON_BIN="$(command -v weston)"
+SYSTEMCTL_BIN="$(command -v systemctl)"
 [[ -x "$STAGE/tools/bin/inotifywait" ]] || fail 'Staged inotifywait missing'
 RUNTIME="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 [[ -d "$RUNTIME" && -O "$RUNTIME" && -w "$RUNTIME" ]] || fail "Unavailable user runtime directory: $RUNTIME"
 [[ "$RUNTIME" = /run/user/* ]] || fail 'Unexpected XDG_RUNTIME_DIR; refusing to run'
-if systemctl --user is-active --quiet lepton-sysbake.slice; then
+if "$SYSTEMCTL_BIN" --user is-active --quiet lepton-sysbake.slice; then
     fail 'lepton-sysbake.slice is already active; will not interfere'
 fi
 info "Mode: $MODE"
@@ -72,7 +75,7 @@ fi
 # Serialize isolated runs and protect lepton-sysbake.slice against concurrent runs.
 exec {RUN_LOCK}>"$RUNTIME/lepton-isolated-sysbake.lock"
 flock -n "$RUN_LOCK" || fail 'Another isolated sysbake run is active'
-if systemctl --user is-active --quiet lepton-sysbake.slice; then
+if "$SYSTEMCTL_BIN" --user is-active --quiet lepton-sysbake.slice; then
     fail 'lepton-sysbake.slice became active; refusing to interfere'
 fi
 WORK="$(mktemp -d "$STAGE/.sysbake-work.XXXXXXXX")"
@@ -105,7 +108,7 @@ cleanup() {
         pkill -f -- "--runroot=$RUNROOT( |$)" >/dev/null 2>&1 || true
     fi
     # The runner preflights this slice as inactive, then only sysbake creates it.
-    systemctl --user stop lepton-sysbake.slice >/dev/null 2>&1 || true
+    "$SYSTEMCTL_BIN" --user stop lepton-sysbake.slice >/dev/null 2>&1 || true
     if [[ -n "$WESTON_PID" ]]; then
         kill "$WESTON_PID" >/dev/null 2>&1 || true
         wait "$WESTON_PID" 2>/dev/null || true
@@ -225,7 +228,7 @@ RUN_ACTUAL="$(podman info --format '{{.Store.RunRoot}}')" || fail 'Isolated Podm
 [[ "$(realpath -m "$RUN_ACTUAL")" == "$(realpath -m "$RUNROOT")" ]] || fail "Podman runroot escaped isolation: $RUN_ACTUAL"
 pass 'Podman graphroot and runroot are isolated'
 
-weston --no-config --backend=headless --renderer=pixman --socket="$SOCKET" --log="$WORK/weston.log" &
+"$WESTON_BIN" --no-config --backend=headless --renderer=pixman --socket="$SOCKET" --log="$WORK/weston.log" &
 WESTON_PID=$!
 READY=false
 for (( i=0; i<50; i++ )); do

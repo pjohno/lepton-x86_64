@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import runpy
 import shutil
 import signal
 import stat
@@ -92,6 +93,12 @@ def inventory(root, core):
     return entries
 
 
+def stage_adb(name):
+    """Stage-only Google adb (lepton-customize adb); never copied or packaged."""
+    return name == 'tools/platform-tools' or name.startswith('tools/platform-tools/') or \
+        name == 'tools/licenses/google-platform-tools-NOTICE.txt'
+
+
 class StageView:
     """Present a disk stage to Stage 2's existing base-bundle validator."""
     def __init__(self, root, core):
@@ -107,9 +114,16 @@ class StageView:
             core.require(current != 'customized',
                          'This stage is already customized; inject into the clean prepared stage it came from, '
                          'selecting all components in one operation')
+            core.require(current != 'baked',
+                         'This stage already has a sysbake for its current Android rootfs; changing Android would '
+                         'make it incompatible. Inject into a clean prepared stage instead.')
+            core.require(current != 'restored-complete',
+                         'This is a restored complete stage whose original sysbake is retained; changing Android '
+                         'would make that sysbake incompatible. Create a fresh prepared stage from the base bundle '
+                         '(lepton-customize --execute --bundle ...), which discards sysbake, and inject into it.')
         for name, (mode, size, _, _, link) in self.snapshot.items():
             core.require(name in {'STAGE.json', 'source-bundle', 'tests', 'tests/runtime'} or
-                         name.startswith('source-bundle/') or core.retained(name),
+                         name.startswith('source-bundle/') or core.retained(name) or stage_adb(name),
                          f'Source is not a clean Stage 2 stage: unexpected state {name}')
             member = tarfile.TarInfo(name)
             member.mode, member.size = stat.S_IMODE(mode), size
@@ -387,7 +401,8 @@ def run(args, core):
         env = {**os.environ, 'TMPDIR': str(work)}
         target = work / 'stage'
         target.mkdir(mode=0o700)
-        excludes = ['--exclude=/STAGE.json']
+        excludes = ['--exclude=/STAGE.json', '--exclude=/tools/platform-tools/',
+                    '--exclude=/tools/licenses/google-platform-tools-NOTICE.txt']
         if selected['ndk']:
             excludes.append('--exclude=/compat_tool/images/rootfs/')
         command(['rsync', '-a', '--no-owner', '--no-group', *excludes, '--', str(source) + '/', str(target) + '/'], core, env)
@@ -443,8 +458,14 @@ def run(args, core):
         provenance.mkdir(parents=True)
         for file in ('SOURCE.txt', 'SOURCE.properties', 'BUILD.prop', 'SOURCE-IMAGES.sha256'):
             shutil.copy2(inputs / file, provenance / file)
+        library = runpy.run_path(str(Path(__file__).resolve().parent / 'lepton_bundle_lib.py'))
+        try:
+            rootfs_digest = library['tree_digest'](library['scan_directory'](rootfs))
+        except library['BundleError'] as exc:
+            raise core.InvalidBundle(str(exc)) from None
         stage.update(state='customized', components=selected, source_bundle=metadata,
-                     google_source=google_identity, sysbake_required=True)
+                     google_source=google_identity, sysbake_required=True,
+                     android=dict(rootfs_tree_sha256=rootfs_digest))
         (target / 'STAGE.json').write_text(json.dumps(stage, indent=2) + '\n')
         core.require(inventory(source, core) == view.snapshot, 'Source stage changed during injection; refusing publication')
         core.require(validate_inputs(inputs, selected, core) == google_identity, 'Google inputs changed during injection')
@@ -454,7 +475,7 @@ def run(args, core):
                          (zip_snapshot.st_ino, zip_snapshot.st_size, zip_snapshot.st_mtime_ns, zip_snapshot.st_ctime_ns),
                          'Google ZIP changed during injection; refusing publication')
         core.publish(target, output)
-        print(f'PASS: customized stage: {output}\nFresh sysbake and packaging are still required (Phase 4).')
+        print(f'PASS: customized stage: {output}\nNext, a fresh sysbake: lepton-customize sysbake --execute --stage-dir {output}')
         if selected['widevine']:
             print('Widevine L3 software DRM only; no service certification or hardware DRM is implied.')
     finally:

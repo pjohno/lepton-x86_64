@@ -86,14 +86,15 @@ class InjectionTests(unittest.TestCase):
             else:
                 continue
             self.base.put(name, origin.read_bytes())
-        self.base.put('compat_tool/tools/lepton_customize_inject.py',
-                      (REPO / 'compat_tool/tools/lepton_customize_inject.py').read_bytes(), 0o644)
+        for module in ('lepton_customize_inject.py', 'lepton_customize_package.py', 'lepton_bundle_lib.py'):
+            self.base.put('compat_tool/tools/' + module, (REPO / 'compat_tool/tools' / module).read_bytes(), 0o644)
         self.base.put(M.ROOTFS + 'vendor/build.prop', b'ro.vendor.product.cpu.abilist=x86_64\n'
                       b'ro.vendor.product.cpu.abilist64=x86_64\nro.vendor.product.cpu.abilist32=\n', 0o644)
         jar = io.BytesIO()
         with zipfile.ZipFile(jar, 'w') as archive:
             archive.writestr('classes.dex', b'StartLocaleManagerService StartCrossProfileAppsService persist.lepton.forward_web_intents')
         self.base.put(M.ROOTFS + 'system/framework/services.jar', jar.getvalue(), 0o644)
+        self.extend_bundle()
         self.base.write_bundle()
         self.base.cli()
         self.before = tree(self.source)
@@ -168,6 +169,9 @@ class InjectionTests(unittest.TestCase):
         self.fixture_trees['vendor'] = vendor.parent
         self.image(vendor.parent, self.images / 'vendor.img')
         self.refresh_inputs()
+
+    def extend_bundle(self):
+        """Hook for suites that need a more complete bundle fixture."""
 
     def image(self, folder, path, blocks='8192'):
         path.unlink(missing_ok=True)
