@@ -135,13 +135,9 @@ if [[ -f "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCo
         (cd "$stage/compat_tool/images/rootfs" && sha256sum -c "$stage/compat_tool/provenance/gapps/SHA256SUMS" >/dev/null)
     fi
 fi
-source "$repo/compat_tool/liblepton/ndk_auxv/runtime.sh"
-if ndk_compat_supported "$stage/compat_tool/images/rootfs"; then
-    [[ -f "$repo/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" ]] || {
-        echo 'ERROR: Build the standard NDK shim before packaging: bash compat_tool/liblepton/ndk_auxv/build.sh --aosp DIR' >&2
-        exit 1
-    }
-fi
+# Packaging needs the staged binary, never AOSP or a checkout build artifact.
+bash "$repo/compat_tool/liblepton/ndk_auxv/validate.sh" \
+    "$stage/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
 for program in rsync tar gzip sha256sum awk grep mktemp install; do
     command -v "$program" >/dev/null || { echo "ERROR: missing $program" >&2; exit 1; }
 done
@@ -261,8 +257,10 @@ fi
 # Earlier stages did not ship compat_tool/tools; create the destination before
 # overlaying the newer launch helpers.
 mkdir -p -- "$tmp/payload/compat_tool/liblepton" "$tmp/payload/compat_tool/tools"
-rsync -a --no-owner --no-group -- "$repo/compat_tool/liblepton/ndk_auxv/" \
+rsync -a --no-owner --no-group --exclude=/bin/ --exclude=__pycache__/ -- "$repo/compat_tool/liblepton/ndk_auxv/" \
     "$tmp/payload/compat_tool/liblepton/ndk_auxv/"
+bash "$repo/compat_tool/liblepton/ndk_auxv/validate.sh" \
+    "$tmp/payload/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
 for script in "${runtime_scripts[@]}"; do
     install -m 755 "$repo/compat_tool/liblepton/$script" \
         "$tmp/payload/compat_tool/liblepton/$script"

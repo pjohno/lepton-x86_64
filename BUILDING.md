@@ -494,6 +494,15 @@ bash image-14/scripts/build-images-x86_64.sh --execute
 bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id base-YYYYMMDD
 ```
 
+Every new stage builds the open-source NDK compatibility shim with AOSP Clang
+for Android x86_64, even for base bundles. It ships outside the rootfs at
+`compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so` and is validated with
+`readelf` before staging and packaging. It is not Google's translator: base
+metadata remains `gapps: false`, `ndk: false`, and it stays inactive until the
+existing runtime checks recognize a compatible translator. Future client-side
+customisation can reuse the binary without AOSP; that workflow is not yet
+implemented. See [shim details](compat_tool/liblepton/ndk_auxv/README.md).
+
 ### Repackage an existing stage without rebuilding Android
 
 For installer or host-script changes, reuse a complete stage, including its
@@ -521,6 +530,9 @@ installers. It copies the stage and refreshes the bundled host scripts from
 this repository, leaving the source stage unchanged. It neither compiles
 Android nor regenerates sysbake, and it does not transfer or install anything.
 Android changes must already be present in the stage to appear in this bundle.
+Packaging preserves the validated staged shim and needs no AOSP Clang/compiler.
+Older stages without the shim must be regenerated through normal staging;
+missing/invalid binaries are rejected rather than taken from the checkout.
 
 ## Incremental test bundle without replacing packaged outputs
 

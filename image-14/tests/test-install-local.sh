@@ -30,6 +30,10 @@ printf '%s\n' local-desktop > "$stage/compat_tool/install-profile"
 printf '# file: sysbake/system/packages.xml\nuser.fake=0x31\n' > "$stage/compat_tool/sysbake.xattrs"
 printf '#!/bin/sh\n' > "$stage/tools/platform-tools/adb"
 printf '#!/bin/sh\n' > "$stage/tools/bin/inotifywait"
+mkdir -p "$stage/compat_tool/liblepton/ndk_auxv/bin"
+printf 'void fixture(void) {}\n' | cc -x c -shared -nostdlib -fPIC \
+    -Wl,-soname,liblepton_ndk_auxv.so -o "$stage/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" -
+
 
 # A computer that meets the requirements: stand-in tools, Binder, AMD, Steam.
 mkdir -p "$work/bin" "$work/drm/renderD128/device" "$work/home/.local/share/Steam"

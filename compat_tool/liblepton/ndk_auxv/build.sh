@@ -16,7 +16,7 @@ trap 'rm -f -- "$output"' EXIT
 "$CLANG" --target=x86_64-linux-android34 -O2 -fPIC -shared -nostdlib \
     -fvisibility=hidden -Wall -Wextra -Werror -Wl,-soname,liblepton_ndk_auxv.so \
     -o "$output" "$HERE/ndk_auxv.c"
-readelf -h "$output" | grep -F 'Advanced Micro Devices X86-64' >/dev/null
+bash "$HERE/validate.sh" "$output"
 chmod 755 "$output"
 mv -f -- "$output" "$HERE/bin/liblepton_ndk_auxv.so"
 echo "Built $HERE/bin/liblepton_ndk_auxv.so"

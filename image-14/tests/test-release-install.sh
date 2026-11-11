@@ -28,6 +28,10 @@ chmod +x "$stage/compat_tool/images/rootfs_overlay/system/bin/binderfs-ensure"
 printf '<packages/>\n' > "$stage/compat_tool/sysbake/system/packages.xml"
 printf '# file: sysbake/system/packages.xml\nuser.fake=0x31\n' > "$stage/compat_tool/sysbake.xattrs"
 printf '#!/bin/sh\n' > "$stage/tools/bin/inotifywait"
+mkdir -p "$stage/compat_tool/liblepton/ndk_auxv/bin"
+printf 'void fixture(void) {}\n' | cc -x c -shared -nostdlib -fPIC \
+    -Wl,-soname,liblepton_ndk_auxv.so -o "$stage/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" -
+
 
 mkdir -p "$work/bin"
 fake_sha="$(fake_adb_zip "$work/fake-adb")"

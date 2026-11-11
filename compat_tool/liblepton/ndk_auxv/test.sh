@@ -9,3 +9,4 @@ for name in test test-open; do
     "$work/$name"
 done
 bash "$HERE/test-runtime.sh"
+bash "$HERE/test-validate.sh"
