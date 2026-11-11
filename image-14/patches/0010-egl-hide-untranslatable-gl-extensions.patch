@@ -1,0 +1,107 @@
+diff --git a/opengl/libs/EGL/egl_object.cpp b/opengl/libs/EGL/egl_object.cpp
+index 33a77c4470..0d2cde85f3 100644
+--- a/opengl/libs/EGL/egl_object.cpp
++++ b/opengl/libs/EGL/egl_object.cpp
+@@ -16,10 +16,94 @@
+ 
+ #include "egl_object.h"
+ 
++#include <android-base/properties.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <algorithm>
++#include <iterator>
+ #include <sstream>
+ 
+ namespace android {
+ 
++namespace {
++
++// Lepton x86_64: arm64-only apps run through NDK translation, whose GLES
++// proxies can only forward entry points they know. ANGLE advertises the
++// extensions below, but the translator has no wrapper for any of their
++// ANGLE/CHROMIUM-only functions, so eglGetProcAddress returns NULL to the app.
++// Skia (Flutter, HWUI-like engines) then rejects the whole GL context. Hide
++// them from translated processes only; extensions without entry points, and
++// ANGLE ones the translator does forward, stay visible. Native x86 apps are
++// unaffected. Set debug.lepton.gl.hide_untranslatable_extensions=false to
++// disable.
++constexpr const char* kUntranslatableGlExtensions[] = {
++        "GL_ANGLE_base_vertex_base_instance",
++        "GL_ANGLE_base_vertex_base_instance_shader_builtin",
++        "GL_ANGLE_copy_texture_3d",
++        "GL_ANGLE_get_image",
++        "GL_ANGLE_get_tex_level_parameter",
++        "GL_ANGLE_logic_op",
++        "GL_ANGLE_memory_object_flags",
++        "GL_ANGLE_multi_draw",
++        "GL_ANGLE_polygon_mode",
++        "GL_ANGLE_request_extension",
++        "GL_ANGLE_robust_client_memory",
++        "GL_ANGLE_shader_pixel_local_storage",
++        "GL_ANGLE_shader_pixel_local_storage_coherent",
++        "GL_ANGLE_texture_multisample",
++        "GL_ANGLE_vulkan_image",
++        "GL_CHROMIUM_bind_uniform_location",
++        "GL_CHROMIUM_copy_compressed_texture",
++        "GL_CHROMIUM_copy_texture",
++        "GL_CHROMIUM_lose_context",
++};
++
++// The zygote loads the native bridge library into every app, so its presence
++// proves nothing. Only processes running translated code map the guest linker
++// or guest libraries. Checked per new context, never cached across fork.
++bool isNdkTranslatedProcess() {
++    if (!base::GetBoolProperty("debug.lepton.gl.hide_untranslatable_extensions", true)) {
++        return false;
++    }
++    FILE* maps = fopen("/proc/self/maps", "re");
++    if (maps == nullptr) return false;
++    char* line = nullptr;
++    size_t size = 0;
++    bool translated = false;
++    while (!translated && getline(&line, &size, maps) != -1) {
++        translated = strstr(line, "/system/bin/arm64/linker64") != nullptr ||
++                strstr(line, "/system/lib64/arm64/") != nullptr;
++    }
++    free(line);
++    fclose(maps);
++    return translated;
++}
++
++void hideUntranslatableGlExtensions(std::string& extensions) {
++    if (!isNdkTranslatedProcess()) return;
++    std::stringstream in(extensions);
++    std::string token;
++    std::string kept;
++    size_t hidden = 0;
++    while (in >> token) {
++        if (std::find(std::begin(kUntranslatableGlExtensions),
++                      std::end(kUntranslatableGlExtensions), token) !=
++            std::end(kUntranslatableGlExtensions)) {
++            ++hidden;
++            continue;
++        }
++        if (!kept.empty()) kept += ' ';
++        kept += token;
++    }
++    if (hidden == 0) return;
++    extensions = kept;
++    ALOGI("Lepton: hid %zu GL extensions the NDK translator cannot forward", hidden);
++}
++
++} // namespace
++
+ egl_object_t::egl_object_t(egl_display_t* disp) : display(disp), count(1) {
+     // NOTE: this does an implicit incRef
+     display->addObject(this);
+@@ -323,6 +407,7 @@ void egl_context_t::onMakeCurrent(EGLSurface draw, EGLSurface read) {
+     // e.g. due to robustness failure, this context might also be reset and glGetString can
+     // return NULL.
+     gl_extensions = exts;
++    hideUntranslatableGlExtensions(gl_extensions);
+     if (gl_extensions.find("GL_EXT_debug_marker") == std::string::npos) {
+         gl_extensions.insert(0, "GL_EXT_debug_marker ");
+         // eglGetProcAddress could return function pointers to these

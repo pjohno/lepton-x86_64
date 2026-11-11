@@ -171,6 +171,7 @@ and resets Podman.
 | `0004-minigbm-gbm-mesa-driver.patch` | Real three-plane layout for YV12 buffers, so decoders can write frames |
 | `0007-eventhub-preserve-evdev-axes.patch` | Keeps real controllers' axis ranges |
 | `0008-inputreader-separate-steam-input-pads.patch` | Steam Input controllers appear as separate Android controllers |
+| `0010-egl-hide-untranslatable-gl-extensions.patch` | Arm64 games under NDK translation don't see ANGLE GL extensions the translator can't forward (fixes Flutter/Skia games stuck loading) |
 
 **Where things are:**
 
