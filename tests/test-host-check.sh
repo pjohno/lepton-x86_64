@@ -11,7 +11,7 @@ fail() { echo "FAIL: $*" >&2; cat "$work/out" >&2; exit 1; }
 
 # Basic tools the check itself uses come from the real system.
 mkdir -p "$work/base"
-for tool in bash uname id grep awk; do ln -s "$(command -v "$tool")" "$work/base/$tool"; done
+for tool in bash uname id grep dirname; do ln -s "$(command -v "$tool")" "$work/base/$tool"; done
 stub() { mkdir -p "$work/$1"; for tool in "${@:2}"; do printf '#!/bin/sh\n' > "$work/$1/$tool"; chmod +x "$work/$1/$tool"; done; }
 stub all podman gamescope setfattr python3 zenity xdpyinfo xprop
 printf 'nodev\tproc\nnodev\tbinder\n' > "$work/binder"
@@ -36,7 +36,7 @@ refused() { if host "${@:2}"; then fail "accepted: ${*:2}"; fi; grep -Fq -- "$1"
 ok
 grep -q '^\[PASS\] This computer meets the requirements' "$work/out"
 ! grep -q '^\[WARN\]' "$work/out" || fail 'warnings on a complete Deck'
-grep -q '^\[PASS\] SteamOS$' "$work/out"
+grep -q '^\[PASS\] SteamOS/Gamescope profile$' "$work/out"
 
 refused 'Android Binder (BinderFS) kernel support is not available' LEPTON_HOST_FILESYSTEMS="$work/no-binder"
 refused '1 requirement(s) missing; nothing was changed' LEPTON_HOST_FILESYSTEMS="$work/no-binder"
@@ -56,14 +56,38 @@ refused 'Steam not found' HOME="$work/empty-home"
 ok LEPTON_SYSFS_DRM="$work/drm-intel"
 grep -q '^\[WARN\] No AMD GPU' "$work/out"
 
-# Desktops: KDE Plasma Wayland passes; GNOME is untested (warning); missing X
-# tools only warn because the bridge degrades without them.
-ok LEPTON_HOST_OS_RELEASE="$work/fedora" XDG_CURRENT_DESKTOP=KDE XDG_SESSION_TYPE=wayland
-grep -q '^\[PASS\] Desktop: KDE (Wayland)' "$work/out"
-ok LEPTON_HOST_OS_RELEASE="$work/fedora" XDG_CURRENT_DESKTOP=GNOME XDG_SESSION_TYPE=wayland
-grep -q '^\[WARN\] Desktop: GNOME (wayland) is untested' "$work/out"
-ok LEPTON_HOST_OS_RELEASE="$work/fedora" XDG_CURRENT_DESKTOP=GNOME XDG_SESSION_TYPE=wayland PATH="$work/kdialog-only:$work/base"
-grep -q '^\[WARN\] xdpyinfo is not installed' "$work/out" && grep -q '^\[WARN\] xprop is not installed' "$work/out"
+stub direct podman setfattr python3 kdialog
+# Both desktops use direct Wayland and need no Gamescope or X11 utilities.
+python3 - "$work/wayland-0" <<'SOCKET'
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.bind(sys.argv[1])
+SOCKET
+for desktop in KDE GNOME; do
+    ok LEPTON_HOST_OS_RELEASE="$work/fedora" XDG_CURRENT_DESKTOP="$desktop" XDG_SESSION_TYPE=wayland \
+        WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$work" PATH="$work/direct:$work/base"
+    grep -q "^\[PASS\] Desktop: $desktop (Wayland)" "$work/out"
+    ! grep -q 'Gamescope\|xdpyinfo\|xprop' "$work/out" || fail 'direct profile requires bridge tools'
+done
+refused 'X11 sessions are unsupported' LEPTON_HOST_OS_RELEASE="$work/fedora" XDG_SESSION_TYPE=x11
+ok LEPTON_HOST_OS_RELEASE="$work/fedora"
+grep -q '^\[WARN\] No usable Wayland socket' "$work/out"
+ok LEPTON_HOST_OS_RELEASE="$work/fedora" XDG_SESSION_TYPE=wayland WAYLAND_DISPLAY=absent XDG_RUNTIME_DIR="$work"
+grep -q '^\[WARN\] No usable Wayland socket' "$work/out"
+# Direct routing still requires Podman, Binder, attr, Python and native Steam.
+for tool in podman setfattr python3; do
+    rm -rf "$work/without"; cp -a "$work/direct" "$work/without"; rm "$work/without/$tool"
+    refused "$tool" LEPTON_HOST_OS_RELEASE="$work/fedora" PATH="$work/without:$work/base"
+done
+refused 'Android Binder' LEPTON_HOST_OS_RELEASE="$work/fedora" LEPTON_HOST_FILESYSTEMS="$work/no-binder"
+refused 'Only Flatpak Steam' LEPTON_HOST_OS_RELEASE="$work/fedora" HOME="$work/flatpak-home"
+# Explicit steamos on Fedora restores its Gamescope requirement.
+if env -i HOME="$work/home" PATH="$work/direct:$work/base" LEPTON_HOST_OS_RELEASE="$work/fedora" \
+    LEPTON_HOST_FILESYSTEMS="$work/binder" LEPTON_SYSFS_DRM="$work/drm-amd" \
+    bash "$check" --install-profile steamos > "$work/out" 2>&1; then
+    fail 'forced Gamescope profile accepted without Gamescope'
+fi
+grep -q 'Gamescope is not installed' "$work/out"
 # SteamOS over SSH (no desktop variables) is fine.
 ok XDG_CURRENT_DESKTOP=
 # Several problems are all reported, not just the first.

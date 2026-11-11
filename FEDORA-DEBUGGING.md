@@ -20,10 +20,11 @@ committed to this repository.
 
 ## Local desktop direct Wayland
 
-Tools installed through `install-local.sh` now carry a persistent local profile
-and bypass nested Gamescope by default. Use `%command%` for the direct test or
+Both the transferred bundle installer and `install-local.sh` detect Fedora,
+write a persistent `local-desktop` profile and bypass nested Gamescope by default. Use `%command%` for the direct test or
 `LEPTON_LOCAL_USE_GAMESCOPE=1 %command%` for the windowed fallback. Existing
-unmarked tools keep their previous routing until explicitly upgraded/marked.
+unmarked tools keep their previous routing until replaced; replacement now
+reselects the profile for the current host.
 See [profile, deployment, rollback and geometry limitations](compat_tool/LOCAL-DESKTOP.md).
 Direct routing is a new Fedora test version; rendering, redraw, scaling, pointer
 alignment, focus and exit/relaunch need manual validation before release.

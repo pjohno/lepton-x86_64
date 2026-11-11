@@ -1,28 +1,92 @@
 # Local desktop launch routing
 
-Installations made with `image-14/scripts/install-local.sh` use direct host
-Wayland for Steam game launches. No Steam Launch Options are required:
+Both the transferred `.install.sh` installer and
+`image-14/scripts/install-local.sh` automatically select a host profile:
 
-```text
-%command%
+| Host OS | Installation profile | Launcher |
+| --- | --- | --- |
+| SteamOS (`ID=steamos`) | `steamos` (no marker file) | Existing Gamescope bridge |
+| Other Linux, including Fedora GNOME/KDE | `local-desktop` | Direct Wayland, native fullscreen |
+
+Detection reads `/etc/os-release` as data, falling back to `/usr/lib/os-release`
+when the first file is unavailable. It never executes the file and does not
+use the hostname, user, desktop environment, session mode or installed
+Gamescope to select the profile. Unknown Linux systems default to
+`local-desktop`. `lepton-install-bundle --detect-profile` prints the selection
+without installing or checking dependencies. The standalone installer contains
+this policy itself and needs no source checkout.
+
+An explicit `--install-profile local-desktop` or `--install-profile steamos`
+overrides detection in either installer. For debugging the Gamescope route on
+Fedora, use `--install-profile steamos`; Gamescope must then be installed.
+SteamOS retains its existing runtime safeguard: even an explicitly installed
+local marker does not switch a Steam Deck away from its normal bridge.
+
+For `local-desktop`, the installer writes the single line `local-desktop` to
+`compat_tool/install-profile` before activating the installation. For `steamos`,
+it removes that file. The Steam entry point reads the marker as data. The
+profile survives Steam restarts and reboots; a global `LEPTON_INSTALL_PROFILE`
+environment variable cannot select it.
+
+On `--replace` and `--into TOOL_ID`, the detected host or explicit override
+selects the new profile, even when the previous installation used a different
+profile. The installer reports the OS, profile and launcher. Profiles embedded
+in transferable archives are discarded. Old bundles without local launcher
+support or profile-aware host checks must be repackaged with current host
+scripts; no Android rebuild or sysbake regeneration is needed. Compatibility
+IDs, game data, rootfs and container ownership are unchanged.
+
+Host checks keep Podman, BinderFS, graphics, native Steam, Python, attr and
+dialog requirements. Only the `steamos` profile requires Gamescope. Both GNOME
+and KDE Plasma Wayland use the same direct route. An X11 session is rejected
+for `local-desktop`. Headless/SSH installs without a usable Wayland socket get
+a warning: games still require Steam to run in a Wayland desktop session,
+and the existing direct launcher validates the socket at launch.
+
+### Install and check on Fedora GNOME or KDE
+
+Run these same commands in a terminal in either desktop's Wayland session,
+as your normal user. Replace `VERSION` with your bundle ID:
+
+```bash
+# Transferred bundle: no source checkout needed.
+bash lepton-x86_64-steamdeck-VERSION.install.sh --check
+bash lepton-x86_64-steamdeck-VERSION.install.sh
+# Upgrade an existing installation, recalculating its profile for this host.
+bash lepton-x86_64-steamdeck-VERSION.install.sh --replace
+# Force the Gamescope route for comparison (requires Gamescope).
+bash lepton-x86_64-steamdeck-VERSION.install.sh --replace --install-profile steamos
+# Restore direct Wayland.
+bash lepton-x86_64-steamdeck-VERSION.install.sh --replace --install-profile local-desktop
 ```
 
-The local wrapper passes `--install-profile local-desktop` to the bundled
-installer. The installer writes the single line `local-desktop` to
-`compat_tool/install-profile` in the installed copy, before making it active.
-The Steam entry point reads this as data, not shell code. It never infers a
-local installation from KDE or Wayland session variables or from a global
-`LEPTON_INSTALL_PROFILE` environment variable.
+From the source checkout, with a bundle or prepared stage already available:
 
-The profile survives Steam restarts and reboots. `--replace` and `--into`
-preserve an existing local profile; the local installer explicitly recreates
-it. Packaging and installation discard profiles embedded in transferable
-archives. Older bundles lacking the new launcher support are refused for a
-local install: repackage an existing stage with current launch scripts, without
-rebuilding Android. Ordinary unmarked Deck installs and existing shortcuts
-keep their Gamescope path. On SteamOS, even a copied local profile is ignored
-so normal Deck launch routing still applies. Compatibility IDs and prefixes
-are unchanged.
+```bash
+bash compat_tool/tools/lepton-host-check
+bash image-14/scripts/install-local.sh --check --bundle-id VERSION
+bash image-14/scripts/install-local.sh --execute --bundle-id VERSION
+# To overwrite a different tool while keeping its Steam shortcuts:
+bash image-14/scripts/install-local.sh --execute --bundle-id VERSION --into TOOL_ID
+```
+
+Restart Steam after installation, select the installed compatibility tool, and
+use `%command%` as the game's Launch Options. Confirm native fullscreen,
+compositor resolution/scale, input, exit and relaunch in each desktop.
+Steam Deck Gaming Mode remains fullscreen and Desktop Mode remains windowed.
+
+Host-only regression tests (no root or downloads):
+
+```bash
+python3 tests/test-install-profiles.py -v
+bash tests/test-host-check.sh
+bash tests/test-tool-entry.sh
+bash tests/test-gamescope-bridge.sh
+bash tests/test-direct-wayland.sh
+```
+
+Tests simulate OS files through `LEPTON_HOST_OS_RELEASE` and
+`LEPTON_HOST_OS_RELEASE_FALLBACK`; leave these unset for normal installation.
 
 The local entry point runs `tools/lepton-direct-wayland`, without invoking
 `lepton-gamescope-bridge`. It keeps the compatibility-tool environment and

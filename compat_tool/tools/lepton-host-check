@@ -9,7 +9,17 @@ set -Euo pipefail
 # Test hooks: alternative /proc/filesystems, /sys/class/drm and os-release.
 FILESYSTEMS="${LEPTON_HOST_FILESYSTEMS:-/proc/filesystems}"
 DRM="${LEPTON_SYSFS_DRM:-/sys/class/drm}"
-OS_RELEASE="${LEPTON_HOST_OS_RELEASE:-/etc/os-release}"
+INSTALL_PROFILE=''
+while (($#)); do
+    case "$1" in
+        --install-profile) INSTALL_PROFILE="${2:?--install-profile needs local-desktop or steamos}"; shift 2 ;;
+        *) printf '[FAIL] Unknown option: %s\n' "$1" >&2; exit 1 ;;
+    esac
+done
+if [[ -z "$INSTALL_PROFILE" ]]; then
+    INSTALL_PROFILE="$(bash "$(dirname -- "${BASH_SOURCE[0]}")/lepton-install-bundle" --detect-profile)" || exit 1
+fi
+case "$INSTALL_PROFILE" in local-desktop|steamos) ;; *) printf '[FAIL] Unknown installation profile: %s\n' "$INSTALL_PROFILE" >&2; exit 1 ;; esac
 
 missing=0
 pass() { printf '[PASS] %s\n' "$*"; }
@@ -18,9 +28,6 @@ need() { printf '[FAIL] %s\n' "$*"; missing=$((missing + 1)); }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 [[ "$(uname -m)" == x86_64 ]] && pass 'x86_64 computer' || need "x86_64 computer required (this is $(uname -m))"
-os_id=''
-[[ ! -r "$OS_RELEASE" ]] || os_id="$(awk -F= '$1 == "ID" {gsub(/"/, "", $2); print $2; exit}' "$OS_RELEASE")"
-
 # Android runs in a rootless Podman container and needs Binder from the kernel.
 if have podman; then
     pass 'Podman'
@@ -37,8 +44,10 @@ else
        kernel (binder_linux, rust_binder or built in); Lepton never loads kernel modules.'
 fi
 
-# Steam launches each game inside a nested Gamescope (lepton-gamescope-bridge).
-have gamescope && pass 'Gamescope' || need 'Gamescope is not installed (package "gamescope")'
+# Only the standard profile uses the nested Gamescope bridge.
+if [[ "$INSTALL_PROFILE" == steamos ]]; then
+    have gamescope && pass 'Gamescope' || need 'Gamescope is not installed (package "gamescope")'
+fi
 have setfattr && pass 'setfattr (extended attributes)' || need 'setfattr is not installed (package "attr")'
 have python3 && pass 'Python 3' || need 'Python 3 is not installed (python3)'
 if have zenity || have kdialog; then
@@ -68,20 +77,20 @@ else
     warn 'No AMD GPU: hardware graphics are not available (AMD drivers only); see --allow-non-amd'
 fi
 
-# Desktop: KDE Plasma (Wayland) and SteamOS are tested. Elsewhere Steam game
-# windows use the Gaming Mode path through XWayland, which is untested.
-desktop="${XDG_CURRENT_DESKTOP:-}"
-if [[ "$os_id" == steamos ]]; then
-    pass 'SteamOS'
-elif [[ -n "$desktop" ]]; then
-    if [[ "${XDG_SESSION_TYPE:-}" == wayland && "${desktop,,}" =~ (kde|plasma) ]]; then
-        pass "Desktop: $desktop (Wayland)"
+# Direct launch needs the same live socket required by lepton-direct-wayland.
+# Installation over SSH is allowed with a warning; launch still validates it.
+if [[ "$INSTALL_PROFILE" == local-desktop ]]; then
+    if [[ "${XDG_SESSION_TYPE:-}" == x11 ]]; then
+        need 'X11 sessions are unsupported for local-desktop. Log into GNOME or KDE Plasma on Wayland and launch Steam there.'
+    elif [[ -n "${WAYLAND_DISPLAY:-}" && -n "${XDG_RUNTIME_DIR:-}" &&
+            "$WAYLAND_DISPLAY" != */* && -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]]; then
+        pass "Desktop: ${XDG_CURRENT_DESKTOP:-Wayland} (Wayland)"
     else
-        warn "Desktop: $desktop (${XDG_SESSION_TYPE:-unknown session}) is untested; KDE Plasma on Wayland is tested"
-        # Without these the bridge still runs: 1280x800, and an untagged window.
-        have xdpyinfo || warn 'xdpyinfo is not installed: game windows use 1280x800 (package "xdpyinfo")'
-        have xprop || warn 'xprop is not installed: Steam may not track the game window (package "xprop")'
+        warn 'No usable Wayland socket in this session. Launch games and Steam from a Wayland desktop (GNOME or KDE Plasma); X11 is unsupported.'
     fi
+else
+    pass 'SteamOS/Gamescope profile'
+
 fi
 
 if ((missing)); then

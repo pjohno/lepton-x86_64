@@ -12,6 +12,7 @@ BUNDLE_ID=''
 STAGE=''
 BUNDLE_DIR=''
 INSTALL_ARGS=()
+PROFILE_ARGS=()
 
 usage() {
     cat <<'HELP'
@@ -19,8 +20,8 @@ Usage: bash image-14/scripts/install-local.sh --check|--execute --bundle-id ID [
 
 Installs the bundle ID on this computer: the same installer a Steam Deck uses,
 so it registers a Steam compatibility tool and adds the "Lepton: Add Android
-game" menu entry. This installation uses direct host Wayland by default;
-Steam Deck installations keep their normal Gamescope path.
+game" menu entry. SteamOS automatically uses Gamescope; other Linux hosts
+use direct Wayland with native fullscreen (GNOME or KDE Plasma Wayland).
 Make the bundle (or at least its stage) first with
 make-deck-bundle-x86_64.sh; a stage without a bundle is packaged here.
 
@@ -30,13 +31,16 @@ Options:
   --allow-non-amd     Install without an AMD GPU (testing only: games need AMD graphics)
   --replace | --into TOOL_ID | --remove TOOL_ID | --keep-previous
                       Passed to the installer (see its --help)
+  --install-profile local-desktop|steamos
+                      Override automatic OS detection
   --adb-zip FILE      Use this Platform-Tools ZIP instead of downloading ADB
 
 --check checks this computer, the bundle and the destination; it changes nothing.
 --execute needs internet access: the installer downloads Google ADB (unless
 --adb-zip is given), as on a Steam Deck.
-Needs: Podman, Android Binder (BinderFS) kernel support, Gamescope, setfattr
-(attr), Python 3, zenity or kdialog, and the native Steam package.
+Needs: Podman, Android Binder (BinderFS) kernel support, setfattr (attr),
+Python 3, zenity or kdialog, and native Steam. Gamescope is required only for
+the steamos profile; local-desktop needs a Wayland session to launch games.
 HELP
 }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
@@ -51,6 +55,7 @@ while (($#)); do
         --bundle-dir) BUNDLE_DIR="${2:?--bundle-dir requires DIR}"; shift 2 ;;
         --allow-non-amd|--replace|--keep-previous) INSTALL_ARGS+=("$1"); shift ;;
         --into|--remove) INSTALL_ARGS+=("$1" "${2:?$1 requires a tool ID}"); shift 2 ;;
+        --install-profile) PROFILE_ARGS=("$1" "${2:?--install-profile requires local-desktop or steamos}"); shift 2 ;;
         --adb-zip) INSTALL_ARGS+=("$1" "$(realpath -m -- "${2:?--adb-zip requires FILE}")"); shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "Unknown argument: $1" ;;
@@ -72,8 +77,10 @@ STAGE="$(realpath -m -- "${STAGE:-$LEPTON_STAGES_DIR/$BUNDLE_ID}")"
 ARCHIVE="$BUNDLE_DIR/lepton-x86_64-steamdeck-$BUNDLE_ID.tar.gz"
 INSTALLER="$BUNDLE_DIR/lepton-x86_64-steamdeck-$BUNDLE_ID.install.sh"
 
+# Resolve using the self-contained installer policy, including manual overrides.
+INSTALL_PROFILE="$(bash "$ROOT/compat_tool/tools/lepton-install-bundle" --detect-profile "${PROFILE_ARGS[@]}")"
 step 'Check this computer'
-bash "$ROOT/compat_tool/tools/lepton-host-check" || fail 'Install the missing requirements above, then run this again'
+bash "$ROOT/compat_tool/tools/lepton-host-check" --install-profile "$INSTALL_PROFILE" || fail 'Install the missing requirements above, then run this again'
 
 step 'Bundle'
 if [[ -f "$ARCHIVE" ]]; then
@@ -93,8 +100,8 @@ fi
 
 step 'Install on this computer'
 # The bundled installer re-checks this computer with its own copy of the check.
-grep -q -- '--install-profile' "$INSTALLER" || fail 'Bundle installer lacks local-desktop support; repackage with updated launcher scripts'
-installer_args=(--install-profile local-desktop "${INSTALL_ARGS[@]}")
+grep -q -- '--detect-profile' "$INSTALLER" || fail 'Bundle installer lacks automatic profile support; repackage with updated launcher scripts'
+installer_args=(--install-profile "$INSTALL_PROFILE" "${INSTALL_ARGS[@]}")
 [[ "$MODE" == --execute ]] || installer_args+=(--check)
 LEPTON_INSTALL_IN_TERMINAL=1 bash "$INSTALLER" "${installer_args[@]}"
 if [[ "$MODE" == --check ]]; then

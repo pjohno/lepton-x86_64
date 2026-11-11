@@ -45,8 +45,9 @@ usage() {
     sed -n '3,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     cat <<'HELP'
 Options:
-  --install-profile local-desktop
-                   Mark this installation for direct host Wayland (local installer)
+  --install-profile local-desktop|steamos
+                   Override OS detection: direct Wayland or Gamescope bridge
+  --detect-profile Print the selected profile and exit (no host checks or writes)
   --check          Verify the archive and destination; change nothing
   --replace        Overwrite an existing install of this bundle's own tool ID
   --new            Install as a new tool without asking (fails if this bundle's
@@ -100,7 +101,11 @@ trap finish EXIT
 
 while (($#)); do
     case "$1" in
-        --install-profile) INSTALL_PROFILE="${2:?--install-profile needs local-desktop}"; [[ "$INSTALL_PROFILE" == local-desktop ]] || fail "Unknown installation profile: $INSTALL_PROFILE"; shift 2 ;;
+        --install-profile)
+            INSTALL_PROFILE="${2:?--install-profile needs local-desktop or steamos}"
+            case "$INSTALL_PROFILE" in local-desktop|steamos) ;; *) fail "Unknown installation profile: $INSTALL_PROFILE" ;; esac
+            shift 2 ;;
+        --detect-profile) MODE=detect-profile; shift ;;
         --check) MODE=check; shift ;;
         --replace) REPLACE=true; shift ;;
         --new) NEW=true; shift ;;
@@ -116,6 +121,48 @@ while (($#)); do
     esac
 done
 [[ "$NEW" == false || ( "$REPLACE" == false && -z "$INTO" ) ]] || fail '--new cannot be combined with --replace or --into'
+
+# Keep detection inside the installer: transferred .install.sh files need no
+# source checkout. Other host tools use --detect-profile for the same policy.
+# Fixture paths let tests simulate hosts without changing the real OS files.
+os_release="${LEPTON_HOST_OS_RELEASE:-/etc/os-release}"
+[[ -r "$os_release" ]] || os_release="${LEPTON_HOST_OS_RELEASE_FALLBACK:-/usr/lib/os-release}"
+os_id=''
+os_name='Unknown Linux'
+pretty_name=''
+if [[ -r "$os_release" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^(ID|NAME|PRETTY_NAME)=(.*)$ ]] || continue
+        key="${BASH_REMATCH[1]}"; value="${BASH_REMATCH[2]}"
+        # Remove paired quotes as data only. Never source/eval os-release.
+        if [[ "$value" == \"*\" ]]; then
+            value="${value:1:${#value}-2}"
+        elif [[ "$value" == \'*\' ]]; then
+            value="${value:1:${#value}-2}"
+        fi
+        case "$key" in
+            ID) os_id="$value" ;;
+            NAME) os_name="$value" ;;
+            PRETTY_NAME) pretty_name="$value" ;;
+        esac
+    done < "$os_release"
+fi
+if [[ -z "$INSTALL_PROFILE" ]]; then
+    if [[ "$os_id" == steamos ]]; then INSTALL_PROFILE=steamos; else INSTALL_PROFILE=local-desktop; fi
+fi
+if [[ "$MODE" == detect-profile ]]; then
+    printf '%s\n' "$INSTALL_PROFILE"
+    exit 0
+fi
+pass "Detected ${pretty_name:-$os_name}"
+pass "Installation profile: $INSTALL_PROFILE"
+if [[ "$INSTALL_PROFILE" == steamos ]]; then
+    pass 'Launcher: Gamescope bridge'
+    pass 'Steam Deck Gaming/Desktop modes preserved'
+else
+    pass 'Launcher: direct Wayland'
+    pass 'Default display mode: native fullscreen'
+fi
 
 # Double-clicked in a file manager: reopen in a terminal so progress is visible.
 if [[ ! -t 0 && ! -t 1 && -z "${LEPTON_INSTALL_IN_TERMINAL:-}" &&
@@ -201,8 +248,11 @@ manage() { python3 "$MANAGE" "$@"; }
 # before anything is installed. Older bundles do not have the check.
 HOST_CHECK="$TEMP/compat_tool/tools/lepton-host-check"
 if [[ -f "$HOST_CHECK" && "${LEPTON_SKIP_HOST_CHECK:-}" != 1 ]]; then
+    if [[ "$INSTALL_PROFILE" == local-desktop ]] && ! grep -q -- '--install-profile' "$HOST_CHECK"; then
+        fail 'Bundle lacks profile-aware host checks; repackage with updated launcher scripts (no Android rebuild required)'
+    fi
     info 'Checking that this computer can run Lepton games'
-    bash "$HOST_CHECK" ||
+    bash "$HOST_CHECK" --install-profile "$INSTALL_PROFILE" ||
         fail 'This computer is missing what Lepton needs (see above); nothing was changed. LEPTON_SKIP_HOST_CHECK=1 installs anyway.'
 fi
 # Started from a desktop icon: offer "new or replace" (tap-only).
@@ -258,12 +308,8 @@ if [[ -f "$registration" ]] && ! grep -Fq "\"$DEST/compat_tool\"" "$registration
     fail "Steam tool ID $TOOL_ID is already registered for another directory: $registration"
 fi
 
-# Preserve an existing local profile on --replace/--into, but never trust a
-# profile embedded in a transferable archive. Write it before replacing DEST.
-if [[ -z "$INSTALL_PROFILE" && -f "$DEST/compat_tool/install-profile" &&
-      "$(cat "$DEST/compat_tool/install-profile")" == local-desktop ]]; then
-    INSTALL_PROFILE=local-desktop
-fi
+# The current host/explicit override wins over both old and archived profiles.
+# An unmarked installation remains the standard SteamOS/Gamescope profile.
 rm -f -- "$TEMP/compat_tool/install-profile"
 if [[ "$INSTALL_PROFILE" == local-desktop ]]; then
     if [[ ! -x "$TEMP/compat_tool/tools/lepton-direct-wayland" ||
@@ -272,7 +318,6 @@ if [[ "$INSTALL_PROFILE" == local-desktop ]]; then
         fail 'Bundle lacks local-desktop launcher support; repackage with updated launcher scripts (no Android rebuild required)'
     fi
     printf '%s\n' local-desktop > "$TEMP/compat_tool/install-profile"
-    info 'Installation profile: local-desktop (direct Wayland)'
 fi
 
 if [[ "$MODE" == check ]]; then
