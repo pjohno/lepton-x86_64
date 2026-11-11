@@ -92,6 +92,34 @@ source "$CONFIG"
 source "$IMAGE_DIR/scripts/lib/workspace.sh"
 lepton_workspace
 : "${LEPTON_BUILD_TARGET:?Set LEPTON_BUILD_TARGET in .build-env}"
+# Validate inputs before path guards and host probes, so a wrong flag is
+# reported directly rather than behind an unrelated or slower check.
+[[ "$WITH_NDK" == true || -z "$NDK_PAYLOAD" ]] || fail '--ndk-payload requires --with-ndk'
+DEPLOY_ARGS=()
+if [[ "$WITH_NDK" == true ]]; then
+    NDK_PAYLOAD="$(realpath -e -- "${NDK_PAYLOAD:-${LEPTON_NDK_PAYLOAD:-}}")" || fail 'An existing local NDK payload is required'
+    [[ -d "$NDK_PAYLOAD" && -f "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" && -f "$NDK_PAYLOAD/system/lib64/libndk_translation.so" ]] || fail 'Incomplete extracted NDK payload'
+    (cd "$NDK_PAYLOAD" && sha256sum -c "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" >/dev/null) || fail 'NDK payload hash verification failed'
+    DEPLOY_ARGS=(--with-ndk --ndk-payload "$NDK_PAYLOAD")
+fi
+
+[[ "$WITH_GAPPS" == true || -z "$GOOGLE_IMAGES" ]] || fail '--google-images requires --with-gapps'
+if [[ "$WITH_GAPPS" == true ]]; then
+    GOOGLE_IMAGES="$(realpath -e -- "${GOOGLE_IMAGES:-${LEPTON_GOOGLE_IMAGES:-}}")" || fail 'Local Google logical images required'
+    source "$IMAGE_DIR/scripts/lib/google-services.sh"
+    google_services_check "$GOOGLE_IMAGES" true true
+    DEPLOY_ARGS+=(--with-gapps --google-images "$GOOGLE_IMAGES")
+fi
+BUNDLE_ARGS=()
+if [[ -n "$TOOL_ID" ]]; then
+    [[ "$TOOL_ID" =~ ^[A-Za-z0-9_]{1,96}$ ]] || fail 'Invalid tool ID'
+    BUNDLE_ARGS+=(--tool-id "$TOOL_ID")
+fi
+if [[ -n "$TOOL_NAME" ]]; then
+    [[ "$TOOL_NAME" != *$'\n'* && "$TOOL_NAME" != *$'\r'* ]] || fail 'Invalid tool name'
+    BUNDLE_ARGS+=(--tool-name "$TOOL_NAME")
+fi
+
 BUILDER="${LEPTON_BUILD_CONTAINER:-lepton-builder-ubuntu26:latest}"
 [[ "$BUILDER" == 'lepton-builder-ubuntu26:latest' ]] ||
     fail 'The clean AMD x86_64 workflow requires lepton-builder-ubuntu26:latest'
@@ -142,32 +170,6 @@ CAPABILITY_ARGS=()
 python3 "$IMAGE_DIR/scripts/internal/check-host-capabilities.py" --workflow complete \
     --workspace "$LEPTON_WORKSPACE" --rendering "$SYSBAKE_RENDERING" \
     --jobs "${LEPTON_BUILD_JOBS:-1}" --min-free-gib "${LEPTON_MIN_FREE_GIB:-200}" "${CAPABILITY_ARGS[@]}" || fail 'Complete bundle host capabilities are missing; no expensive work started'
-
-[[ "$WITH_NDK" == true || -z "$NDK_PAYLOAD" ]] || fail '--ndk-payload requires --with-ndk'
-DEPLOY_ARGS=()
-if [[ "$WITH_NDK" == true ]]; then
-    NDK_PAYLOAD="$(realpath -e -- "${NDK_PAYLOAD:-${LEPTON_NDK_PAYLOAD:-}}")" || fail 'An existing local NDK payload is required'
-    [[ -d "$NDK_PAYLOAD" && -f "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" && -f "$NDK_PAYLOAD/system/lib64/libndk_translation.so" ]] || fail 'Incomplete extracted NDK payload'
-    (cd "$NDK_PAYLOAD" && sha256sum -c "$(dirname "$NDK_PAYLOAD")/SHA256SUMS" >/dev/null) || fail 'NDK payload hash verification failed'
-    DEPLOY_ARGS=(--with-ndk --ndk-payload "$NDK_PAYLOAD")
-fi
-
-[[ "$WITH_GAPPS" == true || -z "$GOOGLE_IMAGES" ]] || fail '--google-images requires --with-gapps'
-if [[ "$WITH_GAPPS" == true ]]; then
-    GOOGLE_IMAGES="$(realpath -e -- "${GOOGLE_IMAGES:-${LEPTON_GOOGLE_IMAGES:-}}")" || fail 'Local Google logical images required'
-    source "$IMAGE_DIR/scripts/lib/google-services.sh"
-    google_services_check "$GOOGLE_IMAGES" true true
-    DEPLOY_ARGS+=(--with-gapps --google-images "$GOOGLE_IMAGES")
-fi
-BUNDLE_ARGS=()
-if [[ -n "$TOOL_ID" ]]; then
-    [[ "$TOOL_ID" =~ ^[A-Za-z0-9_]{1,96}$ ]] || fail 'Invalid tool ID'
-    BUNDLE_ARGS+=(--tool-id "$TOOL_ID")
-fi
-if [[ -n "$TOOL_NAME" ]]; then
-    [[ "$TOOL_NAME" != *$'\n'* && "$TOOL_NAME" != *$'\r'* ]] || fail 'Invalid tool name'
-    BUNDLE_ARGS+=(--tool-name "$TOOL_NAME")
-fi
 
 info "Source commit: $(git -C "$REPO" rev-parse HEAD)"
 info "Android checkout (must be new): $TARGET"
