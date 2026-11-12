@@ -44,7 +44,18 @@ Nothing below builds Android, downloads AOSP or reads `.build-env`.
       `gapps`/`ndk`/`widevine` are true, matching the rootfs.
     - Installer `--check` passed (separate tool `lepton_custom_full_20261112_r2`).
   - **Output for the Deck:** `~/lepton-work/r2/bundles/lepton-x86_64-full-20261112-r2.*`.
-- **Still needed:** the Steam Deck install and gameplay checks below.
+- **Steam client update, 2026-11-11 (64-bit client in a runtime container):**
+  - Every Gaming Mode launch failed silently on the Deck. The Gamescope
+    bridge's `xdpyinfo` screen-size query failed and `set -e` ended the
+    bridge. Desktop Mode still worked.
+  - Fixed in `986a9e8`. On 2026-11-12 the Deck launched a game in Gaming Mode
+    with **no launch options** using `base-20261112-r3` (package-only
+    repackage at `986a9e8`).
+  - The bridge hardening in `2477a36` (no orphaned nested Gamescope,
+    `STEAM_GAME` readback confirmation) still needs a live check: focus,
+    controller input, and Stop ending with `Android powered off cleanly`.
+- **Still needed:** the Steam Deck install and gameplay checks below, using a
+  full bundle rebuilt from r3 or later (the r2 bundles carry the old bridge).
 
 ## 0. Linux PC preparation (can be done now)
 
