@@ -6,16 +6,23 @@
   lepton-manage-installs --remove ID [ID...]    # show what would be removed
   lepton-manage-installs --remove ID --execute  # remove it
   lepton-manage-installs --gui                  # tick-list window (zenity/kdialog)
+  lepton-manage-installs --steam-root           # the Steam directory Lepton uses
 
-An install is found from its Steam registration
-(~/.local/share/Steam/compatibilitytools.d/<id>.vdf), from
-~/.config/lepton-x86_64/<id>.env, as a "<dir>.previous-<date>" backup, or as
-an unregistered Lepton directory in ~/.local/share.
+Two installation layouts are recognised, also side by side:
+  legacy        ~/.local/share/<dir>, registered by a standalone
+                <steam>/compatibilitytools.d/<id>.vdf
+  steam-compat  <steam>/compatibilitytools.d/<dir>, self-contained and
+                registered by its own compatibilitytool.vdf (like GE-Proton)
+<steam> is ~/.steam/root, which on native Steam usually resolves to
+~/.local/share/Steam. Installs are also found from
+~/.config/lepton-x86_64/<id>.env, as "<dir>.previous-<date>" backups, and as
+unregistered Lepton directories.
 Removing deletes the directory, its registration and its env file, and moves
 the default (~/.local/bin links) to the newest remaining install. Steam does
 not need to be closed; restart it afterwards to refresh its tool list. An
 install that is currently running is never removed. This tool never closes
-or starts Steam.
+or starts Steam. Other programs (Proton, GE-Proton...) are never listed or
+removed.
 """
 import argparse
 import json
@@ -24,14 +31,13 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 
 HOME = Path.home()
 DATA = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share")
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "lepton-x86_64"
-STEAM = HOME / ".local/share/Steam"
-TOOLS_DIR = STEAM / "compatibilitytools.d"
 BIN = HOME / ".local/bin"
 LINKS = {
     "lepton-add-game": "compat_tool/tools/lepton-add-game",
@@ -43,12 +49,144 @@ LINKS = {
 DESKTOP_ENTRIES = ("lepton-x86_64-add-game.desktop", "lepton-x86_64-gpu-check.desktop",
                    "lepton-x86_64-manage-installs.desktop")
 TITLE = "Lepton: Manage installs"
+LEGACY, STEAM_COMPAT = "legacy", "steam-compat"
+REGISTRATION = "compatibilitytool.vdf"
+# A steam-compat install's registration while it is a backup or being removed:
+# Steam only reads compatibilitytool.vdf, so the tool ID is never registered twice.
+DISABLED_REGISTRATION = "compatibilitytool.vdf.lepton-disabled"
+TOOL_ID = re.compile(r"[A-Za-z0-9_]{1,96}")
+# Files a self-contained (steam-compat) install must have to be accepted.
+STEAM_COMPAT_FILES = ("BUNDLE.json", "toolmanifest.vdf", "lepton-x86_64-entry",
+                      "compat_tool/lepton-x86_64-entry", "compat_tool/toolmanifest.vdf")
+# Markers of a real Steam directory (one is enough).
+STEAM_MARKERS = ("steam.sh", "ubuntu12_32", "steamapps", "userdata", "config/config.vdf",
+                 "compatibilitytools.d")
 
 
 def fail(message):
     raise ValueError(message)
 
 
+class NotFound(ValueError):
+    """No install, backup or directory by that name (exit status 3)."""
+
+
+def use_home(home):
+    """Work on another home directory (other programs and tests import this file)."""
+    global HOME, DATA, CONFIG, BIN
+    HOME = Path(home)
+    DATA = HOME / ".local/share"
+    CONFIG = HOME / ".config/lepton-x86_64"
+    BIN = HOME / ".local/bin"
+    _STEAM_ROOT.clear()
+
+
+class SteamError(ValueError):
+    """No usable, unambiguous Steam directory."""
+
+
+# ---------------------------------------------------------------- Steam directory
+def steam_candidates():
+    """(label, path) of the places a native Steam installation can be found,
+    most authoritative first. LEPTON_STEAM_ROOT replaces them all."""
+    override = os.environ.get("LEPTON_STEAM_ROOT")
+    if override:
+        return [("LEPTON_STEAM_ROOT", Path(override).expanduser())]
+    return [("~/.steam/root", HOME / ".steam/root"),
+            ("~/.local/share/Steam", HOME / ".local/share/Steam")]
+
+
+def looks_like_steam(path):
+    return any((path / marker).exists() for marker in STEAM_MARKERS)
+
+
+def inside(path, parent):
+    return path == parent or parent in path.parents
+
+
+def untrusted(resolved, via_link):
+    """Why this resolved directory must not be used (None if it may)."""
+    try:
+        info = resolved.stat()
+    except OSError as exc:
+        return "cannot be read (%s)" % exc.strerror
+    if not stat.S_ISDIR(info.st_mode):
+        return "is not a directory"
+    if info.st_uid != os.getuid():
+        return "is owned by another user"
+    if info.st_mode & stat.S_IWOTH:
+        return "is writable by every user"
+    if via_link and not inside(resolved, HOME.resolve()) and not looks_like_steam(resolved):
+        return "is a link to a directory outside your home that does not look like Steam"
+    return None
+
+
+_STEAM_ROOT = {}
+
+
+def steam_root(required=True):
+    """The resolved native Steam directory. Raises SteamError when Steam is
+    missing (only if required), unsupported (Flatpak only), untrusted, or when
+    ~/.steam/root and ~/.local/share/Steam are two different installations."""
+    if "root" not in _STEAM_ROOT:
+        _STEAM_ROOT["root"] = _resolve_steam_root()
+    root = _STEAM_ROOT["root"]
+    if isinstance(root, SteamError):
+        if required or not root.args[0].startswith("Steam not found"):
+            raise root
+        return None
+    return root
+
+
+def _resolve_steam_root():
+    found, problems = {}, []
+    for label, path in steam_candidates():
+        if not path.exists():
+            if path.is_symlink():
+                problems.append("%s is a broken link (to %s)" % (label, os.readlink(path)))
+            elif label == "LEPTON_STEAM_ROOT":
+                problems.append("LEPTON_STEAM_ROOT=%s does not exist" % path)
+            continue
+        resolved = path.resolve(strict=True)
+        via_link = resolved != path.absolute()
+        reason = untrusted(resolved, via_link)
+        if reason:
+            return SteamError("Refusing the Steam directory %s -> %s: it %s. Fix it, or set "
+                              "LEPTON_STEAM_ROOT to your Steam directory." % (label, resolved, reason))
+        found.setdefault(resolved, []).append(label)
+    if len(found) > 1:
+        lines = ["  %s -> %s" % (" and ".join(labels), path) for path, labels in found.items()]
+        return SteamError("Two different Steam directories were found:\n" + "\n".join(lines) +
+                          "\nLepton does not guess which one Steam uses. Remove the unused one, or set "
+                          "LEPTON_STEAM_ROOT to the directory Steam uses (usually the ~/.steam/root target).")
+    if found:
+        return next(iter(found))
+    if (HOME / ".var/app/com.valvesoftware.Steam").is_dir():
+        return SteamError("Only Flatpak Steam was found. Lepton needs the native Steam package "
+                          "(Flatpak Steam is not supported).")
+    return SteamError("Steam not found (no ~/.steam/root or ~/.local/share/Steam): install the native "
+                      "Steam package and start it once." + ("" if not problems else " " + "; ".join(problems)))
+
+
+def compat_tools_dir(root=None, create=False):
+    """<steam>/compatibilitytools.d, resolved. Created only on request, and only
+    inside an existing Steam directory (never a made-up Steam installation)."""
+    root = steam_root() if root is None else root
+    path = root / "compatibilitytools.d"
+    if path.exists():
+        resolved = path.resolve(strict=True)
+        reason = untrusted(resolved, resolved != path)
+        if reason:
+            raise SteamError("Refusing %s -> %s: it %s." % (path, resolved, reason))
+        return resolved
+    if path.is_symlink():
+        raise SteamError("%s is a broken link" % path)
+    if create:
+        path.mkdir(mode=0o755)
+    return path
+
+
+# ---------------------------------------------------------------- reading files
 def read_env(path):
     values = {}
     for line in Path(path).read_text(encoding="utf-8").splitlines():
@@ -65,19 +203,58 @@ def vdf_value(text, key):
     return json.loads('"' + match.group(1) + '"') if match else None
 
 
+def vdf_tool_id(text):
+    """The tool ID a compatibilitytool.vdf (or standalone .vdf) declares."""
+    match = re.search(r'"compat_tools"\s*\{\s*"((?:[^"\\]|\\.)*)"\s*\{', text)
+    return json.loads('"' + match.group(1) + '"') if match else None
+
+
+def bundle_metadata(directory):
+    try:
+        data = json.loads((Path(directory) / "BUNDLE.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def is_lepton_dir(path):
     return (path / "compat_tool/lepton").is_file() and (path / "compat_tool/liblepton").is_dir()
 
 
+def complete_steam_compat(path, tool):
+    """A self-contained install: all files present and BUNDLE.json names this tool."""
+    meta = bundle_metadata(path)
+    return (meta is not None and meta.get("tool_id") == tool
+            and all((path / name).is_file() for name in STEAM_COMPAT_FILES))
+
+
+def layout_of(directory, tools=None):
+    directory = Path(directory)
+    if tools is not None and directory.parent == tools and (directory / REGISTRATION).is_file():
+        return STEAM_COMPAT
+    return LEGACY
+
+
 def safe_dir(path):
-    """Only directories strictly inside the user's home may be removed."""
+    """Only directories inside the user's home, or Lepton directories directly
+    inside Steam's compatibilitytools.d, may be removed."""
     try:
         resolved = path.resolve(strict=True)
     except OSError:
         return False
+    if not resolved.is_dir() or resolved.is_symlink():
+        return False
     home = HOME.resolve()
-    return (resolved.is_dir() and not resolved.is_symlink() and home in resolved.parents
-            and resolved not in (home, DATA.resolve(), STEAM.resolve()))
+    protected = {home, DATA.resolve()}
+    root = steam_root(required=False)
+    tools = None
+    if root is not None:
+        protected.add(root)
+        tools = compat_tools_dir(root)
+        protected.add(tools)
+    if resolved in protected:
+        return False
+    return home in resolved.parents or (tools is not None and resolved.parent == tools)
 
 
 def default_tool():
@@ -87,39 +264,75 @@ def default_tool():
         return None
 
 
-def shortcut_count(tool):
+def shortcut_count(tool, root):
     """Count Steam shortcuts mapped to this tool (read-only)."""
+    if root is None:
+        return 0
     try:
-        text = (STEAM / "config/config.vdf").read_text(encoding="utf-8", errors="replace")
+        text = (root / "config/config.vdf").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return 0
     return len(re.findall(r'"name"\s*"%s"' % re.escape(tool), text))
 
 
+# ---------------------------------------------------------------- discovery
 def discover():
-    found = {}
+    """Every Lepton install, backup and unregistered Lepton directory, once each.
+    Two installs registering one tool ID are both listed with conflict=true."""
+    root = steam_root(required=False)
+    tools = compat_tools_dir(root) if root is not None else None
+    entries = []
 
-    def add(tool, directory, name=None, kind="install"):
-        directory = Path(directory)
-        if not is_lepton_dir(directory):
+    def add(tool, directory, name=None, kind="install", vdf=None, env=None):
+        try:
+            directory = Path(directory).resolve(strict=True)
+        except (OSError, RuntimeError):
+            return
+        if not directory.is_dir() or not is_lepton_dir(directory):
             return
         key = tool or directory.name
-        entry = found.setdefault(key, dict(id=key, dir=str(directory), name=name or key, kind=kind,
-                                           vdf=None, env=None))
-        if name and entry["name"] == key:
-            entry["name"] = name
+        for entry in entries:
+            if entry["dir"] == str(directory):
+                # The same install seen again (another registration source, or
+                # the same directory through a symlinked path): merge.
+                entry["vdf"] = entry["vdf"] or vdf
+                entry["env"] = entry["env"] or env
+                if name and entry["name"] == entry["id"]:
+                    entry["name"] = name
+                return
+        meta = bundle_metadata(directory) or {}
+        entry = dict(id=key, dir=str(directory), name=name or key, kind=kind,
+                     layout=layout_of(directory, tools), vdf=vdf, env=env,
+                     bundle=meta.get("bundle_id") or "", conflict=False)
+        if kind == "install":
+            for other in entries:
+                if other["kind"] == "install" and other["id"] == key:
+                    other["conflict"] = entry["conflict"] = True
+        entries.append(entry)
 
-    if TOOLS_DIR.is_dir():
-        for vdf in sorted(TOOLS_DIR.glob("*.vdf")):
+    if tools is not None and tools.is_dir():
+        # Self-contained installs: <tools>/<dir>/compatibilitytool.vdf.
+        for registration in sorted(tools.glob("*/" + REGISTRATION)):
+            directory = registration.parent
+            if directory.name.startswith(".") or directory.is_symlink():
+                continue
+            try:
+                text = registration.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            tool = vdf_tool_id(text)
+            if (tool and TOOL_ID.fullmatch(tool) and vdf_value(text, "install_path") == "."
+                    and is_lepton_dir(directory) and complete_steam_compat(directory, tool)):
+                add(tool, directory, vdf_value(text, "display_name"), vdf=str(registration))
+        # Legacy installs: a standalone <tools>/<id>.vdf naming <dir>/compat_tool.
+        for vdf in sorted(tools.glob("*.vdf")):
             try:
                 text = vdf.read_text(encoding="utf-8")
             except OSError:
                 continue
             path = vdf_value(text, "install_path")
             if path and Path(path).name == "compat_tool":
-                add(vdf.stem, Path(path).parent, vdf_value(text, "display_name"))
-                if vdf.stem in found and found[vdf.stem]["dir"] == str(Path(path).parent):
-                    found[vdf.stem]["vdf"] = str(vdf)
+                add(vdf.stem, Path(path).parent, vdf_value(text, "display_name"), vdf=str(vdf))
     if CONFIG.is_dir():
         for env in sorted(CONFIG.glob("*.env")):
             if env.name == "default.env" or env.is_symlink():
@@ -129,32 +342,54 @@ def discover():
             except OSError:
                 continue
             tool = values.get("LEPTON_X86_TOOL_ID", env.stem)
-            add(tool, values.get("LEPTON_X86_INSTALL_DIR", ""), values.get("LEPTON_X86_TOOL_NAME"))
-            if tool in found:
-                found[tool]["env"] = str(env)
-    if DATA.is_dir():
-        for backup in sorted(DATA.glob("*.previous-*")):
+            add(tool, values.get("LEPTON_X86_INSTALL_DIR", ""), values.get("LEPTON_X86_TOOL_NAME"), env=str(env))
+    places = [DATA] + ([tools] if tools is not None and tools.is_dir() else [])
+    for place in places:
+        if not place.is_dir():
+            continue
+        for backup in sorted(place.glob("*.previous-*")):
             add(None, backup, "Backup of " + backup.name.split(".previous-")[0], "backup")
-        # Lepton directories without a registration or env file (old manual
-        # extractions, or leftovers after a registration was deleted).
-        known = {e["dir"] for e in found.values()}
-        for candidate in sorted(DATA.iterdir()):
-            if (not candidate.name.startswith(".") and str(candidate) not in known
-                    and candidate.is_dir() and not candidate.is_symlink()):
+    for place in places:
+        if not place.is_dir():
+            continue
+        # Lepton directories without a (valid) registration or env file: old
+        # manual extractions, incomplete copies, or leftovers.
+        known = {e["dir"] for e in entries}
+        for candidate in sorted(place.iterdir()):
+            if (not candidate.name.startswith(".") and candidate.is_dir() and not candidate.is_symlink()
+                    and str(candidate.resolve()) not in known):
                 add(None, candidate, "Unregistered " + candidate.name, "unregistered")
     default = default_tool()
-    for entry in found.values():
-        entry["default"] = entry["id"] == default
-        entry["shortcuts"] = shortcut_count(entry["id"]) if entry["kind"] == "install" else 0
+    for entry in entries:
+        entry["default"] = entry["kind"] == "install" and entry["id"] == default and not entry["conflict"]
+        entry["shortcuts"] = shortcut_count(entry["id"], root) if entry["kind"] == "install" else 0
         entry["profiles"] = len(list(Path(entry["dir"]).glob(".runtime-profile.*")))
-    return list(found.values())
+        entry["steam_root"] = str(root) if root is not None else None
+    return entries
 
 
 def lookup(installs, key):
-    for entry in installs:
-        if key in (entry["id"], entry["dir"], Path(entry["dir"]).name):
-            return entry
-    fail("No Lepton install or backup named " + key + " (see --list)")
+    """The one entry for a tool ID, directory or directory name."""
+    # An exact directory first, then the tool ID (two installs with one ID are
+    # refused), then a directory name (e.g. a backup).
+    matches = [e for e in installs if key == e["dir"]]
+    if not matches:
+        matches = [e for e in installs if e["id"] == key]
+    if not matches:
+        matches = [e for e in installs if key == Path(e["dir"]).name]
+    if not matches:
+        try:
+            resolved = str(Path(key).resolve(strict=True))
+            matches = [e for e in installs if e["dir"] == resolved]
+        except OSError:
+            pass
+    if not matches:
+        raise NotFound("No Lepton install or backup named " + key + " (see --list)")
+    if len(matches) > 1:
+        fail("Tool ID %s is registered by %d installs (%s). Steam cannot tell them apart: remove "
+             "the unwanted one by its directory (lepton-manage-installs --remove DIR --execute)."
+             % (key, len(matches), ", ".join(e["dir"] for e in matches)))
+    return matches[0]
 
 
 def in_use(directory):
@@ -233,6 +468,12 @@ def remove(keys, execute):
         messages.append(("Removed: " if execute else "Would remove: ") + entry["name"] + " - " + entry["dir"] + note)
         if not execute:
             continue
+        directory = Path(entry["dir"])
+        registration = directory / REGISTRATION
+        if entry["layout"] == STEAM_COMPAT and registration.is_file():
+            # Unregister first, so a removal that stops half way never leaves
+            # Steam a registered, half-deleted tool.
+            registration.rename(directory / DISABLED_REGISTRATION)
         remove_tree(entry["dir"])
         # Icons that start something inside this install (e.g. Google games).
         for icons in (DATA / "applications", HOME / "Desktop"):
@@ -242,8 +483,10 @@ def remove(keys, execute):
                         icon.unlink()
                 except OSError:
                     pass
-        if entry.get("vdf"):
-            Path(entry["vdf"]).unlink(missing_ok=True)
+        # A standalone (legacy) registration names the removed directory.
+        vdf = entry.get("vdf")
+        if vdf and Path(vdf).parent != directory:
+            Path(vdf).unlink(missing_ok=True)
         if entry.get("env"):
             Path(entry["env"]).unlink(missing_ok=True)
     if execute:
@@ -264,6 +507,7 @@ def remove(keys, execute):
     return messages
 
 
+# ---------------------------------------------------------------- windows
 def dialog_tool():
     choice = os.environ.get("LEPTON_DIALOG")
     if choice in ("zenity", "kdialog"):
@@ -308,8 +552,12 @@ def describe(entry):
     parts = [entry["name"]]
     if entry["default"]:
         parts.append("[default]")
+    if entry["conflict"]:
+        parts.append("[DUPLICATE TOOL ID]")
     if entry["kind"] == "install":
         parts.append("%d Steam shortcut(s)" % entry["shortcuts"])
+        if entry["layout"] == STEAM_COMPAT:
+            parts.append("Steam compatibility-tool folder")
     if entry["profiles"]:
         parts.append("%d saved app profile(s), e.g. Google sign-in" % entry["profiles"])
     parts.append(entry["dir"])
@@ -323,7 +571,8 @@ def gui_remove(exclude, prompt, quiet_if_empty):
         if not quiet_if_empty:
             dialog(ui, "info", "No other Lepton installs or backups were found.")
         return 0
-    picked = choose(ui, prompt, [(e["id"], describe(e), False) for e in candidates],
+    # Directories are unique even when two installs share a tool ID.
+    picked = choose(ui, prompt, [(e["dir"], describe(e), False) for e in candidates],
                     "Select bundle to remove")
     if not picked:
         return 0
@@ -343,7 +592,7 @@ def gui_remove(exclude, prompt, quiet_if_empty):
 def gui_choose_target(new_id, new_name):
     """Ask whether to install as a new tool, reinstall this one, or overwrite
     another install. Prints "new" or the tool ID to overwrite."""
-    installs = [e for e in discover() if e["kind"] == "install"]
+    installs = [e for e in discover() if e["kind"] == "install" and not e["conflict"]]
     same = [e for e in installs if e["id"] == new_id]
     others = [e for e in installs if e["id"] != new_id]
     if not installs:
@@ -365,6 +614,21 @@ def gui_choose_target(new_id, new_name):
     return 0
 
 
+def gui_choose_layout(new_name, directory):
+    """Ask where a new tool goes. Prints "legacy" or "steam-compat"."""
+    ui = dialog_tool()
+    tools = "~/.steam/root/compatibilitytools.d"
+    rows = [(LEGACY, "Lepton's folder: ~/.local/share/%s, registered with Steam by a small file "
+                     "(recommended; how earlier versions installed)" % directory, True),
+            (STEAM_COMPAT, "Steam's compatibility-tool folder: %s/%s, one self-contained folder "
+                           "like GE-Proton" % (tools, directory), False)]
+    picked = choose(ui, "Where should " + new_name + " be installed?", rows, "Choose one", radio=True)
+    if not picked:
+        return 1
+    print(picked[0])
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     action = parser.add_mutually_exclusive_group(required=True)
@@ -372,16 +636,23 @@ def main():
     action.add_argument("--remove", nargs="+", metavar="ID", help="Tool ID, directory or backup name")
     action.add_argument("--gui", action="store_true", help="Choose installs to remove in a window")
     action.add_argument("--print-dir", metavar="ID", help="Print the directory of an install")
+    action.add_argument("--print-layout", metavar="ID", help="Print an install's layout (legacy or steam-compat)")
     action.add_argument("--check-free", metavar="ID", help="Fail if the install is currently running")
+    action.add_argument("--steam-root", action="store_true", help="Print the resolved Steam directory")
+    action.add_argument("--steam-tools", action="store_true",
+                        help="Print the resolved Steam compatibilitytools.d (it may not exist yet)")
     action.add_argument("--gui-choose-target", action="store_true",
                         help="(installer) ask: install as new or replace an existing install")
+    action.add_argument("--gui-choose-layout", action="store_true",
+                        help="(installer) ask: Lepton's folder or Steam's compatibility-tool folder")
     parser.add_argument("--json", action="store_true", help="With --list: machine-readable output")
     parser.add_argument("--execute", action="store_true", help="With --remove: actually remove")
     parser.add_argument("--exclude", action="append", default=[], help="With --gui: hide this tool ID")
     parser.add_argument("--prompt", default="Select Lepton installs to remove:", help="With --gui")
     parser.add_argument("--quiet-if-empty", action="store_true", help="With --gui: no message if nothing found")
     parser.add_argument("--new-id", help="With --gui-choose-target")
-    parser.add_argument("--new-name", help="With --gui-choose-target")
+    parser.add_argument("--new-name", help="With --gui-choose-target / --gui-choose-layout")
+    parser.add_argument("--new-dir", help="With --gui-choose-layout: the install directory name")
     args = parser.parse_args()
     if args.list:
         installs = discover()
@@ -400,6 +671,15 @@ def main():
     if args.print_dir:
         print(lookup(discover(), args.print_dir)["dir"])
         return 0
+    if args.print_layout:
+        print(lookup(discover(), args.print_layout)["layout"])
+        return 0
+    if args.steam_root:
+        print(steam_root())
+        return 0
+    if args.steam_tools:
+        print(compat_tools_dir())
+        return 0
     if args.check_free:
         entry = lookup(discover(), args.check_free)
         if in_use(entry["dir"]):
@@ -409,12 +689,19 @@ def main():
         if not (args.new_id and args.new_name):
             fail("--gui-choose-target needs --new-id and --new-name")
         return gui_choose_target(args.new_id, args.new_name)
+    if args.gui_choose_layout:
+        if not (args.new_name and args.new_dir):
+            fail("--gui-choose-layout needs --new-name and --new-dir")
+        return gui_choose_layout(args.new_name, args.new_dir)
     return gui_remove(set(args.exclude), args.prompt, args.quiet_if_empty)
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
+    except NotFound as exc:
+        print("ERROR:", exc, file=sys.stderr)
+        sys.exit(3)
     except (ValueError, OSError, KeyError) as exc:
         print("ERROR:", exc, file=sys.stderr)
         sys.exit(1)

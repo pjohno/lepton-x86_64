@@ -343,7 +343,8 @@ What each step does:
    (inotify-tools, plus ADB for local testing only), boot Android once to bake its first-boot data (private
    Podman storage, no GPU needed) in `stages/<ID>/`, then write the bundle to
    `bundles/`. Bundle IDs must be new each time (a date works well). Each one becomes its own Steam compatibility tool, named
-   **Lepton x86_64 (community) - *bundle ID***.
+   **lepton *bundle ID* x86_64 (community)** (GApps, NDK or Widevine are added
+   after the version: **lepton *bundle ID* x86_64 (community, GApps + NDK)**).
 
 Add `--check` instead of `--execute` to steps 2 to 5 to see what would happen
 without changing anything.
@@ -682,7 +683,7 @@ On the Deck, install alongside existing tools:
 bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-fullscreen-test.install.sh --new
 ```
 
-Restart Steam and manually select `Lepton x86_64 (community) - fullscreen-test`
+Restart Steam and manually select `lepton fullscreen-test x86_64 (community)`
 for a test shortcut. The tool ID is `lepton_x86_64_fullscreen_test`; do not use
 `--replace`, `--into` or a transfer `--replace` option. The bundle carries no
 local-desktop profile, so Deck Desktop Mode stays windowed with touch mode 1,
