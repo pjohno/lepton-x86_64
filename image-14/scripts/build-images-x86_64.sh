@@ -149,6 +149,17 @@ GLSLANG_MOUNT=()
 if [[ "$BUILDER" == lepton-builder-glslang14:latest ]]; then
   GLSLANG_MOUNT=(-v "$GLSLANG:/usr/bin/glslangValidator:ro")
 fi
+# Intel Iris/ANV need Mesa's host shader tools (BoardConfig.mk selects
+# -Dmesa-clc=system). They link against the Ubuntu 26 builder's LLVM 22, so
+# only that builder can run them.
+MESA_CLC_BOOTSTRAP="$ROOT/image-14/scripts/internal/bootstrap-mesa-clc.sh"
+MESA_CLC_BIN="$TARGET/out/host/mesa-clc-ubuntu26/bin"
+[[ "$BUILDER" == lepton-builder-ubuntu26:latest ]] ||
+  fail "Intel Mesa drivers need the Ubuntu 26 builder (LEPTON_BUILD_CONTAINER=lepton-builder-ubuntu26:latest)"
+MESA_CLC_MOUNT=(
+  -v "$MESA_CLC_BIN/mesa_clc:/usr/local/bin/mesa_clc:ro"
+  -v "$MESA_CLC_BIN/vtn_bindgen2:/usr/local/bin/vtn_bindgen2:ro"
+)
 
 [[ -f "$TARGET/.lepton-clean14-owner" ]] ||
   fail "Checkout is not owned by the preparation workflow"
@@ -254,6 +265,7 @@ if [[ "$ACTION" == "--check" ]]; then
     info "[INFO] glslang will be bootstrapped during --execute"
     bash "$BOOTSTRAP" --check
   fi
+  bash "$MESA_CLC_BOOTSTRAP" --check
 
   info "[PASS] Image-build preflight completed"
   info "No compilation started"
@@ -303,6 +315,8 @@ if [[ "$BUILDER" == lepton-builder-glslang14:latest ]]; then
   [[ -x "$GLSLANG" ]] ||
     fail "glslang bootstrap did not produce an executable"
 fi
+# Builds mesa_clc/vtn_bindgen2 when missing or when the Mesa sources changed.
+bash "$MESA_CLC_BOOTSTRAP" --execute
 
 mkdir -p -- "$LOG_DIR"
 
@@ -427,6 +441,7 @@ podman run --rm -i --cidfile "$CID_FILE" \
   -v "$ROOT/image-14:/workspace:ro" \
   -v "$TARGET:/workspace/output:rw" \
   "${GLSLANG_MOUNT[@]}" \
+  "${MESA_CLC_MOUNT[@]}" \
   -w /workspace/output \
   "$BUILDER" /bin/bash -se <<'INNER' &
 set -Eeo pipefail
@@ -435,6 +450,7 @@ cd /workspace/output
 
 echo "[INFO] Using glslang validator:"
 /usr/bin/glslangValidator --version | head -4
+echo "[INFO] Using Mesa host shader tools: $(command -v mesa_clc) $(command -v vtn_bindgen2)"
 
 echo "[INFO] Loading Android build environment"
 # Android envsetup and build functions may access unset variables.

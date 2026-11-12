@@ -97,9 +97,10 @@ function setup_props()
         props_echo "ro.hardware.vulkan=pastel"
     else
         if [[ "$(uname -m)" == "x86_64" ]]; then
-            # x86_64: ANGLE for EGL/GLES, RADV for Vulkan, generic minigbm.
+            # x86_64: ANGLE for EGL/GLES, RADV (AMD) or ANV (Intel) for
+            # Vulkan, generic minigbm.
             props_echo "ro.hardware.egl=angle"
-            props_echo "ro.hardware.vulkan=radeon"
+            props_echo "ro.hardware.vulkan=$(lepton_vulkan_hal)"
             props_echo "ro.hardware.gralloc=minigbm_gbm_mesa"
             props_echo "debug.angle.feature_overrides_disabled=supportsSwapchainMaintenance1"
         else

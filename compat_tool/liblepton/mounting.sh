@@ -462,17 +462,44 @@ function disable_qti_display()
 
 # x86_64 port: the Android image ships only AMD (RADV/radeonsi) GPU drivers.
 # Stop early with a clear message instead of an opaque Android graphics failure.
+# The GPU family Lepton drives with hardware graphics: "amd" (vendor 0x1002)
+# when any AMD render node exists, else "intel" (0x8086), else empty.
+function lepton_host_gpu_vendor()
+{
+    local vendor_file vendor found=""
+    for vendor_file in "${LEPTON_SYSFS_DRM:-/sys/class/drm}"/renderD*/device/vendor; do
+        [[ -r "${vendor_file}" ]] || continue
+        vendor="$(<"${vendor_file}")"
+        [[ "${vendor}" == "0x1002" ]] && { echo amd; return 0; }
+        [[ "${vendor}" == "0x8086" ]] && found=intel
+    done
+    echo "${found}"
+}
+
+# Android Vulkan HAL suffix (vendor/lib64/hw/vulkan.<suffix>.so) for this host.
+# LEPTON_VULKAN_DRIVER=radeon|intel overrides the detection.
+function lepton_vulkan_hal()
+{
+    case "${LEPTON_VULKAN_DRIVER:-}" in
+        radeon|intel) echo "${LEPTON_VULKAN_DRIVER}"; return 0 ;;
+    esac
+    if [[ "$(lepton_host_gpu_vendor)" == intel ]]; then echo intel; else echo radeon; fi
+}
+
 function check_host_gpu()
 {
     [[ "$(uname -m)" == "x86_64" ]] || return 0
     [[ "${LEPTON_FORCE_SOFTWARE:-}" != "true" && "${LEPTON_SKIP_GPU_CHECK:-false}" != "true" ]] || return 0
-    local vendor_file
-    for vendor_file in /sys/class/drm/renderD*/device/vendor; do
-        [[ -r "${vendor_file}" ]] || continue
-        [[ "$(<"${vendor_file}")" == "0x1002" ]] && return 0
-    done
-    die "Lepton x86_64: no AMD GPU render node (/dev/dri/renderD*, vendor 0x1002) found." \
-        "This build only includes AMD RADV/radeonsi drivers (Steam Deck and AMD Radeon GPUs)." \
+    case "$(lepton_host_gpu_vendor)" in
+        amd) return 0 ;;
+        intel)
+            [[ -f "$(lepton_rootfs_dir)/vendor/lib64/hw/vulkan.intel.so" ]] && return 0
+            die "Lepton x86_64: this Lepton tool has no Intel graphics drivers (an AMD-only bundle)." \
+                "Install a bundle built with Intel support, or set LEPTON_FORCE_SOFTWARE=true to try slow software rendering instead."
+            ;;
+    esac
+    die "Lepton x86_64: no AMD or Intel GPU render node (/dev/dri/renderD*) found." \
+        "This build only includes AMD (RADV/radeonsi) and Intel (ANV/Iris) drivers." \
         "Set LEPTON_FORCE_SOFTWARE=true to try slow software rendering instead."
 }
 

@@ -201,12 +201,15 @@ grep -Fq " $(basename -- "$ARCHIVE")" "$CHECKSUM" || grep -Fq "*$(basename -- "$
     fail 'Checksum file does not list this archive'
 pass 'Archive checksum verified'
 
-amd=false
+amd=false intel=false
 for vendor_file in /sys/class/drm/renderD*/device/vendor; do
     [[ -r "$vendor_file" && "$(<"$vendor_file")" == 0x1002 ]] && amd=true
+    [[ -r "$vendor_file" && "$(<"$vendor_file")" == 0x8086 ]] && intel=true
 done
 if [[ "$amd" == true ]]; then
     pass 'AMD GPU render node found (hardware acceleration available)'
+elif [[ "$intel" == true ]] && tar -tzf "$ARCHIVE" 2>/dev/null | grep '/vendor/lib64/hw/vulkan\.intel\.so$' >/dev/null; then
+    pass 'Intel GPU render node found and this bundle has Intel drivers (experimental)'
 elif [[ "$ALLOW_NON_AMD" == true ]]; then
     info 'WARNING: no AMD GPU found; launch games with LEPTON_FORCE_SOFTWARE=true'
 else

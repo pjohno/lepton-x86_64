@@ -12,6 +12,7 @@ mkdir -p "$fake/image-14/scripts/"{lib,internal} "$fake/image-14/patches" "$fake
 cp "$repo/image-14/scripts/"{build-images-x86_64.sh,build-incremental-bundle-x86_64.sh} "$fake/image-14/scripts/"
 cp "$repo/image-14/scripts/lib/"{workspace.sh,image-provenance.sh,packaging-fuse.sh,package-images.sh} "$fake/image-14/scripts/lib/"
 cp "$repo/image-14/scripts/internal/"{check-active-compilation.py,validate-android-images.py} "$fake/image-14/scripts/internal/"
+printf '#!/bin/bash\n# Fixture: Mesa host tools need the real builder.\nexit 0\n' > "$fake/image-14/scripts/internal/bootstrap-mesa-clc.sh"
 cat >> "$fake/image-14/scripts/lib/image-provenance.sh" <<'CONFIG'
 LEPTON_COPIED_TREES=('image-14/hardware|hardware/waydroid')
 LEPTON_CUSTOM_PATCHES=('hardware/waydroid|0009-hwc-local-wayland-fullscreen.patch')

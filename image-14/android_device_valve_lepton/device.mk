@@ -96,7 +96,8 @@ PRODUCT_PACKAGES += \
     android.hardware.graphics.mapper@4.0-impl.minigbm_gbm_mesa \
     dri_gbm \
     libgallium_dri \
-    vulkan.radeon
+    vulkan.radeon \
+    vulkan.intel
 else
 PRODUCT_PACKAGES += \
     android.hardware.graphics.allocator@4.0-service.minigbm_msm \

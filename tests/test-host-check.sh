@@ -54,7 +54,7 @@ refused 'Steam not found' HOME="$work/empty-home"
 
 # Intel graphics: a warning, not a failure.
 ok LEPTON_SYSFS_DRM="$work/drm-intel"
-grep -q '^\[WARN\] No AMD GPU' "$work/out"
+grep -q '^\[WARN\] Intel GPU' "$work/out"
 
 stub direct podman setfattr python3 kdialog
 # Both desktops use direct Wayland and need no Gamescope or X11 utilities.
