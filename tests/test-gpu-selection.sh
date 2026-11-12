@@ -151,5 +151,9 @@ done
 if install_check "$nvidia" intel; then fail 'NVIDIA host accepted'; fi
 grep -q 'No AMD GPU found' "$work/out"
 [[ ! -e "$work/home/.local/share/Steam/compatibilitytools.d" ]] || fail '--check installed something'
+# Installed Intel bundles default the runtime test runner to Intel rendering.
+grep -q "elif \[\[ \"\$bundle_has_intel\" == true \]\]; then printf 'LEPTON_X86_RENDERING=intel" "$repo/compat_tool/tools/lepton-install-bundle" ||
+    fail 'Intel install not recorded for run-apk.sh'
+grep -q 'VULKAN_HAL=intel' "$repo/tests/runtime/run-apk.sh" || fail 'run-apk.sh has no Intel rendering mode'
 
 echo 'PASS: GPU selection (AMD/Intel/hybrid/NVIDIA), selected render node, missing-driver, old-Intel and override refusals, installer Intel bundle detection'

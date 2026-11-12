@@ -433,7 +433,9 @@ env_file="$CONFIG_DIR/$TOOL_ID.env"
     printf 'LEPTON_X86_GAPPS=%q\n' "$HAS_GAPPS"
     printf 'LEPTON_X86_NDK=%q\n' "$HAS_NDK"
     printf 'LEPTON_X86_WIDEVINE=%q\n' "$HAS_WIDEVINE"
-    if [[ "$amd" == true ]]; then printf 'LEPTON_X86_RENDERING=amd\n'; else printf 'LEPTON_X86_RENDERING=software\n'; fi
+    if [[ "$amd" == true ]]; then printf 'LEPTON_X86_RENDERING=amd\n'
+    elif [[ "$bundle_has_intel" == true ]]; then printf 'LEPTON_X86_RENDERING=intel\n'
+    else printf 'LEPTON_X86_RENDERING=software\n'; fi
     printf 'LEPTON_X86_DISPLAY=desktop\n'
 } > "$env_file.tmp"
 mv -f -- "$env_file.tmp" "$env_file"
