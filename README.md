@@ -119,7 +119,7 @@ Properties > Launch Options, followed by `%command%`:
   translation for ARM-only games, and Widevine protected video
   ([GAPPS.md](GAPPS.md)).
 
-Compatibility varies from game to game.
+Compatibility varies from game to game: see the [tested games](GAMES.md).
 
 ## Known limitations
 
@@ -144,6 +144,7 @@ Compatibility varies from game to game.
 | Guide | For |
 | --- | --- |
 | [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md) | Installing, updating, several installs side by side, game data, troubleshooting |
+| [GAMES.md](GAMES.md) | Games tested with Lepton, and how to report one |
 | [BUILDING.md](BUILDING.md) | Building Android and the Deck bundles from source |
 | [GAPPS.md](GAPPS.md) | Optional Google Play services, ARM64 translation and Widevine bundles |
 | [RELEASING.md](RELEASING.md) | Maintainers: publishing a GitHub release |
