@@ -188,7 +188,25 @@ lepton_check_binder || exit 1
 
 message_file="$(mktemp "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/lepton-message.XXXXXX" 2>/dev/null)" || message_file=""
 [[ -z "$message_file" ]] || export LEPTON_MESSAGE_FILE="$message_file"
-trap cleanup_message_file EXIT
+# The nested Gamescope (and Android inside it) never outlives the bridge: on
+# any exit, including an unexpected error, it gets TERM and time for Lepton's
+# graceful Stop (HOME, save wait, Android power-off: up to about 20s), and is
+# killed only after LEPTON_BRIDGE_STOP_TIMEOUT seconds.
+child=""
+stop_timeout="${LEPTON_BRIDGE_STOP_TIMEOUT:-30}"
+[[ "$stop_timeout" =~ ^[1-9][0-9]*$ ]] || stop_timeout=30
+stop_child() {
+    [[ -n "$child" ]] && kill -0 "$child" 2>/dev/null || return 0
+    kill -TERM "$child" 2>/dev/null || true
+    local tick
+    for ((tick = 0; tick < stop_timeout * 4; tick++)); do
+        kill -0 "$child" 2>/dev/null || return 0
+        sleep 0.25 2>/dev/null || true
+    done
+    echo "WARNING: nested Gamescope $child did not stop within ${stop_timeout}s after TERM; killing it" >&2
+    kill -KILL "$child" 2>/dev/null || true
+}
+trap 'stop_child; cleanup_message_file' EXIT
 
 if [[ "$display_mode" == desktop ]]; then
     # A movable KDE window (fullscreen only on request), no X11 Steam window
@@ -210,9 +228,12 @@ gamescope --backend sdl --expose-wayland -f \
     -- sh -c 'export GAMESCOPE_WAYLAND_DISPLAY="$WAYLAND_DISPLAY"; exec "$@"' sh "$@" &
 child=$!
 
+# Steam Stop/INT: forward TERM; the wait below then lets Lepton finish.
 trap 'kill -TERM "$child" 2>/dev/null || true' INT TERM
 
 tagged=0
+set_warned=0
+confirm_warned=0
 for ((i=0; i<120; i++)); do
     kill -0 "$child" 2>/dev/null || break
 
@@ -226,13 +247,20 @@ for ((i=0; i<120; i++)); do
         if [[ "$owner" == "$child" ]]; then
             if DISPLAY="$outer_display" xprop -id "$win" \
                 -f STEAM_GAME 32c -set STEAM_GAME "$app_id"; then
+                # Confirmed only when Steam's property reads back as this AppID.
                 game_property=$(DISPLAY="$outer_display" xprop -id "$win" STEAM_GAME 2>/dev/null |
                     awk -F '= ' 'NF > 1 {print $2}') || game_property=""
-                echo "Assigned Steam AppID $app_id to window $win (_NET_WM_PID $owner; STEAM_GAME now ${game_property:-unreadable})"
-                tagged=1
-                break
+                if [[ "$game_property" == "$app_id" ]]; then
+                    echo "Assigned Steam AppID $app_id to window $win (_NET_WM_PID $owner; STEAM_GAME confirmed)"
+                    tagged=1
+                    break
+                fi
+                (( confirm_warned )) || echo "WARNING: STEAM_GAME on Gamescope window $win reads back as '${game_property:-<unreadable>}', expected $app_id; retrying" >&2
+                confirm_warned=1
+            else
+                (( set_warned )) || echo "WARNING: could not set STEAM_GAME on Gamescope window $win; retrying" >&2
+                set_warned=1
             fi
-            echo "WARNING: could not set STEAM_GAME on Gamescope window $win; retrying" >&2
         fi
     done < <(
         DISPLAY="$outer_display" xwininfo -root -tree 2>/dev/null |
@@ -250,5 +278,11 @@ fi
 base_layer=$(DISPLAY="$outer_display" xprop -root GAMESCOPECTRL_BASELAYER_APPID 2>/dev/null) || base_layer=""
 echo "Gamescope base layer: ${base_layer#*= }"
 wait "$child" || status=$?
+# A trapped INT/TERM interrupts wait while Lepton is still stopping: give it
+# the same bounded time as on exit, then collect its status.
+if kill -0 "$child" 2>/dev/null; then
+    stop_child
+    wait "$child" 2>/dev/null || status=$?
+fi
 show_launch_message
 exit "${status:-0}"

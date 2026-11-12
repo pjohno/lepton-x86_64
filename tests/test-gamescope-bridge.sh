@@ -26,7 +26,9 @@ fake xdpyinfo 'echo "  dimensions:    1280x800 pixels (338x211 millimeters)"'
 fake xwininfo 'echo "     0x400001 \"gamescope\": (\"gamescope\" \"gamescope\")  1280x800+0+0  +0+0"
 echo "     0x500002 \"Lepton: game could not start\": (\"kdialog\")  600x300+0+0  +0+0"
 echo "     0x500003 \"Lepton Binder Unavailable\": (\"kdialog\")  600x300+0+0  +0+0"'
-fake xprop 'if [[ "$*" == *_NET_WM_PID* ]]; then echo "_NET_WM_PID(CARDINAL) = $(cat "$WORK/gamescope.pid" 2>/dev/null)"; else echo "xprop $*" >> "$LOG"; fi'
+fake xprop 'if [[ "$*" == *_NET_WM_PID* ]]; then echo "_NET_WM_PID(CARDINAL) = $(cat "$WORK/gamescope.pid" 2>/dev/null)"
+elif [[ "$*" == *" STEAM_GAME" && "$*" != *-set* ]]; then echo "STEAM_GAME(CARDINAL) = ${SteamAppId:-}"
+else echo "xprop $*" >> "$LOG"; fi'
 fake kdialog 'echo "kdialog QT=${QT_QPA_PLATFORM:-} SCALE=${QT_SCALE_FACTOR:-} DISPLAY=${DISPLAY:-} $*" >> "$LOG"; [[ "${QT_QPA_PLATFORM:-}" != xcb ]] || sleep 0.5'
 # Binder present: the bridge's preflight reads /proc/filesystems with grep.
 fake grep "[[ \"\${!#}\" == /proc/filesystems ]] && exit \${FAKE_NO_BINDER:-0}; exec '$real_grep' \"\$@\""
@@ -233,10 +235,61 @@ rm -f "$work/x11/"*
 # order is logged read-only and never changed by the bridge.
 xfake xprop 'case "$*" in *_NET_WM_PID*|*-set*) exec "$WORK/bin/xprop" "$@" ;; *-root*) echo "xprop $*" >> "$LOG"; echo "GAMESCOPECTRL_BASELAYER_APPID(CARDINAL) = 769, 123" ;; *) echo "STEAM_GAME(CARDINAL) = 123" ;; esac'
 x11_run || fail 'tagged launch failed'
-"$real_grep" -qx 'Assigned Steam AppID 123 to window 0x400001 (_NET_WM_PID '"$(cat "$work/gamescope.pid")"'; STEAM_GAME now 123)' "$work/out" || fail "tag not confirmed: $(cat "$work/out")"
+"$real_grep" -qx 'Assigned Steam AppID 123 to window 0x400001 (_NET_WM_PID '"$(cat "$work/gamescope.pid")"'; STEAM_GAME confirmed)' "$work/out" || fail "tag not confirmed: $(cat "$work/out")"
 "$real_grep" -qx 'Gamescope base layer: 769, 123' "$work/out"
 ! "$real_grep" -q -- '-root.*-set\|-set.*GAMESCOPECTRL' "$work/log" || fail 'bridge changed the Gamescope layer order'
 rm -f "$work/x11/"*
+# STEAM_GAME reads back wrong: not reported as confirmed; one warning, retries,
+# and the launch continues to its normal end (no termination, no orphan).
+xfake xprop 'case "$*" in *_NET_WM_PID*|*-set*) exec "$WORK/bin/xprop" "$@" ;; *-root*) exit 1 ;; *) echo "STEAM_GAME(CARDINAL) = 999" ;; esac'
+x11_run || fail "launch ended when STEAM_GAME could not be confirmed: $(cat "$work/err")"
+! "$real_grep" -q 'STEAM_GAME confirmed' "$work/out" || fail 'unconfirmed STEAM_GAME reported as confirmed'
+[[ "$("$real_grep" -c "reads back as '999', expected 123; retrying" "$work/err")" == 1 ]] || fail "readback warning missing or repeated: $(cat "$work/err")"
+"$real_grep" -q 'WARNING: Gamescope window was not identified or tagged' "$work/err"
+! kill -0 "$(cat "$work/gamescope.pid")" 2>/dev/null || fail 'Gamescope still running after the bridge'
+rm -f "$work/x11/"*
+
+# Lifecycle: the nested Gamescope never outlives the bridge.
+# Long-running Gamescope that stops on TERM after its own (graceful) delay.
+xfake gamescope 'echo "$$" > "$WORK/gamescope.pid"; echo "gamescope $*" >> "$LOG"
+trap '"'"'echo "gamescope got TERM" >> "$LOG"; /bin/sleep "${FAKE_STOP_DELAY:-0}"; echo "gamescope stopped cleanly" >> "$LOG"; kill "$!" 2>/dev/null; exit 0'"'"' TERM
+/bin/sleep 60 & wait'
+alive() { kill -0 "$1" 2>/dev/null; }
+wait_for() { local n; for ((n = 0; n < 100; n++)); do "$@" && return 0; /bin/sleep 0.05; done; return 1; }
+# 1. Unexpected error after Gamescope started: the bridge reports it and stops
+#    Gamescope instead of leaving it (and Android) running.
+xfake sleep 'exit 1'
+xfake xwininfo 'exit 0'
+if x11_run; then fail 'bridge ignored a failing command'; fi
+"$real_grep" -qE '^ERROR: lepton-gamescope-bridge stopped at line [0-9]+: sleep 0.25 \(exit 1\)$' "$work/err" || fail "unexpected stop was silent: $(cat "$work/err")"
+"$real_grep" -qx 'gamescope got TERM' "$work/log" || fail 'Gamescope not stopped after an unexpected error'
+! alive "$(cat "$work/gamescope.pid")" || fail 'Gamescope orphaned after an unexpected error'
+rm -f "$work/x11/sleep" "$work/x11/xwininfo"
+# 2. Steam Stop (TERM) and Ctrl+C (INT) to the bridge: forwarded, and the
+#    bridge waits for a slow graceful stop instead of returning early.
+for sig in TERM INT; do
+    rm -f "$work/log" "$work/gamescope.pid"
+    env --default-signal=INT,TERM "${x11[@]}" FAKE_STOP_DELAY=1 "$bridge" direct-game > "$work/out" 2> "$work/err" &
+    bridge_pid=$!
+    wait_for "$real_grep" -q 'STEAM_GAME confirmed' "$work/out" || fail "$sig: bridge never tagged its window"
+    kill "-$sig" "$bridge_pid"
+    wait "$bridge_pid" || true
+    "$real_grep" -qx 'gamescope stopped cleanly' "$work/log" || fail "$sig: bridge returned before Gamescope finished stopping"
+    ! alive "$(cat "$work/gamescope.pid")" || fail "$sig: Gamescope still running after the bridge"
+    ! "$real_grep" -q 'killing it' "$work/err" || fail "$sig: graceful stop was force-killed"
+done
+# 3. A Gamescope that ignores TERM is killed after LEPTON_BRIDGE_STOP_TIMEOUT.
+xfake gamescope 'echo "$$" > "$WORK/gamescope.pid"; echo "gamescope $*" >> "$LOG"; trap "" TERM; exec /bin/sleep 60'
+rm -f "$work/log" "$work/gamescope.pid"
+env --default-signal=INT,TERM "${x11[@]}" LEPTON_BRIDGE_STOP_TIMEOUT=1 "$bridge" direct-game > "$work/out" 2> "$work/err" &
+bridge_pid=$!
+wait_for test -s "$work/gamescope.pid" || fail 'stubborn Gamescope never started'
+/bin/sleep 0.3
+kill -TERM "$bridge_pid"; wait "$bridge_pid" || true
+"$real_grep" -q 'did not stop within 1s after TERM; killing it' "$work/err" || fail "stubborn Gamescope not reported: $(cat "$work/err")"
+wait_for sh -c '! kill -0 "$1" 2>/dev/null' sh "$(cat "$work/gamescope.pid")" || fail 'stubborn Gamescope survived the bridge'
+rm -f "$work/x11/"*
+
 # Any other unexpected stop names its line and command instead of vanishing.
 xfake sleep 'exit 1'
 xfake xwininfo 'exit 0'
@@ -247,4 +300,4 @@ rm -f "$work/x11/"*
 
 # The bridge never asks Gamescope for a borderless window.
 ! "$real_grep" -qE -- '(^|[[:space:]])(-b|--borderless)([[:space:]]|$)' "$bridge" || fail 'bridge passes --borderless'
-echo 'PASS: gamescope bridge: desktop default 1, Gaming Mode default 4 and experimental overrides 0/1/4, scoped validation and logging, window/fullscreen sizing and Steam tagging, direct Wayland unchanged, refused launches and missing Binder shown as popups; SteamRT64 Gaming Mode X11 failures degrade with messages (size fallback, tagging retries, no silent stop)'
+echo 'PASS: gamescope bridge: desktop default 1, Gaming Mode default 4 and experimental overrides 0/1/4, scoped validation and logging, window/fullscreen sizing and Steam tagging, direct Wayland unchanged, refused launches and missing Binder shown as popups; SteamRT64 Gaming Mode X11 failures degrade with messages (size fallback, confirmed STEAM_GAME readback, tagging retries, no silent stop, nested Gamescope never orphaned and given time for graceful Stop)'
