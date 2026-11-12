@@ -18,7 +18,8 @@ SELinux-enforcing systems** need a one-time SELinux policy module, or Android
 never finishes starting: see
 [one-time SELinux setup](https://github.com/pjohno/lepton-x86_64/blob/main/compat_tool/LOCAL-DESKTOP.md#one-time-selinux-setup-fedora).
 The Android image contains AMD graphics drivers only; other GPUs (for example
-Intel) are not supported.
+Intel or NVIDIA) need slow software rendering: install with `--allow-non-amd`
+and launch with `LEPTON_FORCE_SOFTWARE=true %command%`.
 
 ## Install
 

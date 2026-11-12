@@ -31,8 +31,9 @@ touchscreen, and keeps its saves between launches.
 
 **Desktop PCs** with an **AMD GPU** and a **Wayland** desktop can install
 Lepton too, but this is experimental. On Fedora GNOME and KDE Plasma, games
-run full screen with mouse and keyboard input. Other GPUs are not supported, because the
-Android image only contains AMD graphics drivers. **Fedora and other
+run full screen with mouse and keyboard input. The Android image only contains
+AMD graphics drivers, so other GPUs need slow software rendering (install with
+`--allow-non-amd`, launch with `LEPTON_FORCE_SOFTWARE=true %command%`). **Fedora and other
 SELinux-enforcing systems** need a small SELinux policy module installed once,
 or Android never finishes starting: see
 [desktop setup](compat_tool/LOCAL-DESKTOP.md#one-time-selinux-setup-fedora).
@@ -118,7 +119,7 @@ Properties > Launch Options, followed by `%command%`:
   translation for ARM-only games, and Widevine protected video
   ([GAPPS.md](GAPPS.md)).
 
-Compatibility varies from game to game.
+Compatibility varies from game to game: see the [tested games](GAMES.md).
 
 ## Known limitations
 
@@ -143,6 +144,7 @@ Compatibility varies from game to game.
 | Guide | For |
 | --- | --- |
 | [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md) | Installing, updating, several installs side by side, game data, troubleshooting |
+| [GAMES.md](GAMES.md) | Games tested with Lepton, and how to report one |
 | [BUILDING.md](BUILDING.md) | Building Android and the Deck bundles from source |
 | [GAPPS.md](GAPPS.md) | Optional Google Play services, ARM64 translation and Widevine bundles |
 | [RELEASING.md](RELEASING.md) | Maintainers: publishing a GitHub release |
