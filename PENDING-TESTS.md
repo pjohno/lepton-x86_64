@@ -29,9 +29,22 @@ Nothing below builds Android, downloads AOSP or reads `.build-env`.
     injector: base directories became `2755`, inheriting setgid from the
     inputs' folder. Fixed in `a6ca691`.
   - Don't install that first `full-base-20261112` bundle.
-- **Still needed:** a base bundle packaged at `a6ca691` or later, so its stage
-  helpers include the injector fix. Then rerun Test B, followed by the Steam
-  Deck install and gameplay.
+- **PC tests passed on `base-20261112-r2`** (package-only repackage at
+  `3ba5f8f`), using the bundle's own tools:
+  - **r1 vs r2:** identical Android rootfs, sysbake, xattrs and fingerprint;
+    only tooling and docs differ.
+  - **Test A:** passed again, with the same identical results as above.
+  - **Test B:**
+    - Injection kept every base directory mode (`system/bin` stays `0751`, no
+      setgid), and the real sysbake passed (57 packages).
+    - The comparison shows only the intended differences: 158 rootfs entries
+      added, three `build.prop` files changed, no permission, type or link
+      changes, nothing removed from the rootfs, and a new sysbake registering
+      Chrome, Play Store, Play services, GSF and Trichrome. `BUNDLE.json`
+      `gapps`/`ndk`/`widevine` are true, matching the rootfs.
+    - Installer `--check` passed (separate tool `lepton_custom_full_20261112_r2`).
+  - **Output for the Deck:** `~/lepton-work/r2/bundles/lepton-x86_64-full-20261112-r2.*`.
+- **Still needed:** the Steam Deck install and gameplay checks below.
 
 ## 0. Linux PC preparation (can be done now)
 
