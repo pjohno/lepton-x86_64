@@ -245,6 +245,20 @@ class InjectionTests(unittest.TestCase):
         self.assertTrue((self.output / 'compat_tool/ndk-provenance/NDK-INJECTION-REPORT.txt').is_file())
         self.assertFalse((rootfs / 'system/product/priv-app/PrebuiltGmsCore').exists())
 
+    def test_ndk_injection_keeps_base_directory_modes(self):
+        # Inputs stored under a setgid folder, and Android's own 0751 system/bin.
+        payload = self.inputs / 'ndk-translation/payload'
+        for folder in ('', 'system', 'system/bin', 'system/etc', 'system/lib64', 'system/lib64/arm64'):
+            (payload / folder).chmod(0o2755)
+        rootfs = self.source / M.ROOTFS
+        (rootfs / 'system/bin').chmod(0o751)
+        before = {name: (rootfs / name).stat().st_mode & 0o7777 for name in ('', 'system', 'system/bin', 'system/etc')}
+        self.run_inject(('ndk',))
+        result = self.output / M.ROOTFS
+        self.assertEqual({name: (result / name).stat().st_mode & 0o7777 for name in before}, before)
+        for new in ('system/lib64/arm64', 'system/bin/arm64'):
+            self.assertFalse((result / new).stat().st_mode & 0o6000, f'{new} kept a setuid/setgid bit')
+
     def test_gapps_only_standalone_no_aosp_or_compiler(self):
         self.cli()
         self.check_result(('gapps',))
