@@ -24,7 +24,7 @@ game or of Lepton.
 | --- | --- | --- | --- | --- |
 | 2048 | [F-Droid](https://f-droid.org/repo/org.andstatus.game2048_47.apk) | Non-Steam game | Base | v0.2.0-alpha |
 | AAAAXY | [F-Droid](https://f-droid.org/repo/io.github.divverent.aaaaxy_108300344.apk) | Non-Steam game | NDK | v0.2.0-alpha |
-| Crossy Road | [APKMirror](https://www.apkmirror.com/apk/hipster-whale/crossy-road/crossy-road-7-14-3-release/crossy-road-7-14-3-android-apk-download/) (7.14.3) | Non-Steam game | GApps | v0.2.0-alpha |
+| Crossy Road | [APKMirror](https://www.apkmirror.com/apk/hipster-whale/crossy-road/crossy-road-7-14-3-release/crossy-road-7-14-3-android-apk-download/) (7.14.3) | Non-Steam game | GApps + NDK | v0.2.0-alpha |
 | KingPong | [F-Droid](https://f-droid.org/repo/com.kingalex.kingpong_8.apk) | Non-Steam game | Base | v0.2.0-alpha |
 | Mind Gazing Demo | [Steam](https://store.steampowered.com/app/4708770/Mind_Gazing/) | Steam (Android build) | NDK | v0.2.0-alpha |
 | RetroArch | [F-Droid](https://f-droid.org/repo/com.retroarch_1597175267.apk) | Non-Steam game | Base | v0.2.0-alpha |
