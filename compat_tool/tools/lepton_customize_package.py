@@ -440,15 +440,9 @@ def sysbake_main(args, core):
                  runtime_fingerprint=L.stage_fingerprint(root)['fingerprint'])
     write_stage(root, state)
     for work in sorted(set(root.glob('.sysbake-work.*')) - work_before):
-        storage = work / 'podman-storage'
-        wrapper = work / 'bin/podman'
-        if storage.exists() and wrapper.is_file():
-            # The run's private wrapper only addresses its own graphroot.
-            result = subprocess.run([str(wrapper), 'unshare', 'rm', '-rf', '--one-file-system', '--', str(storage)],
-                                    capture_output=True)
-            if result.returncode:
-                print(f'WARNING: private Podman storage not removed; remove with: podman unshare rm -rf {storage}')
-        print(f'Sysbake logs kept (never packaged): {work}')
+        # Logs and the run's (tiny) private Podman store; Android-owned files
+        # inside need the user namespace to delete.
+        print(f'Sysbake logs kept (never packaged): {work}\n  remove when no longer needed: podman unshare rm -rf {work}')
     print(f'PASS: fresh sysbake validated and recorded in {root / "STAGE.json"}\nNext: lepton-customize package')
 
 

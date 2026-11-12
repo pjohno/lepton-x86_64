@@ -383,7 +383,7 @@ class SysbakePackageTests(Harness, unittest.TestCase):
         self.assertIn('user.default', xattrs)
         self.assertNotIn('security.selinux', xattrs)
         self.assertFalse((self.stage / 'compat_tool/sysbake/lepton-onboot').exists())
-        self.assertFalse(list(self.stage.glob('.sysbake-work.*/podman-storage')))
+        self.assertIn('podman unshare rm -rf', output)
         before = tree(self.stage)
         self.package(self.stage, mode='--check')
         self.assertFalse(self.bundles.exists())
