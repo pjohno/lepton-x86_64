@@ -8,8 +8,18 @@ Branch `feat/bundle-ndk-compat-shim`. Roles:
 
 Nothing below builds Android, downloads AOSP or reads `.build-env`.
 
-**Status:** not yet run. The offline suite passes with synthetic fixtures; the
-real sysbake, installation and gameplay are untested until this checklist is done.
+**Status (2026-11-12):**
+
+- **Test A passed** on the Linux PC with `base-20261112` (from `5a2f31c`) and the
+  tools at `eddeaef`.
+  - Identical: rootfs (4059 entries), sysbake (1168 entries), xattrs (1171
+    paths), 52 registered packages, and the runtime fingerprint (`585ab06c…`).
+  - No sysbake ran, and compare exited 0.
+  - The only file removed is `compat_tool/images/.gitignore` (development only).
+- **The first Test A run found two packaging bugs, fixed in `eddeaef`:**
+  - `tests/runtime` helpers were dropped.
+  - Packaging a fresh sysbake that contains sockets crashed.
+- **Not yet run:** Test B on the PC, then the Steam Deck install and gameplay.
 
 ## 0. Linux PC preparation (can be done now)
 
@@ -19,7 +29,16 @@ sudo dnf install python3 binutils bash rsync e2fsprogs unzip util-linux diffutil
 grep -w binder /proc/filesystems              # BinderFS kernel support
 systemctl --user is-system-running            # running (or degraded)
 getsubids "$USER" && getsubids -g "$USER"     # rootless Podman ranges
+# SELinux: allow Android's Binder in the container (once; SELinux stays enforcing)
+sudo dnf install checkpolicy semodule-utils
+checkmodule -M -m -o /tmp/lepton_binder.mod fedora/lepton_binder.te
+semodule_package -o /tmp/lepton_binder.pp -m /tmp/lepton_binder.mod
+sudo semodule -i /tmp/lepton_binder.pp
 ```
+
+Without the module, sysbake boots into a loop of `servicemanager` aborts:
+`binder { set_context_mgr }` is denied for `spc_t` (see `journalctl | grep avc`).
+`sysbake --check` reports this, with these commands, when the tools include the SELinux check.
 
 Optional, also possible now: prepare the Google inputs from the repository
 checkout. They must be made with this branch, because inputs from `5588b21`
@@ -45,6 +64,12 @@ mkdir -p "$W/bootstrap"
 tar -xzf "$B" -C "$W/bootstrap" ./compat_tool/tools ./compat_tool/release-keys
 C=$W/bootstrap/compat_tool/tools
 ```
+
+The `base-20261112` bundle was packaged at `5a2f31c`, before the packaging
+fixes in `eddeaef`. Until a base bundle is packaged from `eddeaef` or later, use
+an up-to-date checkout's tools:
+`C=~/WORK/UniStore/Codes/lepton86-public/compat_tool/tools`. The stage helpers
+(sysbake, inject) from the bundle are unaffected.
 
 The build machine does not sign bundles, but the bundle carries the release
 keys. Every command that reads `$B` therefore needs `--allow-unsigned`, which

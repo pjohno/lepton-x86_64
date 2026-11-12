@@ -229,6 +229,7 @@ class Harness:
         (root / 'packages-gms.xml').write_bytes(abx(GAPPS_PACKAGES))
         self.host_env = dict(env, PATH=f'{hosts}:{self.fakes}', XDG_RUNTIME_DIR=str(runtime),
                              LEPTON_HOST_FILESYSTEMS=str(filesystems),
+                             LEPTON_HOST_SELINUXFS=str(root / 'no-selinux'),
                              FAKE_PACKAGES_BASE=str(root / 'packages-base.xml'),
                              FAKE_PACKAGES_GMS=str(root / 'packages-gms.xml'))
         self.host_env.pop('FAKE_SYSBAKE', None)
@@ -335,6 +336,36 @@ class SysbakePackageTests(Harness, unittest.TestCase):
                      'BinderFS', 'systemd user session'):
             self.assertIn(text, output)
         self.assertEqual(tree(self.stage), before)
+
+    def test_selinux_binder_denial_is_reported_with_the_fix(self):
+        P = load('selinux_test', self.stage / 'compat_tool/tools/lepton_customize_package.py')
+        fs = self.root / 'selinuxfs'
+        perms = fs / 'class/binder/perms'
+        perms.mkdir(parents=True)
+        (fs / 'enforce').write_text('1')
+        (fs / 'class/binder/index').write_text('97')
+        for bit, name in enumerate(('call', 'set_context_mgr', 'transfer', 'impersonate'), 1):
+            (perms / name).write_text(str(bit))
+        cases = ((0b1111, True), (0b1101, False), (0, False))
+        for vector, allowed in cases:
+            with mock.patch.object(P, 'selinux_allowed_vector', return_value=vector):
+                self.assertIs(P.selinux_binder_allowed(fs), allowed)
+        (fs / 'enforce').write_text('0')
+        self.assertIsNone(P.selinux_binder_allowed(fs), 'permissive SELinux is not a blocker')
+        self.assertIsNone(P.selinux_binder_allowed(self.root / 'absent'), 'no SELinux is not a blocker')
+        with mock.patch.object(P, 'selinux_binder_allowed', return_value=False):
+            inline = P.selinux_problem(self.stage)
+            self.assertIn("printf '%s\\n' 'module lepton_binder 1.2;'", inline)
+            self.assertIn('sudo semodule -i /tmp/lepton_binder.pp', inline)
+            policy = self.stage / P.SELINUX_POLICY
+            policy.parent.mkdir(parents=True)
+            shutil.copyfile(REPO / 'fedora/lepton_binder.te', policy)
+            shipped = P.selinux_problem(self.stage)
+            self.assertIn(f'checkmodule -M -m -o /tmp/lepton_binder.mod {policy}', shipped)
+            self.assertNotIn('printf', shipped)
+            self.assertIn(shipped, P.host_problems('software', self.stage))
+        with mock.patch.object(P, 'selinux_binder_allowed', return_value=True):
+            self.assertIsNone(P.selinux_problem(self.stage))
 
     def test_sysbake_check_changes_nothing(self):
         before = tree(self.stage)

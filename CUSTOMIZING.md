@@ -329,6 +329,23 @@ Fedora: `sudo dnf install podman fuse-overlayfs weston attr rsync util-linux
 procps-ng shadow-utils`. Software rendering is the default and needs no GPU;
 `--rendering amd` uses the AMD Vulkan driver.
 
+**Fedora and other SELinux-enforcing hosts** also need Lepton's small policy
+module once. Without it, Android's service managers are denied
+`binder { set_context_mgr }` inside the container (an `AVC denied` in
+`journalctl`), and Android never finishes booting. The module keeps SELinux
+enforcing and only adds Binder permissions for the container type:
+
+```bash
+sudo dnf install checkpolicy semodule-utils
+checkmodule -M -m -o /tmp/lepton_binder.mod ~/lepton-work/base-stage/tools/customize/selinux/lepton_binder.te
+semodule_package -o /tmp/lepton_binder.pp -m /tmp/lepton_binder.mod
+sudo semodule -i /tmp/lepton_binder.pp
+```
+
+`sysbake --check` asks the kernel whether this permission is granted (no root
+needed) and prints these commands when it is not. Bundles made before the
+policy file was shipped get an equivalent inline `printf` instead.
+
 The helper uses a fresh private Podman graphroot/runroot inside the stage and
 a temporary headless Weston socket. It never touches your ordinary Podman
 containers or storage, and refuses to run while another isolated sysbake or

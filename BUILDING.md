@@ -65,6 +65,19 @@ need them when debugging a failed step or
   `squashfs-tools-ng`, `e2fsprogs`/`fuse2fs`, `fuse3`, `util-linux` and `unzip`
   packages.
 
+**Fedora and other SELinux-enforcing hosts** also need Lepton's small policy
+module once. Without it, Android's service managers are denied
+`binder { set_context_mgr }` inside the container (an `AVC denied` in
+`journalctl`), and Android never finishes booting. The module keeps SELinux
+enforcing and only adds Binder permissions for the container type:
+
+```bash
+sudo dnf install checkpolicy semodule-utils
+checkmodule -M -m -o /tmp/lepton_binder.mod fedora/lepton_binder.te   # or the stage's tools/customize/selinux/lepton_binder.te
+semodule_package -o /tmp/lepton_binder.pp -m /tmp/lepton_binder.mod
+sudo semodule -i /tmp/lepton_binder.pp
+```
+
 ### Complete bundle versus image-only prerequisites
 
 By default, preflight checks the **complete installable-bundle host**, including

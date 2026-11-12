@@ -231,8 +231,11 @@ def adb_main(args, core):
 
 
 # ---------------------------------------------------------------- sysbake
-def host_problems(rendering):
+def host_problems(rendering, stage=None):
     problems = []
+    selinux = selinux_problem(stage)
+    if selinux:
+        problems.append(selinux)
     for program, (fedora, ubuntu) in SYSBAKE_COMMANDS.items():
         if not shutil.which(program):
             problems.append(f'Missing host command: {program} (Fedora: dnf install {fedora}; Ubuntu: apt install {ubuntu})')
@@ -298,6 +301,59 @@ def rootless_problems():
     return problems
 
 
+SELINUX_POLICY = 'tools/customize/selinux/lepton_binder.te'
+BINDER_PERMISSIONS = ('call', 'transfer', 'set_context_mgr', 'impersonate')
+
+
+def selinux_binder_allowed(selinuxfs=None):
+    """Whether SELinux lets Lepton's container (spc_t, label=disable) use Binder.
+
+    Asks the kernel through selinuxfs 'access', as libselinux does, so no root
+    is needed. Returns None when SELinux is absent, permissive or unanswerable.
+    """
+    root = Path(selinuxfs or os.environ.get('LEPTON_HOST_SELINUXFS', '/sys/fs/selinux'))
+    try:
+        if (root / 'enforce').read_text().strip() != '1':
+            return None
+        klass = int((root / 'class/binder/index').read_text())
+        bits = [int((root / 'class/binder/perms' / name).read_text()) for name in BINDER_PERMISSIONS]
+        user_role = Path('/proc/self/attr/current').read_text().strip('\0\n ').split(':')[:2]
+        context = ':'.join((user_role if len(user_role) == 2 else ['system_u', 'system_r']) + ['spc_t', 's0'])
+        allowed = selinux_allowed_vector(root, context, klass)
+    except (OSError, ValueError, IndexError):
+        return None
+    return all(allowed & (1 << (bit - 1)) for bit in bits)
+
+
+def selinux_allowed_vector(root, context, klass):
+    """The kernel's allowed-permission vector for context -> context:klass."""
+    fd = os.open(root / 'access', os.O_RDWR)
+    try:
+        os.write(fd, f'{context} {context} {klass}'.encode())
+        return int(os.read(fd, 256).decode().split()[0], 16)
+    finally:
+        os.close(fd)
+
+
+def selinux_problem(stage=None):
+    if selinux_binder_allowed() is not False:
+        return None
+    policy = Path(stage) / SELINUX_POLICY if stage else None
+    if policy and policy.is_file():
+        source, write = str(policy), ''
+    else:  # Bundles made before the policy was shipped: the same three lines.
+        source = '/tmp/lepton_binder.te'
+        write = ("    printf '%s\\n' 'module lepton_binder 1.2;' "
+                 "'require { type spc_t; class binder { call transfer set_context_mgr impersonate }; }' "
+                 "'allow spc_t self:binder { call transfer set_context_mgr impersonate };' > /tmp/lepton_binder.te\n")
+    return ('SELinux (enforcing) denies Binder to the Android container: binder { set_context_mgr } for spc_t, '
+            'so Android cannot boot. Install Lepton\'s policy module once (keeps SELinux enforcing; Fedora: '
+            'sudo dnf install checkpolicy semodule-utils):\n' + write +
+            f'    checkmodule -M -m -o /tmp/lepton_binder.mod {source}\n'
+            '    semodule_package -o /tmp/lepton_binder.pp -m /tmp/lepton_binder.mod\n'
+            '    sudo semodule -i /tmp/lepton_binder.pp')
+
+
 def quarantine(root):
     """Move an unvalidated sysbake aside; it is never left as stage state."""
     tool = root / 'compat_tool'
@@ -342,7 +398,7 @@ def sysbake_main(args, core):
         core.require(not path.exists() and not path.is_symlink(),
                      f'Existing sysbake present: refusing overwrite ({path}). Move it aside; STAGE.json says it is not validated.')
     script = regular(root, SYSBAKE_SCRIPT, core)
-    problems = host_problems(args.rendering)
+    problems = host_problems(args.rendering, root)
     if problems:
         fail(core, 'Sysbake host requirements are not met; nothing was changed:\n  ' + '\n  '.join(problems))
     rootfs = root / L.ROOTFS

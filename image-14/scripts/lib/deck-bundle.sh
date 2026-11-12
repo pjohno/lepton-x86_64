@@ -332,6 +332,8 @@ for helper in google-services.sh workspace.sh; do
     install -m 644 "$repo/image-14/scripts/lib/$helper" "$tmp/payload/tools/customize/lib/$helper"
 done
 install -m 755 "$repo/image-14/scripts/prepare-google-inputs.sh" "$tmp/payload/tools/customize/prepare-google-inputs.sh"
+# Fedora/SELinux hosts need this module for Android's Binder in rootless Podman.
+install -D -m 644 "$repo/fedora/lepton_binder.te" "$tmp/payload/tools/customize/selinux/lepton_binder.te"
 install -m 644 "$repo/CUSTOMIZING.md" "$tmp/payload/CUSTOMIZING.md"
 
 install -D -m 644 "$repo/compat_tool/release-keys/allowed_signers" \
