@@ -43,6 +43,50 @@ for `local-desktop`. Headless/SSH installs without a usable Wayland socket get
 a warning: games still require Steam to run in a Wayland desktop session,
 and the existing direct launcher validates the socket at launch.
 
+### One-time SELinux setup (Fedora)
+
+Fedora and other systems with SELinux **enforcing** need Lepton's small policy
+module, once per computer, before the first game launch. Lepton runs Android in
+a Podman container with SELinux labelling disabled (`spc_t`); the default policy
+denies that container `binder { set_context_mgr }`, so Android's service
+managers crash in a loop, Android never finishes starting, and the game never
+appears. `journalctl` shows an `AVC denied { set_context_mgr }` for `spc_t`.
+The current host check does not detect this yet. SteamOS does not enforce
+SELinux and needs nothing.
+
+Check whether SELinux is enforcing (prints `Enforcing`; nothing to do for
+`Permissive`, `Disabled`, or if the command does not exist):
+
+```bash
+getenforce
+```
+
+Install the module. It keeps SELinux enforcing and only allows Binder within
+the container type:
+
+```bash
+sudo dnf install checkpolicy semodule-utils
+dir="$(mktemp -d)"
+cat > "$dir/lepton_binder.te" <<'EOF'
+module lepton_binder 1.2;
+
+require {
+    type spc_t;
+    class binder { call transfer set_context_mgr impersonate };
+}
+
+allow spc_t self:binder { call transfer set_context_mgr impersonate };
+EOF
+checkmodule -M -m -o "$dir/lepton_binder.mod" "$dir/lepton_binder.te"
+semodule_package -o "$dir/lepton_binder.pp" -m "$dir/lepton_binder.mod"
+sudo semodule -i "$dir/lepton_binder.pp"
+sudo semodule -l | grep lepton_binder     # confirms it is installed
+```
+
+The policy is the same as [fedora/lepton_binder.te](../fedora/lepton_binder.te).
+The module persists across reboots and Lepton updates. To remove it:
+`sudo semodule -r lepton_binder`.
+
 ### Install and check on Fedora GNOME or KDE
 
 Run these same commands in a terminal in either desktop's Wayland session,
