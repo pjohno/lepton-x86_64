@@ -143,7 +143,14 @@ cp -a "$source" "$stage/compat_tool/images/rootfs"
         shutil.copyfile(actual / 'image-14/scripts/lib/workspace.sh', repo / 'image-14/scripts/lib/workspace.sh')
         runtime = repo / 'compat_tool/liblepton/ndk_auxv/runtime.sh'
         runtime.parent.mkdir(parents=True)
-        shutil.copyfile(actual / 'compat_tool/liblepton/ndk_auxv/runtime.sh', runtime)
+        for name in ('build.sh', 'validate.sh', 'ndk_auxv.c'):
+            shutil.copyfile(actual / 'compat_tool/liblepton/ndk_auxv' / name, runtime.parent / name)
+        clang = self.root / 'output/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang'
+        clang.parent.mkdir(parents=True)
+        clang.write_text('#!/bin/bash\nset -euo pipefail\n'
+                         '[[ "$1" == --target=x86_64-linux-android34 ]]\n'
+                         'shift\nexec cc -D__ANDROID__ "$@"\n')
+        clang.chmod(0o755)
         (repo / 'compat_tool/lepton').touch()
         extractor = repo / 'compat_tool/liblepton/apk_extractor'
         extractor.mkdir()

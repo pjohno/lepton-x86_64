@@ -4,8 +4,27 @@ This shim is now part of standard Lepton startup for the matching bridge.
 No per-game preload settings are required in new deployments/bundles.
 `LEPTON_NDK_COMPAT=false` disables it for comparisons. Native rootfs builds and
 unrecognized translators are left unchanged; forcing `true` requires a match.
-The deploy script builds it for matching NDK images, and the Deck packager
-refreshes the module and compiled binary from this checkout.
+Every new bundle, including the x86_64 base bundle, ships this open-source
+compatibility component at `compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so`.
+It is not Google's proprietary translator and contains no translator files.
+The deploy script always compiles it using the existing AOSP Clang Android
+x86_64 target, validates its ELF headers and dependencies, and stages it outside
+the Android rootfs. Packaging validates and preserves that staged binary;
+refreshing source helpers never replaces it with a checkout build artifact.
+Packaging needs `readelf`, but no AOSP checkout or compiler. Missing or invalid
+staged binaries fail packaging, including `--check`.
+
+The base bundle still reports `gapps: false` and `ndk: false`: shim presence
+neither installs translation nor enables the native bridge or ARM64 ABIs.
+Runtime activation still requires `ndk_compat_supported()` to recognize the
+translator and native-bridge property. Unsupported/incomplete translators stay
+inactive (forcing `LEPTON_NDK_COMPAT=true` fails). Client customisation
+(`lepton-customize`, see [CUSTOMIZING.md](../../../CUSTOMIZING.md)) reuses this
+precompiled binary without AOSP or Android compilation.
+
+Staging compiles straight into the new stage (`build.sh --output FILE`). With no
+`--output`, `build.sh` writes `bin/liblepton_ndk_auxv.so` in the checkout for
+local runtime testing only; that copy is never staged or packaged.
 
 This fixes two problems seen with AAAAXY 1.8.34's Go 1.27.2 ARM64 library:
 

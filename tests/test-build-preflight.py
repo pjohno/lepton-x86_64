@@ -60,7 +60,7 @@ class PreflightTests(unittest.TestCase):
         tools = ('bash sh dirname uname id git podman rsync realpath df awk grep python3 tee mktemp timeout flock sha256sum '
                  'date stat head findmnt nproc cmp cargo rustc cc make ar strip pkg-config getfattr setfattr '
                  'weston ip fuse-overlayfs systemctl systemd-run newuidmap newgidmap unshare mount umount '
-                 'ldd curl unzip tar gzip install cp mv rm chmod chgrp mkdir ln readlink cut sed sort '
+                 'ldd readelf curl unzip tar gzip install cp mv rm chmod chgrp mkdir ln readlink cut sed sort '
                  'touch cat sleep tail pgrep pkill ps env which seq basename stty rmdir simg2img sqfs2tar fuse2fs fusermount fusermount3 '
                  'mountpoint mkfs.ext4 truncate find modinfo').split()
         for name in tools:
@@ -189,6 +189,16 @@ while True: time.sleep(1)
         self.assertIn('Ubuntu:', out)
         self.assertIn('Compilation: READY', out)
         self.assertIn('Full Steam Deck bundle: NOT READY', out)
+
+    def test_base_bundle_requires_readelf_without_ndk(self):
+        # Every stage validates the bundled NDK shim with readelf, so a base
+        # bundle must not pass preflight and then fail after compilation.
+        (self.bin / 'readelf').unlink()
+        out = self.run_check(args=('--workflow', 'bundle'), ok=False)
+        self.assertIn('readelf', out)
+        self.assertIn('Full Steam Deck bundle: NOT READY', out)
+        out = self.run_check(args=('--workflow', 'images'))
+        self.assertNotIn('missing readelf', out)
 
     def test_missing_fuse_helpers(self):
         for helper in ('fusermount', 'fusermount3'):

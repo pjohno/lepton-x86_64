@@ -17,7 +17,7 @@ mkdir -p "$FAKE/image-14/scripts/internal" "$FAKE/image-14/scripts/lib" "$FAKE/c
 cp "$DEPLOY" "$FAKE/image-14/scripts/internal/"
 cp "$REPO/image-14/scripts/lib/workspace.sh" "$FAKE/image-14/scripts/lib/"
 mkdir -p "$FAKE/compat_tool/liblepton/ndk_auxv"
-cp "$REPO/compat_tool/liblepton/ndk_auxv/runtime.sh" "$FAKE/compat_tool/liblepton/ndk_auxv/"
+cp "$REPO/compat_tool/liblepton/ndk_auxv/"{build.sh,validate.sh,ndk_auxv.c} "$FAKE/compat_tool/liblepton/ndk_auxv/"
 : > "$FAKE/compat_tool/lepton"
 : > "$FAKE/compat_tool/liblepton/apk_extractor/Makefile"
 printf 'LEPTON_OUTPUT_DIR=%q\n' "$OUTPUT" > "$FAKE/.build-env"
@@ -31,7 +31,7 @@ for src in "$NORMAL" "$BRIDGE"; do
     printf 'radeon-test-fixture\n' > "$src/vendor/lib64/hw/vulkan.radeon.so"
     printf 'ro.build.version.sdk=34\n' > "$src/system/build.prop"
 done
-printf 'ro.dalvik.vm.native.bridge=0\n' >> "$NORMAL/system/build.prop"
+printf 'ro.dalvik.vm.native.bridge=0\nro.product.cpu.abilist=x86_64\n' >> "$NORMAL/system/build.prop"
 printf 'ro.dalvik.vm.native.bridge=libndk_translation.so\n' >> "$BRIDGE/system/build.prop"
 
 # Check and execution dependencies are all local. Avoid compiling Rust in the test.
@@ -57,6 +57,18 @@ expect_fail() {
         exit 1
     fi
 }
+
+# Exercise the real build/validator offline with a host compiler standing in
+# for AOSP Clang. Production still uses its Android target and pinned compiler.
+mkdir -p "$OUTPUT/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin"
+cat > "$OUTPUT/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == --target=x86_64-linux-android34 ]]
+shift
+exec cc -D__ANDROID__ "$@"
+STUB
+chmod +x "$OUTPUT/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang"
 
 # The original default remains selected when --rootfs-source is omitted.
 run --check --stage-dir "$OUTPUT/standard-stage" > "$TMP/default.log"
@@ -96,22 +108,31 @@ expect_fail --check --rootfs-source "$STAGED" --stage-dir "$OUTPUT/bridge-stage"
 # Default execution still uses the standard rootfs and fresh separate stage.
 run --execute --stage-dir "$OUTPUT/standard-stage" > /dev/null
 cmp "$NORMAL/system/build.prop" "$OUTPUT/standard-stage/compat_tool/images/rootfs/system/build.prop"
+base_shim="$OUTPUT/standard-stage/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
+bash "$REPO/compat_tool/liblepton/ndk_auxv/validate.sh" "$base_shim"
+[[ -z "$(find "$OUTPUT/standard-stage/compat_tool/images/rootfs" -name liblepton_ndk_auxv.so -print)" ]]
+# The shim is compiled straight into the stage; the checkout is not written.
+[[ ! -e "$FAKE/compat_tool/liblepton/ndk_auxv/bin" ]]
+# Compiler failure cannot fall back to a stale binary or produce a stage, even
+# when a valid-looking developer build is left in the checkout.
+clang="$OUTPUT/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang"
+mkdir -p "$FAKE/compat_tool/liblepton/ndk_auxv/bin"
+printf 'void stale(void) {}\n' | cc -x c -shared -nostdlib -fPIC -Wl,-soname,liblepton_ndk_auxv.so \
+    -o "$FAKE/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" -
+mv "$clang" "$clang.saved"
+printf '#!/bin/sh\nexit 1\n' > "$clang"
+chmod +x "$clang"
+expect_fail --execute --stage-dir "$OUTPUT/failed-stage"
+[[ ! -e "$OUTPUT/failed-stage" ]]
+[[ -z "$(find "$OUTPUT" -maxdepth 1 -name '.lepton-deck-stage.*' -print)" ]]
+
 [[ -f "$NORMAL/system/build.prop" && -f "$BRIDGE/system/build.prop" ]]
+
+mv "$clang.saved" "$clang"
 
 # Opt-in NDK deployment invokes the real injector, never downloads a payload,
 # and leaves the original native source untouched. Only the compiler is stubbed.
 cp "$REPO/image-14/scripts/internal/inject-ndk-translation.sh" "$FAKE/image-14/scripts/internal/"
-mkdir -p "$OUTPUT/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin"
-printf '#!/bin/sh\nexit 0\n' > "$OUTPUT/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang"
-chmod +x "$OUTPUT/aosp/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang"
-cat > "$FAKE/compat_tool/liblepton/ndk_auxv/build.sh" <<'STUB'
-#!/usr/bin/env bash
-set -euo pipefail
-[[ "$1" == --aosp && -d "$2" ]]
-here="$(cd "$(dirname "$0")" && pwd)"
-mkdir -p "$here/bin"
-printf 'test-compiled-shim\n' > "$here/bin/liblepton_ndk_auxv.so"
-STUB
 cat > "$NORMAL/system/build.prop" <<'PROPS'
 ro.build.version.sdk=34
 ro.product.cpu.abi=x86_64
@@ -140,7 +161,7 @@ expect_fail --check --with-ndk --ndk-payload "$payload" # New stage required.
 expect_fail --check --with-ndk --stage-dir "$OUTPUT/ndk-stage" # Payload required.
 expect_fail --check --ndk-payload "$payload" --stage-dir "$OUTPUT/ndk-stage"
 run --check --with-ndk --ndk-payload "$payload" --stage-dir "$OUTPUT/ndk-stage" > "$TMP/ndk-check.log"
-[[ ! -e "$OUTPUT/ndk-stage" && ! -e "$FAKE/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" ]]
+[[ ! -e "$OUTPUT/ndk-stage" ]]
 run --execute --with-ndk --ndk-payload "$payload" --stage-dir "$OUTPUT/ndk-stage" > "$TMP/ndk-execute.log"
 ndk_root="$OUTPUT/ndk-stage/compat_tool/images/rootfs"
 grep -qx 'ro.dalvik.vm.native.bridge=libndk_translation.so' "$ndk_root/system/build.prop"
@@ -148,6 +169,9 @@ grep -qx 'ro.ndk_translation.flags=accurate-sigsegv' "$ndk_root/system/build.pro
 grep -qx 'ro.dalvik.vm.native.bridge=0' "$NORMAL/system/build.prop"
 [[ ! -e "$NORMAL/system/lib64/libndk_translation.so" ]]
 [[ -s "$OUTPUT/ndk-stage/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" ]]
+# The stale checkout binary planted above was not copied into this stage.
+not_stale() { ! cmp -s "$FAKE/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" "$1"; }
+not_stale "$OUTPUT/ndk-stage/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
 [[ -s "$OUTPUT/ndk-stage/compat_tool/ndk-provenance/NDK-INJECTION-REPORT.txt" ]]
 expect_fail --execute --with-ndk --ndk-payload "$payload" --stage-dir "$OUTPUT/ndk-stage"
 echo 'PASS: Default/alternate/opt-in NDK staging, preflight, isolation and overwrite guards'

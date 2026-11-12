@@ -45,7 +45,7 @@ while (($#)); do
     esac
 done
 [[ -n "$src" && -n "$dst" ]] || { usage >&2; fail 'Specify both arguments'; }
-for tool in debugfs readelf sha256sum mktemp awk sort grep find xargs realpath; do
+for tool in debugfs readelf sha256sum mktemp awk sed sort grep find xargs realpath; do
     command -v "$tool" >/dev/null 2>&1 || fail "Missing tool: $tool"
 done
 src=$(realpath -e -- "$src") || fail 'Source image not found'
@@ -71,7 +71,7 @@ copy_file() {
     local remote=$1 mode=$2 target="$payload/${1#/}"
     mkdir -p "$(dirname -- "$target")"
     [[ ! -e "$target" && ! -L "$target" ]] || fail "Duplicate extraction path: $remote"
-    debugfs -R "dump $remote $target" "$src" >>"$log" 2>&1 || fail "debugfs couldn't read $remote"
+    debugfs -R "dump \"$remote\" \"$target\"" "$src" >>"$log" 2>&1 || fail "debugfs couldn't read $remote"
     [[ -s "$target" ]] || fail "Missing or empty payload file: $remote (see $log)"
     chmod "$mode" "$target"
 }
@@ -87,7 +87,7 @@ grep -qx 'ro.dalvik.vm.native.bridge=libndk_translation.so' "$work/google-build.
 # Exact translator prefix excludes unrelated AIDL libraries ending in -ndk.so.
 mapfile -t ndk_files < <(
     dbls /system/lib64 |
-    awk -F/ '$3 ~ /^10/ && $6 ~ /^libndk_translation.*\.so$/ {print $6}' |
+    awk -F/ '$3 ~ /^10/ && $6 ~ /^libndk_translation[A-Za-z0-9_.-]*\.so$/ {print $6}' |
     sort -u
 )
 ((${#ndk_files[@]} >= 4)) || fail 'Too few libndk_translation libraries found'
@@ -102,10 +102,16 @@ done
 # Native ARM64 runtime libraries and launcher/linker (not x86 system libraries).
 mapfile -t arm64_libs < <(
     dbls /system/lib64/arm64 |
-    awk -F/ '$3 ~ /^10/ && $6 ~ /\.so$/ {print $6}' |
+    awk -F/ '$3 ~ /^10/ && $6 ~ /^[A-Za-z0-9_.@+-]+\.so$/ {print $6}' |
     sort -u
 )
+# Names are quoted for debugfs, so only quotes, backslashes and whitespace are
+# unsafe. Real runtime names include '+' and '@' (libc++.so,
+# android.hardware.renderscript@1.0.so); never filter those out.
 ((${#arm64_libs[@]} >= 20)) || fail 'ARM64 runtime library directory appears incomplete'
+if dbls /system/lib64/arm64 | awk -F/ '$3 ~ /^10/ && $6 ~ /\.so$/ && $6 !~ /^[A-Za-z0-9_.@+-]+\.so$/ {found=1} END {exit !found}'; then
+    fail 'ARM64 runtime library with an unsupported filename; refusing an incomplete payload'
+fi
 for name in "${arm64_libs[@]}"; do
     copy_file "/system/lib64/arm64/$name" 0644
 done
@@ -123,6 +129,18 @@ readelf -h "$payload/system/lib64/arm64/libc.so" |
     grep -q 'Machine:.*AArch64' || fail 'Guest libc is not an ARM64 ELF'
 readelf -h "$payload/system/bin/arm64/linker64" |
     grep -q 'Machine:.*AArch64' || fail 'Guest linker is not an ARM64 ELF'
+for name in libc.so libc++.so; do
+    [[ -s "$payload/system/lib64/arm64/$name" ]] || fail "Missing required ARM64 runtime library: $name"
+done
+# Every guest dependency must be in the payload (linux-vdso is kernel-provided).
+mapfile -t missing_deps < <(
+    for elf in "$payload"/system/lib64/arm64/*.so "$payload"/system/bin/arm64/*; do
+        readelf -dW "$elf" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p'
+    done | sort -u | while IFS= read -r needed; do
+        [[ "$needed" == linux-vdso.so.1 || -s "$payload/system/lib64/arm64/$needed" ]] || printf '%s\n' "$needed"
+    done
+)
+((${#missing_deps[@]} == 0)) || fail "ARM64 runtime dependencies missing from payload: ${missing_deps[*]}"
 
 # Record exact Google configuration for review; do NOT install these properties.
 grep -E '^(ro\.(system\.product\.cpu\.abilist(32|64)?|dalvik\.vm\.native\.bridge|dalvik\.vm\.isa\.arm64|ndk_translation\..*|enable\.native\.bridge\.exec))=' \

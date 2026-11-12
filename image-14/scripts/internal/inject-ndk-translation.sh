@@ -154,6 +154,24 @@ info 'Copying source rootfs into private stage...'
 rsync -a --no-owner --no-group -- "$src/" "$work/rootfs/"
 info 'Adding translator-only files...'
 rsync -a --no-owner --no-group -- "$payload/" "$work/rootfs/"
+# rsync -a also applies the payload's directory modes to existing rootfs
+# directories (e.g. Android's 0751 system/bin, or setgid inherited from the
+# folder the inputs are stored in). The payload only adds files: restore every
+# pre-existing directory's mode and clear setuid/setgid on new directories.
+python3 - "$src" "$work/rootfs" "$payload" <<'PY'
+import os
+import stat
+import sys
+from pathlib import Path
+src, rootfs, payload = map(Path, sys.argv[1:])
+for parent, dirs, _ in os.walk(payload):
+    for relative in [Path(parent).relative_to(payload)] + [Path(parent, d).relative_to(payload) for d in dirs]:
+        target, original = rootfs / relative, src / relative
+        if original.is_dir() and not original.is_symlink():
+            os.chmod(target, stat.S_IMODE(original.lstat().st_mode))
+        elif target.is_dir() and not target.is_symlink():
+            os.chmod(target, stat.S_IMODE(target.lstat().st_mode) & ~(stat.S_ISUID | stat.S_ISGID))
+PY
 
 # Replace build-time read-only properties in the *copy* rather than appending
 # conflicting properties via /vendor/waydroid.prop after Android init.

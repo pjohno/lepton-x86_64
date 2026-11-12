@@ -135,13 +135,9 @@ if [[ -f "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCo
         (cd "$stage/compat_tool/images/rootfs" && sha256sum -c "$stage/compat_tool/provenance/gapps/SHA256SUMS" >/dev/null)
     fi
 fi
-source "$repo/compat_tool/liblepton/ndk_auxv/runtime.sh"
-if ndk_compat_supported "$stage/compat_tool/images/rootfs"; then
-    [[ -f "$repo/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so" ]] || {
-        echo 'ERROR: Build the standard NDK shim before packaging: bash compat_tool/liblepton/ndk_auxv/build.sh --aosp DIR' >&2
-        exit 1
-    }
-fi
+# Packaging needs the staged binary, never AOSP or a checkout build artifact.
+bash "$repo/compat_tool/liblepton/ndk_auxv/validate.sh" \
+    "$stage/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
 for program in rsync tar gzip sha256sum awk grep mktemp install; do
     command -v "$program" >/dev/null || { echo "ERROR: missing $program" >&2; exit 1; }
 done
@@ -261,8 +257,10 @@ fi
 # Earlier stages did not ship compat_tool/tools; create the destination before
 # overlaying the newer launch helpers.
 mkdir -p -- "$tmp/payload/compat_tool/liblepton" "$tmp/payload/compat_tool/tools"
-rsync -a --no-owner --no-group -- "$repo/compat_tool/liblepton/ndk_auxv/" \
+rsync -a --no-owner --no-group --exclude=/bin/ --exclude=__pycache__/ -- "$repo/compat_tool/liblepton/ndk_auxv/" \
     "$tmp/payload/compat_tool/liblepton/ndk_auxv/"
+bash "$repo/compat_tool/liblepton/ndk_auxv/validate.sh" \
+    "$tmp/payload/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
 for script in "${runtime_scripts[@]}"; do
     install -m 755 "$repo/compat_tool/liblepton/$script" \
         "$tmp/payload/compat_tool/liblepton/$script"
@@ -317,6 +315,27 @@ install -m 755 "$repo/compat_tool/tools/lepton-google-game-gui" \
 # installer copies both to ~/.local/share/lepton-release-manager.
 install -m 755 "$repo/compat_tool/tools/lepton-release-manager" \
     "$tmp/payload/compat_tool/tools/lepton-release-manager"
+# Client customisation (stage, inject, adb, sysbake, package) reuses this
+# bundle's compiled assets and helpers. None needs an AOSP checkout.
+install -m 755 "$repo/compat_tool/tools/lepton-customize" \
+    "$tmp/payload/compat_tool/tools/lepton-customize"
+for module in lepton_customize_inject.py lepton_customize_package.py lepton_bundle_lib.py; do
+    install -m 644 "$repo/compat_tool/tools/$module" "$tmp/payload/compat_tool/tools/$module"
+done
+install -m 755 "$repo/compat_tool/tools/lepton-compare-bundles" \
+    "$tmp/payload/compat_tool/tools/lepton-compare-bundles"
+mkdir -p "$tmp/payload/tools/customize/internal" "$tmp/payload/tools/customize/lib"
+for helper in sysbake-isolated-x86_64.sh inject-ndk-translation.sh extract-ndk-translation.sh; do
+    install -m 755 "$repo/image-14/scripts/internal/$helper" "$tmp/payload/tools/customize/internal/$helper"
+done
+for helper in google-services.sh workspace.sh; do
+    install -m 644 "$repo/image-14/scripts/lib/$helper" "$tmp/payload/tools/customize/lib/$helper"
+done
+install -m 755 "$repo/image-14/scripts/prepare-google-inputs.sh" "$tmp/payload/tools/customize/prepare-google-inputs.sh"
+# Fedora/SELinux hosts need this module for Android's Binder in rootless Podman.
+install -D -m 644 "$repo/fedora/lepton_binder.te" "$tmp/payload/tools/customize/selinux/lepton_binder.te"
+install -m 644 "$repo/CUSTOMIZING.md" "$tmp/payload/CUSTOMIZING.md"
+
 install -D -m 644 "$repo/compat_tool/release-keys/allowed_signers" \
     "$tmp/payload/compat_tool/release-keys/allowed_signers"
 # Self-contained tool: Steam starts lepton-x86_64-entry, which supplies this
@@ -352,64 +371,9 @@ if grep -q '^security\.selinux=' "$xattrs"; then
 fi
 
 # Metadata and registration use a distinct ID/directory for optional GApps.
-# The helper resolves the actual extracted path instead of assuming /home/deck.
-has_gapps=false
-[[ ! -f "$stage/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk" ]] || has_gapps=true
-has_ndk=false
-[[ ! -f "$stage/compat_tool/images/rootfs/system/lib64/libndk_translation.so" ]] || has_ndk=true
-python3 - "$tmp/payload" "$bundle_id" "$tool_id" "$tool_name" "$install_name" \
-    "$(basename -- "$archive")" "$(basename -- "$installer")" "$has_gapps" "$has_ndk" <<'PYBUNDLE'
-import json
-from pathlib import Path
-import sys
-root = Path(sys.argv[1])
-bundle, tool, name, directory, archive, installer, gapps, ndk = sys.argv[2:]
-(root / 'BUNDLE.json').write_text(json.dumps(dict(
-    format_version=2, bundle_id=bundle, tool_id=tool, display_name=name,
-    install_directory=directory, gapps=gapps == 'true', ndk=ndk == 'true'), indent=2) + '\n')
-(root / 'STEAM-DECK-INSTALL.txt').write_text(f'''Lepton Steam Deck bundle: {name}
-
-Install (Desktop Mode): double-tap the "Install Lepton {bundle}" desktop icon
-(or the .install.sh file in Dolphin), or in Konsole:
-  bash ~/Downloads/lepton-deck-bundles/{installer}
-
-The installer needs an internet connection: Google's Android Debug Bridge
-(adb) is not included in this bundle. The installer downloads the official
-Android Platform-Tools ZIP directly from Google (dl.google.com), installs only
-adb (pinned SHA256 and version) plus Google's NOTICE.txt, and changes nothing
-if that download or check fails. Offline: --adb-zip FILE with a copy of the
-same official ZIP.
-
-The installer verifies the checksum, extracts to ~/.local/share/{directory},
-registers the Steam compatibility tool "{name}", and writes
-~/.config/lepton-x86_64/{tool}.env. It never overwrites an existing install
-unless you choose to: from the desktop icon it asks "new tool or replace?" and
-then offers to remove older installs; in a terminal use --into TOOL_ID,
---replace or --remove TOOL_ID. "Lepton: Remove installs" cleans up later.
-Steam does not need to be closed to install or remove; restart it afterwards.
-
-Then use the new desktop/menu entries (no typing needed):
-  "Lepton: Install / Update / Repair"  later versions from GitHub Releases,
-                                updates, repair; stays when installs are removed
-  "Lepton: Check graphics"      confirms AMD RADV graphics
-  "Lepton: Add Android game"    picks an APK/APKM; asks you to exit Steam, then
-                                says when it is safe to start Steam again
-Terminal equivalents:
-  ~/.local/bin/lepton-run-apk --gpu-check --execute
-  ~/.local/bin/lepton-add-game ~/path/to/game.apk   # with Steam exited
-
-Enable Touchscreen Native Support in the game's controller
-layout (Controller Settings > Edit Layout > Default Action Set >
-Always-On Command > System > Touchscreen Native Support).
-
-Save using the game's own save/exit function before pressing Steam Stop.
-In 2048, Exit or going back through moves saves the board. Steam Stop keeps
-the last saved board but does not guarantee that new moves are saved.
-
-For Google sign-in and APKM games in a persistent profile, see GAPPS.md.
-Saved profiles and credentials are never bundled.
-''')
-PYBUNDLE
+# Component flags come from the payload rootfs (shared with lepton-customize).
+python3 "$repo/compat_tool/tools/lepton_bundle_lib.py" write-metadata "$tmp/payload" "$bundle_id" "$tool_id" \
+    "$tool_name" "$install_name" "$(basename -- "$archive")" "$(basename -- "$installer")"
 install -m 644 "$repo/GAPPS.md" "$tmp/payload/GAPPS.md"
 
 [[ -f "$tmp/payload/compat_tool/images/rootfs/system/etc/init/hw/init.rc" ]]
@@ -418,7 +382,8 @@ install -m 644 "$repo/GAPPS.md" "$tmp/payload/GAPPS.md"
 for script in "${runtime_scripts[@]}"; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
-for tool in lepton-add-game lepton-release-manager lepton-manage-installs; do
+for tool in lepton-add-game lepton-release-manager lepton-manage-installs lepton-customize lepton_customize_inject.py \
+            lepton_customize_package.py lepton_bundle_lib.py lepton-compare-bundles; do
     python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$tmp/payload/compat_tool/tools/$tool"
 done
 grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/google_games.sh"

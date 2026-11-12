@@ -57,8 +57,42 @@ source "$repo/image-14/tests/lib/fake-google-adb.sh"
 fake_sha="$(fake_adb_zip "$work/fake-adb")"
 install_fake_curl "$work/bin"
 export FAKE_ADB_ZIP="$work/fake-adb/platform-tools.zip" FAKE_CURL_LOG="$work/curl.log"
+# Dependency-free ELF fixture, distinct from any checkout binary. No AOSP.
+shim="$stage/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
+mkdir -p "$(dirname "$shim")"
+reject --package-only --check --stage-dir "$stage" --bundle-dir "$out" --bundle-id missing-shim
+grep -q 'missing or invalid.*NDK shim' "$work/rejected.log"
+printf invalid > "$shim"
+reject --package-only --execute --stage-dir "$stage" --bundle-dir "$out" --bundle-id invalid-shim
+[[ ! -e "$out/lepton-x86_64-invalid-shim.tar.gz" ]]
+printf 'void fixture(void) {}\n' | cc -x c -shared -nostdlib -fPIC -Wl,-soname,liblepton_ndk_auxv.so -o "$shim" -
+# Package-only never calls Clang, even when the stage came from another host.
+export LEPTON_AOSP_DIR="$work/no-aosp"
 run --package-only --check --stage-dir "$stage" --bundle-dir "$out" --bundle-id fixture --deck-ip 192.0.2.1 > "$work/check.log"
 [[ ! -e "$out" && ! -e "$TRACE" ]]
+# A checkout with no compiled shim also packages successfully. Link source
+# files into a disposable checkout, giving ndk_auxv its own directory.
+checkout="$work/checkout"
+mkdir -p "$checkout/compat_tool/liblepton/ndk_auxv"
+for source in "$repo/compat_tool/"*; do
+    [[ "${source##*/}" == liblepton ]] || ln -s "$source" "$checkout/compat_tool/"
+done
+for source in "$repo/compat_tool/liblepton/"*; do
+    [[ "${source##*/}" == ndk_auxv ]] || ln -s "$source" "$checkout/compat_tool/liblepton/"
+done
+for source in "$repo/compat_tool/liblepton/ndk_auxv/"*; do
+    [[ "${source##*/}" == bin ]] || ln -s "$source" "$checkout/compat_tool/liblepton/ndk_auxv/"
+done
+for source in "$repo/"* "$repo/.git"; do
+    [[ "${source##*/}" == compat_tool ]] || ln -s "$source" "$checkout/"
+done
+(
+    source "$repo/image-14/scripts/lib/deck-bundle.sh"
+    package_deck_bundle "$checkout" "$stage" "$out" no-checkout-shim '' false --execute
+) > "$work/no-checkout-shim.log"
+tar -xOf "$out/lepton-x86_64-no-checkout-shim.tar.gz" ./compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so | cmp "$shim" -
+
+
 reject --package-only --check --stage-dir "$stage" --bundle-dir "$stage/recursive" --bundle-id fixture
 reject --package-only --check --stage-dir "$stage" --bundle-dir "$out" --bundle-id '../wrong'
 reject --package-only --check --stage-dir "$stage" --bundle-dir "$out" --bundle-id fixture --with-ndk
@@ -73,6 +107,14 @@ grep -qx 'user.fake=0x31' "$work/packaged-xattrs"
 cmp "$work/original-xattrs" "$stage/compat_tool/sysbake.xattrs"
 tar -tzf "$archive" > "$work/contents"
 grep -qx './compat_tool/liblepton/ndk_auxv/runtime.sh' "$work/contents"
+for file in compat_tool/tools/lepton-customize compat_tool/tools/lepton_customize_inject.py compat_tool/tools/lepton_customize_package.py compat_tool/tools/lepton_bundle_lib.py compat_tool/tools/lepton-compare-bundles tools/customize/internal/sysbake-isolated-x86_64.sh tools/customize/internal/inject-ndk-translation.sh tools/customize/internal/extract-ndk-translation.sh tools/customize/lib/google-services.sh tools/customize/lib/workspace.sh tools/customize/prepare-google-inputs.sh CUSTOMIZING.md; do
+    grep -Fxq "./$file" "$work/contents"
+done
+
+tar -xOf "$archive" ./compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so > "$work/packaged-shim.so"
+cmp "$shim" "$work/packaged-shim.so"
+bash "$repo/compat_tool/liblepton/ndk_auxv/validate.sh" "$work/packaged-shim.so"
+not grep -Eq '^\./compat_tool/images/rootfs/.*/liblepton_ndk_auxv.so$' "$work/contents"
 grep -qx './compat_tool/images/rootfs/system/target/required' "$work/contents"
 # Google's adb and its notice stay in the stage; the archive never has them.
 not grep -Eq '(^|/)adb$|platform-tools|google-platform-tools' "$work/contents"
@@ -96,6 +138,7 @@ tar -xOf "$archive" ./BUNDLE.json > "$work/BUNDLE.json"
 python3 - "$work/BUNDLE.json" <<'PYMETA'
 import json, sys
 metadata = json.load(open(sys.argv[1]))
+assert metadata['gapps'] is False and metadata['ndk'] is False and metadata['widevine'] is False
 assert metadata['tool_id'] == 'lepton_x86_64_fixture'
 assert metadata['install_directory'] == 'lepton_x86_64_fixture'
 PYMETA
@@ -308,7 +351,7 @@ import json, sys
 metadata = json.load(open(sys.argv[1]))
 assert metadata['tool_id'] == 'lepton_gapps_gapps_fixture'
 assert metadata['install_directory'] == metadata['tool_id']
-assert metadata['gapps'] is True and metadata['ndk'] is False
+assert metadata['gapps'] is True and metadata['ndk'] is False and metadata['widevine'] is False
 PYMETA
 # GApps installs get Google game icons pointing at their own install;
 # removing the install removes them.

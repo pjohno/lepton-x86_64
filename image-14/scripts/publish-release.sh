@@ -162,7 +162,12 @@ version = sys.argv[2]
 problems = []
 if m.get("bundle_id") != version: problems.append("bundle_id is %r" % m.get("bundle_id"))
 if m.get("tool_id") != "lepton_x86_64_" + re.sub(r"[.-]", "_", version): problems.append("tool_id is %r" % m.get("tool_id"))
-if m.get("gapps") or m.get("ndk"): problems.append("it contains GApps or NDK translation")
+# Google-free policy: gapps and ndk must be recorded as false; widevine must be
+# false or absent (legacy metadata). Archive contents are checked below as well.
+for flag in ("gapps", "ndk"):
+    if m.get(flag) is not False: problems.append("%s is %r (a base release needs false)" % (flag, m.get(flag)))
+if m.get("widevine", False) is not False: problems.append("widevine is %r (a base release needs false)" % m.get("widevine"))
+if "origin" in m: problems.append("it was packaged by %s (a local customised bundle)" % m["origin"])
 for p in problems: print("  " + p, file=sys.stderr)
 sys.exit(1 if problems else 0)
 PY
@@ -192,6 +197,9 @@ fi
 pass 'Base bundle: no Google adb, GApps, NDK translation, Widevine, profiles or keys'
 BUNDLE_COMMIT="$(sed -n 's/^Launcher source commit: \([0-9a-f]\{40\}\)$/\1/p' "$WORK/provenance")"
 [[ -n "$BUNDLE_COMMIT" ]] || fail 'The bundle does not record its source commit'
+if grep -q '^Packaging: lepton-customize' "$WORK/provenance"; then
+    fail 'This is a local lepton-customize bundle; official releases come only from the release build pipeline'
+fi
 grep -qx 'Launcher working tree: clean' "$WORK/provenance" ||
     fail "The bundle was made from a checkout with uncommitted changes; rebuild it from a clean commit"
 COMMIT="$BUNDLE_COMMIT"

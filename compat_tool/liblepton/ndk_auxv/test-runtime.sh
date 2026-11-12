@@ -21,13 +21,26 @@ cp "$HERE/arm64_hints.py" "$LEPTON_DIR/ndk_auxv/"
 sha256sum() { printf '%s  %s\n' "$test_sha" "$1"; }
 test_sha=a2086fbc807f697f9b91222065c9d9000ca9727748699c0d9b751319258cbb3e
 unset LEPTON_NDK_COMPAT LEPTON_ENV_LD_PRELOAD LEPTON_ENV_NDK_TRANSLATION_MODE LEPTON_ENV_NDK_TRANSLATION_FLAGS
+: > "$LEPTON_DIR/ndk_auxv/bin/liblepton_ndk_auxv.so"
 : > "$rc"
 configure_ndk_compat "$rc"
 [[ ! -s "$rc" && ${#mounts[@]} == 0 ]] # Native runtime stays untouched.
+# An incomplete translator installation must remain inactive with a shim present.
+printf 'ro.dalvik.vm.native.bridge=0\nro.product.cpu.abilist=x86_64\n' > "$LEPTON_TEST_ROOTFS/system/build.prop"
+: > "$LEPTON_TEST_ROOTFS/system/lib64/libndk_translation.so"
+cp "$LEPTON_TEST_ROOTFS/system/build.prop" "$work/base.prop"
+configure_ndk_compat "$rc"
+[[ ! -s "$rc" && ${#mounts[@]} == 0 ]]
+cmp "$work/base.prop" "$LEPTON_TEST_ROOTFS/system/build.prop"
+rm "$LEPTON_TEST_ROOTFS/system/lib64/libndk_translation.so"
+printf 'ro.dalvik.vm.native.bridge=libndk_translation.so\n' > "$LEPTON_TEST_ROOTFS/system/build.prop"
+configure_ndk_compat "$rc"
+[[ ! -s "$rc" && ${#mounts[@]} == 0 ]]
+rm "$LEPTON_DIR/ndk_auxv/bin/liblepton_ndk_auxv.so"
 printf 'ro.dalvik.vm.native.bridge=libndk_translation.so\n' > "$LEPTON_TEST_ROOTFS/system/build.prop"
 : > "$LEPTON_TEST_ROOTFS/system/lib64/libndk_translation.so"
 if configure_ndk_compat "$rc" 2> "$work/missing.log"; then echo 'FAIL: missing shim accepted'; exit 1; fi
-grep -q 'Build the standard NDK shim' "$work/missing.log"
+grep -q 'Bundled NDK compatibility shim missing' "$work/missing.log"
 : > "$LEPTON_DIR/ndk_auxv/bin/liblepton_ndk_auxv.so"
 configure_ndk_compat "$rc" > "$work/enabled.log"
 [[ ${#mounts[@]} == 1 ]]

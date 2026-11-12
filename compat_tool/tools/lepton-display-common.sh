@@ -33,15 +33,14 @@ lepton_dialog() {
 
         win=$(DISPLAY="$outer_display" xwininfo -root -tree 2>/dev/null |
             awk -v title="$title" \
-                'index($0, "\"" title "\"") {print $1; exit}')
+                'index($0, "\"" title "\"") {print $1; exit}') || win=
 
         [[ -n "$win" ]] && break
         sleep 0.1
     done
 
-    if [[ -n "$win" ]]; then
-        DISPLAY="$outer_display" xprop -id "$win" \
-            -f STEAM_GAME 32c -set STEAM_GAME "$app_id"
+    if [[ -n "$win" ]] && DISPLAY="$outer_display" xprop -id "$win" \
+            -f STEAM_GAME 32c -set STEAM_GAME "$app_id"; then
         echo "Assigned Steam AppID $app_id to dialog window $win"
     else
         echo "WARNING: Could not identify the kdialog window" >&2

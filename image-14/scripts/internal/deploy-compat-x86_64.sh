@@ -167,12 +167,9 @@ fi
 for tool in cargo cc make rsync realpath; do
     command -v "$tool" >/dev/null 2>&1 || fail "Missing dependency: $tool"
 done
-source "$ROOT/compat_tool/liblepton/ndk_auxv/runtime.sh"
-BUILD_NDK_SHIM=false
-if [[ "$WITH_NDK" == true ]] || ndk_compat_supported "$SRC"; then
-    [[ -x "${LEPTON_AOSP_DIR}/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang" ]] || fail 'AOSP Clang required to build standard NDK compatibility shim'
-    BUILD_NDK_SHIM=true
-fi
+# Every stage carries our shim; translator installation/activation stays opt-in.
+[[ -x "${LEPTON_AOSP_DIR}/prebuilts/clang/host/linux-x86/clang-r510928/bin/clang" ]] || fail 'AOSP Clang required to build standard NDK compatibility shim'
+command -v readelf >/dev/null || fail 'Missing dependency: readelf'
 
 STAGE_DIR="$(realpath -m -- "$STAGE_DIR")"
 [[ "$STAGE_DIR" != / && "$STAGE_DIR" != "$ROOT" ]] || fail 'Unsafe stage destination'
@@ -206,9 +203,6 @@ if [[ -e "$STAGE_DIR" || -L "$STAGE_DIR" ]]; then
 fi
 
 info 'Building native x86_64 APK extractor'
-if [[ "$BUILD_NDK_SHIM" == true ]]; then
-    bash "$ROOT/compat_tool/liblepton/ndk_auxv/build.sh" --aosp "$LEPTON_AOSP_DIR"
-fi
 make -C "$EXTRACTOR" install-native
 BIN="$EXTRACTOR/bin/apk-info-extractor"
 [[ -x "$BIN" ]] || fail 'Native APK extractor build failed'
@@ -224,10 +218,18 @@ cleanup() { [[ -z "${TEMP:-}" ]] || rm -rf -- "$TEMP"; }
 trap cleanup EXIT
 touch "$TEMP/.find-ignore"
 mkdir -p "$TEMP/compat_tool/images"
-# Never dereference existing compat_tool/images/rootfs symlinks.
+# Never dereference existing compat_tool/images/rootfs symlinks. A shim left
+# in the checkout by a developer build is never copied: each stage compiles its
+# own directly into the private temporary stage.
 rsync -a --no-owner --no-group --exclude='/images/rootfs' \
-    --exclude='/sysbake' --exclude='/sysbake.xattrs' --exclude='/liblepton/apk_extractor/target/' --exclude=__pycache__/ \
+    --exclude='/sysbake' --exclude='/sysbake.xattrs' --exclude='/liblepton/apk_extractor/target/' \
+    --exclude='/liblepton/ndk_auxv/bin/' --exclude=__pycache__/ \
     "$ROOT/compat_tool/" "$TEMP/compat_tool/"
+info 'Building standard Android x86_64 NDK compatibility shim'
+bash "$ROOT/compat_tool/liblepton/ndk_auxv/build.sh" --aosp "$LEPTON_AOSP_DIR" \
+    --output "$TEMP/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
+bash "$ROOT/compat_tool/liblepton/ndk_auxv/validate.sh" \
+    "$TEMP/compat_tool/liblepton/ndk_auxv/bin/liblepton_ndk_auxv.so"
 if [[ "$WITH_NDK" == true ]]; then
     bash "$ROOT/image-14/scripts/internal/inject-ndk-translation.sh" --execute \
         --rootfs "$SRC" --payload "$NDK_PAYLOAD" --output "$TEMP/ndk-injection"

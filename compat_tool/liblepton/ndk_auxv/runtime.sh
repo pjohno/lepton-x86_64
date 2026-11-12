@@ -28,7 +28,7 @@ function configure_ndk_compat()
         return 0
     fi
     if [[ ! -f "$shim" ]]; then
-        echo 'ERROR: Build the standard NDK shim using compat_tool/liblepton/ndk_auxv/build.sh --aosp DIR (or set LEPTON_NDK_COMPAT=false)' >&2
+        echo 'ERROR: Bundled NDK compatibility shim missing; reinstall a complete Lepton bundle (or set LEPTON_NDK_COMPAT=false)' >&2
         return 1
     fi
     if [[ -n "${LEPTON_ENV_LD_PRELOAD:-}" && "${LEPTON_ENV_LD_PRELOAD}" != /system/lib64/liblepton_ndk_auxv.so ]]; then

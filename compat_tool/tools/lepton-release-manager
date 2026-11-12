@@ -294,9 +294,17 @@ def installed_tools():
         except (OSError, ValueError):
             meta = {}
         bundle = meta.get("bundle_id") or ""
-        kind = "GApps" if meta.get("gapps") else ("NDK" if meta.get("ndk") else "base")
+        kind = component_kind(meta)
         tools.append(dict(entry, bundle=bundle, version=parse_version(bundle), variant=kind))
     return tools
+
+
+def component_kind(meta):
+    """'base', or the optional components a bundle records (older bundles
+    lack the widevine field, which then means no Widevine)."""
+    names = [label for key, label in (("gapps", "GApps"), ("ndk", "NDK"), ("widevine", "Widevine"))
+             if meta.get(key) is True]
+    return " + ".join(names) or "base"
 
 
 def describe_tool(tool):
@@ -666,7 +674,7 @@ def choose_target(ui, release, tools):
     skipped = [t["name"] for t in tools if t["variant"] != "base"]
     text = "How should %s be installed?" % release.tag
     if skipped:
-        text += "\n(GApps/NDK installs are not offered for replacement: %s)" % ", ".join(skipped)
+        text += "\n(Installs with GApps, NDK or Widevine are not offered for replacement: %s)" % ", ".join(skipped)
     choice = ui.choose(text, rows)
     if choice is None:
         return None
