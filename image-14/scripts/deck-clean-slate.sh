@@ -8,10 +8,7 @@
 #   bash image-14/scripts/deck-clean-slate.sh --local --check          # on the Deck
 #
 # Removes: ~/.local/share/lepton* installs, backups and unfinished installs;
-# Steam registrations compatibilitytools.d/lepton*.vdf; self-contained Lepton
-# installs, backups and unfinished installs in compatibilitytools.d (only
-# folders containing Lepton; Proton and other tools are never touched);
-# ~/.config/lepton-x86_64;
+# Steam registrations compatibilitytools.d/lepton*.vdf; ~/.config/lepton-x86_64;
 # ~/.local/bin/lepton-* ; Lepton menu/desktop icons; downloaded bundles in
 # ~/Downloads; stopped lepton-* Podman containers. With --game-data, also
 # Android app data that Lepton stored in Steam's compatdata (saves are lost).
@@ -28,7 +25,7 @@ MODE=''
 DECK_IP=''
 LOCAL=false
 GAME_DATA=false
-usage() { sed -n '3,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 while (($#)); do
     case "$1" in
@@ -53,15 +50,7 @@ fi
 # ---- runs on the Deck (or the local machine) ----
 [[ $(id -u) -ne 0 ]] || fail 'Run as the normal user, not root'
 share="$HOME/.local/share"
-# Steam's folder: ~/.steam/root (usually a link to ~/.local/share/Steam).
 steam="$share/Steam"
-if [[ -e "$HOME/.steam/root" ]]; then
-    root="$(realpath -e -- "$HOME/.steam/root")"
-    if [[ -d "$steam" && "$(realpath -e -- "$steam")" != "$root" ]]; then
-        fail "Two different Steam folders: ~/.steam/root -> $root and $steam. Nothing was removed."
-    fi
-    steam="$root"
-fi
 
 # Refuse while anything Lepton is running.
 if pgrep -f '/compat_tool/(lepton|lepton-x86_64-entry|tools/lepton-gamescope-bridge)( |$)' >/dev/null 2>&1 < /dev/null; then
@@ -84,13 +73,6 @@ shopt -s nullglob dotglob
 for path in "$share"/lepton* "$share"/.lepton-install.*; do
     # Only Lepton installs, backups and unfinished installs (and Lepton's logs dir).
     if [[ -e "$path/compat_tool/lepton" || "$path" == "$share/lepton" || "$path" == "$share"/.lepton-install.* ]]; then
-        add "$path"
-    fi
-done
-for path in "$steam"/compatibilitytools.d/*; do
-    # Self-contained Lepton installs and their backups, never other tools.
-    if [[ -d "$path" && ! -L "$path" && -e "$path/compat_tool/lepton" && -d "$path/compat_tool/liblepton" ]] ||
-       [[ "$path" == "$steam"/compatibilitytools.d/.lepton-install.* ]]; then
         add "$path"
     fi
 done

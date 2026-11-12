@@ -124,8 +124,7 @@ if [[ -z "$tool_id" ]]; then
     fi
 fi
 [[ "$tool_id" =~ ^[A-Za-z0-9_]{1,96}$ ]] || { echo 'ERROR: invalid tool ID' >&2; exit 2; }
-# Empty: lepton_bundle_lib.py names it "lepton <bundle ID> x86_64 (community)",
-# with any GApps/NDK/Widevine after the version.
+[[ -n "$tool_name" ]] || tool_name="Lepton x86_64 (community) - $bundle_id"
 [[ "$tool_name" != *$'\n'* && "$tool_name" != *$'\r'* ]] || { echo 'ERROR: invalid tool name' >&2; exit 2; }
 install_name="$tool_id"
 [[ "$tool_id" != lepton_x86_64_dev ]] || install_name=lepton-x86_64-dev

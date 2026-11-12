@@ -6,8 +6,6 @@ Run with Steam fully exited. Uses Python's standard library only.
 Refuses unknown VDF formats rather than overwriting Steam configuration.
 """
 import argparse
-import importlib.machinery
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -20,9 +18,7 @@ import zlib
 
 LEGACY_TOOL = "lepton_x86_64_dev"
 LEGACY_INSTALL = Path.home() / ".local/share/lepton-x86_64-dev"
-# The Steam directory, from lepton-manage-installs' resolver (~/.steam/root
-# first, then ~/.local/share/Steam), resolved when first needed.
-STEAM = None
+STEAM = Path.home() / ".local/share/Steam"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "lepton-x86_64"
 GOOGLE_SERVICES_APK = "compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk"
 
@@ -40,55 +36,13 @@ def read_env(path):
     return values
 
 
-def manage_module():
-    """lepton-manage-installs next to this file: Steam directory and installs."""
-    path = Path(__file__).resolve().parent / "lepton-manage-installs"
-    loader = importlib.machinery.SourceFileLoader("lepton_manage_installs", str(path))
-    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-    loader.exec_module(module)
-    return module
-
-
 def installed_tool(tool_id):
-    """Return (tool, install) for an installed tool ID, or None. Its env file
-    first; else any registered install, in either layout."""
+    """Return (tool, install) for an installed tool ID, or None."""
     env = CONFIG_DIR / (tool_id + ".env")
-    if env.is_file():
-        values = read_env(env)
-        return values.get("LEPTON_X86_TOOL_ID", tool_id), Path(values["LEPTON_X86_INSTALL_DIR"])
-    try:
-        entries = manage_module().discover()
-    except (OSError, ValueError):
+    if not env.is_file():
         return None
-    found = [e for e in entries if e["kind"] == "install" and e["id"] == tool_id]
-    if len(found) == 1 and not found[0]["conflict"]:
-        return tool_id, Path(found[0]["dir"])
-    return None
-
-
-def registration(tool):
-    """(layout, directory) that Steam's compatibilitytools.d registers for this
-    tool ID: a standalone <id>.vdf (legacy) or a self-contained directory's own
-    compatibilitytool.vdf (steam-compat). None if neither; refuses two."""
-    M = manage_module()
-    tools = STEAM / "compatibilitytools.d"
-    found = []
-    standalone = tools / (tool + ".vdf")
-    if standalone.is_file():
-        path = M.vdf_value(standalone.read_text(encoding="utf-8"), "install_path")
-        if path:
-            found.append(("legacy", Path(path).parent))
-    for candidate in sorted(tools.glob("*/" + M.REGISTRATION)) if tools.is_dir() else ():
-        try:
-            text = candidate.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if M.vdf_tool_id(text) == tool and M.vdf_value(text, "install_path") == ".":
-            found.append(("steam-compat", candidate.parent))
-    if len(found) > 1:
-        fail("Steam tool ID %s is registered more than once (%s); remove the unwanted install "
-             "with lepton-manage-installs first" % (tool, ", ".join(str(d) for _, d in found)))
-    return found[0] if found else None
+    values = read_env(env)
+    return values.get("LEPTON_X86_TOOL_ID", tool_id), Path(values["LEPTON_X86_INSTALL_DIR"])
 
 
 def default_tool():
@@ -316,7 +270,7 @@ def atomic_replace(path, payload):
 
 
 def main():
-    global TOOL, INSTALL, STEAM
+    global TOOL, INSTALL
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("apk", type=Path, help="APK file to add")
     parser.add_argument("--name", help="Name displayed in Steam (default: APK stem)")
@@ -355,12 +309,12 @@ def main():
     TOOL = args.tool_id
     if args.install_dir is not None:
         INSTALL = args.install_dir.expanduser().resolve(strict=True)
-    if STEAM is None:
-        STEAM = manage_module().steam_root()
-    registered = None if args.runtime_profile else registration(TOOL)
-    if registered is not None and args.install_dir is not None:
-        # An alternate tool must be registered for this same install.
-        if registered[1].resolve() != INSTALL.resolve():
+    registration = STEAM / "compatibilitytools.d" / (TOOL + ".vdf")
+    if not args.runtime_profile and args.install_dir is not None and registration.is_file():
+        # An alternate tool must point at the same install path as its VDF.
+        vdf = registration.read_text(encoding="utf-8")
+        expected = str(INSTALL / "compat_tool")
+        if not re.search(r'"install_path"\s*"' + re.escape(expected) + r'"', vdf):
             fail("Tool registration install_path does not match --install-dir")
 
     apk = args.apk.expanduser().resolve(strict=True)
@@ -385,9 +339,8 @@ def main():
              "then try again. Nothing was changed.")
     if not (INSTALL / "compat_tool/tools/lepton-gamescope-bridge").is_file():
         fail("Lepton installation not found at " + str(INSTALL))
-    if not args.runtime_profile and registered is None:
-        fail("Lepton is not registered with Steam (no %s.vdf or self-contained %s in %s); "
-             "reinstall the tool and restart Steam" % (TOOL, TOOL, STEAM / "compatibilitytools.d"))
+    if not args.runtime_profile and not (STEAM / "compatibilitytools.d" / (TOOL + ".vdf")).is_file():
+        fail("Lepton is not registered with Steam; install the .vdf and restart Steam")
     name = args.name or apk.stem
     if not name or any(x in name for x in "\x00\r\n"):
         fail("Invalid shortcut name")

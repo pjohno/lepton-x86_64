@@ -390,8 +390,7 @@ no source checkout, `.build-env`, compilation or new sysbake.
   `widevine`) must match what is actually installed in the rootfs and its
   provenance manifests.
 - Choose a new bundle ID; the default tool ID is `lepton_custom_<ID>` and the
-  display name `lepton <ID> x86_64 (custom)`, with any GApps, NDK or Widevine
-  after it, e.g. `lepton <ID> x86_64 (custom, GApps + NDK)` (`--tool-id`/`--tool-name` to
+  display name `Lepton x86_64 (custom) - <ID>` (`--tool-id`/`--tool-name` to
   override). The source bundle's IDs are refused.
 - File types, permissions, symlinks and hardlinks are preserved. Temporary and
   sysbake work folders, Podman storage, staged ADB, saved profiles, install

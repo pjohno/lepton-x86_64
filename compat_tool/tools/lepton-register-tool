@@ -1,83 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Register an extracted Lepton bundle alongside existing Steam tools.
-
-Legacy layout (the install is outside Steam): a standalone
-<steam>/compatibilitytools.d/<tool_id>.vdf whose install_path is
-<install>/compat_tool.
-
-Steam-compat layout (the install is <steam>/compatibilitytools.d/<dir>): the
-install becomes a self-contained compatibility tool, like GE-Proton: a
-top-level toolmanifest.vdf, a lepton-x86_64-entry wrapper that forwards to
-compat_tool/lepton-x86_64-entry, and compatibilitytool.vdf with
-install_path ".". No standalone .vdf is written for it.
-
-<steam> is resolved by lepton-manage-installs (~/.steam/root first).
-"""
+"""Register an extracted Lepton bundle alongside existing Steam tools."""
 import argparse
-import importlib.machinery
-import importlib.util
 import json
-import os
 from pathlib import Path
 import re
 import sys
 
-HERE = Path(__file__).resolve().parent
-ENTRY_COMMAND = '/lepton-x86_64-entry %verb%'
-WRAPPER = '''#!/usr/bin/env bash
-# SPDX-License-Identifier: MIT
-# Steam entry point of a self-contained Lepton install (compatibilitytool.vdf
-# "install_path" "."). Replaces itself with the bundled entry script, which
-# keeps choosing the Gamescope bridge or direct Wayland as before.
-exec "$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")/compat_tool/lepton-x86_64-entry" "$@"
-'''
 
-
-def manage_module():
-    """The shared Steam-directory resolver and install discovery."""
-    loader = importlib.machinery.SourceFileLoader('lepton_manage_installs', str(HERE / 'lepton-manage-installs'))
-    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-    loader.exec_module(module)
-    return module
-
-
-def q(value):
-    # JSON string escaping is compatible with these quoted VDF string values.
-    return json.dumps(str(value), ensure_ascii=False)
-
-
-def vdf(tool, install_path, name, from_os='android'):
-    return ('"compatibilitytools"\n{\n  "compat_tools"\n  {\n    ' + q(tool) + '\n    {\n'
-            '      "install_path" ' + q(install_path) + '\n'
-            '      "display_name" ' + q(name) + '\n'
-            '      "from_oslist" ' + q(from_os) + '\n      "to_oslist" "linux"\n    }\n  }\n}\n')
-
-
-def write_atomic(path, text, mode=0o644):
-    temp = path.with_name('.' + path.name + '.new')
-    temp.write_text(text)
-    os.chmod(temp, mode)
-    os.replace(temp, path)
-
-
-def registrations_of(tools, tool, M):
-    """Self-contained directories in tools registering this tool ID (any program)."""
-    found = []
-    for registration in sorted(tools.glob('*/' + M.REGISTRATION)) if tools.is_dir() else ():
-        try:
-            if M.vdf_tool_id(registration.read_text(encoding='utf-8')) == tool:
-                found.append(registration.parent.resolve())
-        except OSError:
-            continue
-    return found
-
-
-def register(root, home=None, execute=False, replace=False, M=None):
-    M = M or manage_module()
-    if home is not None and Path(home) != M.HOME:
-        M.use_home(home)
-    root = Path(root).resolve()
+def register(root, home, execute=False, replace=False):
     metadata = json.loads((root / 'BUNDLE.json').read_text())
     tool = metadata['tool_id']
     name = metadata['display_name']
@@ -88,24 +19,18 @@ def register(root, home=None, execute=False, replace=False, M=None):
     runtime = root / 'compat_tool'
     if not (runtime / 'lepton').is_file() or not (runtime / 'sysbake/system/packages.xml').is_file():
         raise ValueError('Extract a complete bundle before registration')
-    steam = M.steam_root()
-    tools = M.compat_tools_dir(steam)
-    if root.parent == tools:
-        return register_steam_compat(root, tool, name, tools, execute, M)
-    return register_legacy(root, tool, name, tools, execute, replace, M)
-
-
-def register_legacy(root, tool, name, tools, execute, replace, M):
-    runtime = root / 'compat_tool'
-    body = vdf(tool, runtime, name)
+    # JSON string escaping is compatible with these quoted VDF string values.
+    q = lambda value: json.dumps(str(value), ensure_ascii=False)
+    def vdf(from_os):
+        return ('"compatibilitytools"\n{\n  "compat_tools"\n  {\n    ' + q(tool) + '\n    {\n'
+                '      "install_path" ' + q(runtime) + '\n'
+                '      "display_name" ' + q(name) + '\n'
+                '      "from_oslist" ' + q(from_os) + '\n      "to_oslist" "linux"\n    }\n  }\n}\n')
+    body = vdf('android')
     # The exact Windows -> Linux file earlier versions wrote for this same tool,
     # path and name; it is refreshed in place without --replace.
-    legacy = vdf(tool, runtime, name, 'windows')
-    target = tools / (tool + '.vdf')
-    others = registrations_of(tools, tool, M)
-    if others:
-        raise ValueError('Tool ID %s is already registered by %s; Steam would see it twice'
-                         % (tool, others[0] / M.REGISTRATION))
+    legacy = vdf('windows')
+    target = home / '.local/share/Steam/compatibilitytools.d' / (tool + '.vdf')
     if target.is_symlink():
         raise ValueError('Refusing a symlink registration: ' + str(target))
     if target.exists():
@@ -119,15 +44,14 @@ def register_legacy(root, tool, name, tools, execute, replace, M):
         if not (current == legacy or (replace and same_path)):
             raise ValueError('Tool ID already registered elsewhere; choose another --tool-id when packaging')
         if execute:
-            write_atomic(target, body)
+            target.write_text(body)
             print('Updated registration:', name)
             print('Restart Steam to load the updated compatibility tool.')
         else:
             print('PASS: registration would be updated; no files changed:', target)
         return target
     if execute:
-        tools = M.compat_tools_dir(create=True)
-        target = tools / (tool + '.vdf')
+        target.parent.mkdir(parents=True, exist_ok=True)
         # Exclusive creation prevents replacing an existing registration.
         with target.open('x') as out:
             out.write(body)
@@ -138,45 +62,8 @@ def register_legacy(root, tool, name, tools, execute, replace, M):
     return target
 
 
-def register_steam_compat(root, tool, name, tools, execute, M):
-    manifest = (root / 'compat_tool/toolmanifest.vdf').read_text(encoding='utf-8')
-    if ENTRY_COMMAND not in manifest or not (root / 'compat_tool/lepton-x86_64-entry').is_file():
-        raise ValueError('This bundle has no lepton-x86_64-entry launcher; it cannot be a '
-                         'self-contained Steam compatibility tool (install it in Lepton\'s folder instead)')
-    standalone = tools / (tool + '.vdf')
-    if standalone.exists() or standalone.is_symlink():
-        raise ValueError('Tool ID %s is already registered by %s (a legacy install); migrate it with '
-                         '--steam-compat --into %s instead' % (tool, standalone, tool))
-    others = [d for d in registrations_of(tools, tool, M) if d != root]
-    if others:
-        raise ValueError('Tool ID %s is already registered by %s; Steam would see it twice'
-                         % (tool, others[0] / M.REGISTRATION))
-    target = root / M.REGISTRATION
-    body = vdf(tool, '.', name)
-    files = {root / 'toolmanifest.vdf': (manifest, 0o644), root / 'lepton-x86_64-entry': (WRAPPER, 0o755)}
-    current = target.read_text() if target.is_file() else None
-    if current is not None and M.vdf_tool_id(current) != tool:
-        raise ValueError('%s registers another tool ID (%s)' % (target, M.vdf_tool_id(current)))
-    if not execute:
-        print('PASS: self-contained registration %s; no files changed: %s'
-              % ('would be updated' if current not in (None, body) else 'available', target))
-        return target
-    for path, (text, mode) in files.items():
-        if path.is_symlink():
-            raise ValueError('Refusing a symlink: ' + str(path))
-        write_atomic(path, text, mode)
-    # The registration comes last: Steam only sees a complete tool.
-    if current == body:
-        print('Already registered:', tool)
-    else:
-        write_atomic(target, body)
-        print(('Updated registration:' if current else 'Registered:'), name)
-        print('Restart Steam to load the %s compatibility tool.' % ('updated' if current else 'new'))
-    return target
-
-
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--check', action='store_true', help='Read-only preflight (default)')
     modes.add_argument('--execute', action='store_true', help='Create a new registration; refuse conflicts')

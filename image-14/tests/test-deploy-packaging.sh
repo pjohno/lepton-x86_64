@@ -149,7 +149,7 @@ pinned="$out/fixture-pinned.install.sh"
 pin_installer "$installer" "$pinned" "$fake_sha"
 grep -Fq ' lepton-x86_64-fixture.install.sh' "$archive.sha256"
 deck_home="$work/deck-home"
-mkdir -p "$deck_home/.local/share/Steam"   # a native Steam install
+mkdir -p "$deck_home"
 # LEPTON_INSTALL_IN_TERMINAL stops the installer reopening itself in Konsole.
 deck() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 HOME="$deck_home" bash "$pinned" --allow-non-amd "$@"; }
 manage() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$deck_home" python3 "$deck_home/.local/bin/lepton-manage-installs" "$@"; }
@@ -174,7 +174,7 @@ deck > "$work/install.log"
 grep -Fq 'https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip' "$work/curl.log"
 vdf="$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_fixture.vdf"
 grep -Fq "\"$dest/compat_tool\"" "$vdf"
-grep -Fq '"lepton fixture x86_64 (community)"' "$vdf"
+grep -Fq '"Lepton x86_64 (community) - fixture"' "$vdf"
 grep -Fq '"from_oslist" "android"' "$vdf"
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_fixture.env ]]
 ( source "$deck_home/.config/lepton-x86_64/lepton_x86_64_fixture.env"; [[ "$LEPTON_X86_INSTALL_DIR" == "$dest" ]] )
@@ -260,7 +260,7 @@ m = json.load(open(sys.argv[1]))
 assert (m['tool_id'], m['install_directory'], m['packaged_tool_id']) == ('lepton_x86_64_dev', 'lepton-x86_64-dev', 'lepton_x86_64_fixture'), m
 PYINTO
 grep -Fq "\"$legacy/compat_tool\"" "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf"
-grep -Fq '"lepton fixture x86_64 (community)"' "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf"
+grep -Fq '"Lepton x86_64 (community) - fixture"' "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf"
 not compgen -G "$legacy.previous-*" > /dev/null
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_dev.env ]]
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$legacy/compat_tool/tools/lepton-add-game" ]]
@@ -271,7 +271,7 @@ manage --remove lepton_x86_64_dev --execute > "$work/remove-default.log"
 [[ ! -e "$legacy" && ! -e "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf" ]]
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_fixture.env ]]
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$dest/compat_tool/tools/lepton-add-game" ]]
-grep -q 'Default install: lepton fixture x86_64 (community)' "$work/remove-default.log"
+grep -q 'Default install: Lepton x86_64 (community) - fixture' "$work/remove-default.log"
 # Installer --remove: validated before any change, applied after success.
 mkdir -p "$legacy/compat_tool/liblepton" && printf '#!/bin/sh\n' > "$legacy/compat_tool/lepton"
 manage --list | grep -q 'Unregistered lepton-x86_64-dev'
@@ -320,7 +320,7 @@ env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u LEPTON_NO_DIALOGS LEPTON_INSTALL_IN_T
     WAYLAND_DISPLAY=test-display UI_LOG="$work/gui-reinstall.log" PATH="$work/gui-bin:$PATH" HOME="$deck_home" \
     bash "$pinned" --allow-non-amd --pause < /dev/null > "$work/gui-reinstall.out" 2>&1 ||
     { cat "$work/gui-reinstall.out"; echo 'FAIL: double-click reinstall'; exit 1; }
-grep -q 'Reinstall lepton fixture x86_64 (community) over the existing copy' "$work/gui-reinstall.log"
+grep -q 'Reinstall Lepton x86_64 (community) - fixture over the existing copy' "$work/gui-reinstall.log"
 not grep -q 'Install as a new tool' "$work/gui-reinstall.log"
 [[ -x "$dest/compat_tool/lepton" && ! -e "$dest/stale-marker" && -f "$legacy/BUNDLE.json" ]]
 not compgen -G "$dest.previous-*" > /dev/null
@@ -355,7 +355,7 @@ assert metadata['gapps'] is True and metadata['ndk'] is False and metadata['wide
 PYMETA
 # GApps installs get Google game icons pointing at their own install;
 # removing the install removes them.
-g_home="$work/gapps-home"; mkdir -p "$g_home/Desktop" "$g_home/.local/share/Steam"
+g_home="$work/gapps-home"; mkdir -p "$g_home/Desktop"
 pin_installer "$out/lepton-x86_64-gapps-fixture.install.sh" "$out/gapps-pinned.install.sh" "$fake_sha"
 env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 HOME="$g_home" \
     bash "$out/gapps-pinned.install.sh" --allow-non-amd > "$work/gapps-install.log"

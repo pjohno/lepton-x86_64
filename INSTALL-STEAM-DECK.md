@@ -117,13 +117,6 @@ ones (a new Steam tool) or to **replace** one of them. Replacing keeps that
 tool's Steam ID, so games set to it keep using it. The manager warns before a
 **downgrade**. Nothing is installed or replaced until you confirm.
 
-A new tool also asks **where** to install it: Lepton's folder (as before) or
-Steam's compatibility-tool folder (see
-[Installing into Steam's compatibility-tool folder](#installing-into-steams-compatibility-tool-folder-optional)).
-Updates and repairs keep the folder an install already uses. Releases older
-than this choice can still be installed in Lepton's folder, but can't update an
-install that is in Steam's folder; the manager says so and changes nothing.
-
 How downloads work:
 - Files go to `~/Downloads/lepton-deck-bundles/`. They're downloaded under
   temporary names and only take their real names once their checksums are
@@ -236,13 +229,8 @@ The installer:
 1. verifies the checksum and that an AMD GPU is present;
 2. downloads Google's `adb` and checks its SHA256 and version (see below);
 3. moves everything to `~/.local/share/<install directory>` (it refuses to
-   overwrite unless asked to replace), or with `--steam-compat` to
-   `~/.steam/root/compatibilitytools.d/<install directory>` (see
-   [below](#installing-into-steams-compatibility-tool-folder-optional));
-4. registers the Steam compatibility tool **lepton base-20261104 x86_64 (community)**.
-   The version comes first so it shows in Steam's narrow menus; bundles with
-   GApps, NDK or Widevine add them after it, for example
-   **lepton v0.2.0-alpha x86_64 (community, GApps + NDK)**;
+   overwrite unless asked to replace);
+4. registers the Steam compatibility tool **Lepton x86_64 (community) - base-20261104**;
 5. writes `~/.config/lepton-x86_64/<tool id>.env` and makes it the default;
 6. links `lepton-add-game`, `lepton-add-game-gui` and `lepton-run-apk` into `~/.local/bin`;
 7. adds **Lepton: Add Android game**, **Lepton: Check graphics** and **Lepton:
@@ -255,8 +243,7 @@ installer first asks whether to **install as a new tool** or **replace** one of
 them, and afterwards offers a tick-list of older installs to remove. If this
 bundle is already installed, the first choice is **reinstall** it over the
 existing copy instead (to undo local changes; its Steam shortcuts and game data
-are kept). A new tool also asks whether it goes into Lepton's folder or Steam's
-compatibility-tool folder. Steam does
+are kept). Steam does
 not need to be closed for installing, replacing or removing (only for adding
 games); restart Steam afterwards so it shows the new tool.
 
@@ -286,9 +273,7 @@ bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-base-20261104.install.sh \
 Terminal options: `--check` verifies without installing; `--into TOOL_ID`
 replaces an existing install; `--replace` replaces this bundle's own earlier
 install; `--remove TOOL_ID` (repeatable) removes others after installing;
-`--keep-previous` keeps the replaced copy as `<directory>.previous-<date>`;
-`--steam-compat` installs into Steam's compatibility-tool folder (with
-`--replace` or `--into`, it moves that install there).
+`--keep-previous` keeps the replaced copy as `<directory>.previous-<date>`.
 
 ### 4. Check graphics
 
@@ -336,78 +321,6 @@ does not reach Android.
 Controllers present at launch are passed to Android. Live controller hotplug is
 experimental (`--hotplug`) and exposes all host input devices to the container.
 
-## Installing into Steam's compatibility-tool folder (optional)
-
-By default Lepton installs into `~/.local/share/<install directory>` and
-registers itself with a small file,
-`~/.steam/root/compatibilitytools.d/<tool id>.vdf`. With `--steam-compat` (or
-by choosing **Steam's compatibility-tool folder** in the installer window or
-the release manager), it installs instead as one self-contained compatibility
-tool, like a manually installed GE-Proton:
-
-```text
-~/.steam/root/compatibilitytools.d/
-└── lepton_x86_64_v0_2_0_alpha/
-    ├── compatibilitytool.vdf      # registers the tool ("install_path" ".")
-    ├── toolmanifest.vdf           # starts ./lepton-x86_64-entry %verb%
-    ├── lepton-x86_64-entry        # forwards to compat_tool/lepton-x86_64-entry
-    ├── BUNDLE.json
-    ├── compat_tool/               # the same runtime as in Lepton's folder
-    ├── tools/platform-tools/adb   # Google's ADB, downloaded and verified
-    └── tests/runtime/
-```
-
-```bash
-bash lepton-x86_64-VERSION.install.sh --steam-compat
-```
-
-Both kinds of install work the same way in games: the same launcher chooses
-the Gamescope bridge (Steam Deck) or direct Wayland (desktop), and Android data
-stays in Steam's `compatdata`. Both can be installed side by side, but one tool
-ID is only ever in one of them.
-
-**Which Steam folder.** `~/.steam/root` is the path Valve documents; on native
-Steam it is a link that usually resolves to `~/.local/share/Steam`. Lepton
-follows it and uses the folder it points to; `~/.local/share/Steam` is used when
-`~/.steam/root` is missing. The same folder reached through both paths counts
-once. Lepton stops with an explanation, and changes nothing, when:
-- `~/.steam/root` and `~/.local/share/Steam` are two **different** Steam
-  folders: remove the unused one, or name the right one with
-  `LEPTON_STEAM_ROOT=/path/to/Steam` for the installer and
-  `lepton-manage-installs`;
-- the folder is owned by another user, writable by everyone, or a link to a
-  folder outside your home that does not look like Steam;
-- only Flatpak Steam is installed (it is not supported);
-- there is no Steam at all (Lepton never creates a Steam folder; start Steam
-  once first).
-
-**Updating and repairing** (release manager, `--replace` or `--into`) keep an
-install where it is: a self-contained install is updated inside Steam's folder,
-a `~/.local/share` install stays there. Its tool ID, Steam shortcuts and game
-data are kept, and Steam shows the new version's name after a restart. A kept
-backup (`--keep-previous`) of a self-contained install has its registration
-disabled, so Steam never sees the tool twice.
-
-**Moving** an install from `~/.local/share` into Steam's folder is explicit:
-
-```bash
-bash lepton-x86_64-VERSION.install.sh --steam-compat --into TOOL_ID   # or --replace
-```
-
-It keeps the tool ID (so game shortcuts keep working), moves saved app profiles
-(such as a Google sign-in) into the new copy, removes the old standalone
-registration and updates `~/.config/lepton-x86_64/<tool id>.env` and the
-`~/.local/bin` commands. The old copy stays as
-`~/.local/share/<directory>.previous-<date>` until the move has succeeded; if
-anything fails, the old copy and its registration are put back.
-
-**Uninstalling** works the same for both: **Lepton: Remove installs** or
-`lepton-manage-installs --remove TOOL_ID --execute` removes the folder with its
-registration (and, for `~/.local/share` installs, the standalone `.vdf`).
-If two installs ever register the same tool ID, Lepton lists both as
-**DUPLICATE TOOL ID**, refuses to replace either, and removes one only when you
-name it by its folder. Restart Steam afterwards.
-
 ## Several installs side by side, replacing and removing
 
 Each bundle ID installs as its own Steam tool (`lepton_x86_64_<bundle-id>`, or
@@ -422,10 +335,9 @@ Saved app profiles (for example a Google sign-in) are moved into the new copy,
 so nothing is lost; the removal list shows profile counts.
 
 **Removing**: double-tap **Lepton: Remove installs** and tick what to delete.
-It lists every Lepton install in either folder (including older manual ones
-registered with Steam), leftover `.previous-*` backups and unregistered Lepton
-folders, with the number of Steam shortcuts using each. It never lists or
-removes other compatibility tools such as Proton or GE-Proton. In a terminal:
+It lists every Lepton install (including older manual ones registered with
+Steam), leftover `.previous-*` backups and unregistered Lepton folders, with the
+number of Steam shortcuts using each. In a terminal:
 
 ```bash
 ~/.local/bin/lepton-manage-installs --list

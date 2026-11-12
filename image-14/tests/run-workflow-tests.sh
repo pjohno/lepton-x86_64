@@ -9,8 +9,6 @@ done
 bash "$repo/image-14/tests/test-build-recovery.sh"
 bash "$repo/image-14/tests/test-incremental-build.sh"
 bash "$repo/image-14/tests/test-preflight-tools.sh"
-bash "$repo/image-14/tests/test-steam-compat-install.sh"
-python3 -B "$repo/tests/test-steam-compat.py"
 python3 -B "$repo/image-14/tests/test-source-reset.py"
 bash "$repo/compat_tool/liblepton/ndk_auxv/test.sh"
 python3 -B "$repo/tests/test-customize.py"

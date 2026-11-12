@@ -54,7 +54,7 @@ pin_installer "$shipped" "$work/bundles/base-other.install.sh" "$other_sha"
 printf '<html>Service unavailable</html>\n' > "$work/not-a-zip.zip"
 
 mkdir -p "$work/bin"; install_fake_curl "$work/bin"
-home="$work/home"; mkdir -p "$home/.local/share/Steam"   # native Steam
+home="$work/home"; mkdir -p "$home"
 data="$home/.local/share"; dest="$data/lepton_x86_64_base"
 vdf="$data/Steam/compatibilitytools.d/lepton_x86_64_base.vdf"
 export FAKE_CURL_LOG="$work/curl.log" FAKE_ADB_ZIP="$work/good/platform-tools.zip"

@@ -21,7 +21,6 @@ class RegistrationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name) / 'home'
-        (self.home / '.local/share/Steam').mkdir(parents=True)  # native Steam
         self.root = Path(self.temp.name) / 'GApps bundle'
         (self.root / 'compat_tool/sysbake/system').mkdir(parents=True)
         (self.root / 'compat_tool/lepton').touch()
@@ -62,16 +61,8 @@ class RegistrationTests(unittest.TestCase):
         self.assertEqual(target.read_text(), other)
 
     def test_check_creates_no_files(self):
-        before = sorted(self.home.rglob('*'))
         self.register()
-        self.assertEqual(sorted(self.home.rglob('*')), before)
-
-    def test_never_creates_a_steam_installation(self):
-        steam = self.home / '.local/share/Steam'
-        steam.rmdir()
-        with self.assertRaisesRegex(ValueError, 'Steam not found'):
-            self.register(True)
-        self.assertFalse(steam.exists())
+        self.assertFalse(self.home.exists())
 
     def test_registration_preserves_other_tools_and_is_idempotent(self):
         directory = self.home / '.local/share/Steam/compatibilitytools.d'

@@ -51,11 +51,8 @@ The full guide, with every step and troubleshooting, is **[INSTALL-STEAM-DECK.md
    cd ~/Downloads && bash lepton-x86_64-VERSION.install.sh
    ```
    It checks the download and the Deck, installs into `~/.local/share` and
-   registers Lepton as a Steam compatibility tool, named with its version first
-   (**lepton VERSION x86_64 (community)**). If anything fails, nothing is
-   changed. Add `--steam-compat` to install it instead as a self-contained tool
-   in Steam's own `~/.steam/root/compatibilitytools.d/`, like GE-Proton
-   ([details](INSTALL-STEAM-DECK.md#installing-into-steams-compatibility-tool-folder-optional)).
+   registers Lepton as a Steam compatibility tool. If anything fails, nothing
+   is changed.
 4. **Check graphics:** double-tap **Lepton: Check graphics** on the desktop. It
    should report the AMD (RADV) driver.
 
