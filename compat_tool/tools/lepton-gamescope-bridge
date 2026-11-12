@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-set -euo pipefail
+set -Eeuo pipefail
+# Steam hides this script's exit status and output from the player, so an
+# unexpected stop must at least say where in Steam's console log.
+trap 'echo "ERROR: lepton-gamescope-bridge stopped at line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
 # Tells lepton-x86_64-entry (inside the nested Gamescope) not to add another bridge.
 export LEPTON_BRIDGE_ACTIVE=1
 
@@ -48,6 +51,13 @@ else
         echo "ERROR: Gaming Mode needs an X11 DISPLAY for Steam window tagging" >&2
         exit 1
     }
+    # Gaming Mode depends on these host X11 tools; record what this launch sees
+    # (Steam's runtime-launched environment can differ from a terminal's).
+    x11_tools=""
+    for tool in xdpyinfo xwininfo xprop awk; do
+        x11_tools+=" $tool=$(command -v "$tool" || echo MISSING)"
+    done
+    echo "Lepton Gaming Mode X11: DISPLAY=$outer_display XAUTHORITY=${XAUTHORITY:-<unset>};$x11_tools"
 fi
 
 # Experimental, opt-in (LEPTON_DESKTOP_DIRECT=1): no Gamescope; Android draws
@@ -145,8 +155,21 @@ if [[ "$display_mode" == desktop ]]; then
     fi
 fi
 if [[ -z "$resolution" ]]; then
-    resolution="$(DISPLAY="$outer_display" xdpyinfo 2>/dev/null |
-        awk '/dimensions:/ {print $2; exit}')"
+    # A failed query must reach the fallback below, never end the launch.
+    if x11_info="$(DISPLAY="$outer_display" xdpyinfo 2>&1)"; then
+        resolution="$(awk '/dimensions:/ {print $2; exit}' <<< "$x11_info")"
+    else
+        echo "WARNING: xdpyinfo cannot read the X11 screen size on ${outer_display:-<no DISPLAY>}: $(head -n 1 <<< "$x11_info")" >&2
+    fi
+fi
+if [[ -z "$resolution" ]]; then
+    # The root window has the screen's size; xwininfo is also used for tagging.
+    if x11_info="$(DISPLAY="$outer_display" xwininfo -root 2>&1)"; then
+        resolution="$(awk '/^ *Width:/ {w=$2} /^ *Height:/ {h=$2} END {if (w && h) print w "x" h}' <<< "$x11_info")"
+        [[ -z "$resolution" ]] || echo "Screen size from xwininfo: $resolution"
+    else
+        echo "WARNING: xwininfo cannot read the X11 screen size either: $(head -n 1 <<< "$x11_info")" >&2
+    fi
 fi
 
 if [[ ! "$resolution" =~ ^[1-9][0-9]*x[1-9][0-9]*$ ]]; then
@@ -196,15 +219,20 @@ for ((i=0; i<120; i++)); do
     while read -r win; do
         [[ -n "$win" ]] || continue
 
+        # X11 failures are reported and retried; they never end the launch.
         owner=$(DISPLAY="$outer_display" xprop -id "$win" _NET_WM_PID 2>/dev/null |
-            awk -F '= ' 'NF > 1 {print $2}')
+            awk -F '= ' 'NF > 1 {print $2}') || owner=""
 
         if [[ "$owner" == "$child" ]]; then
-            DISPLAY="$outer_display" xprop -id "$win" \
-                -f STEAM_GAME 32c -set STEAM_GAME "$app_id"
-            echo "Assigned Steam AppID $app_id to window $win"
-            tagged=1
-            break
+            if DISPLAY="$outer_display" xprop -id "$win" \
+                -f STEAM_GAME 32c -set STEAM_GAME "$app_id"; then
+                game_property=$(DISPLAY="$outer_display" xprop -id "$win" STEAM_GAME 2>/dev/null |
+                    awk -F '= ' 'NF > 1 {print $2}') || game_property=""
+                echo "Assigned Steam AppID $app_id to window $win (_NET_WM_PID $owner; STEAM_GAME now ${game_property:-unreadable})"
+                tagged=1
+                break
+            fi
+            echo "WARNING: could not set STEAM_GAME on Gamescope window $win; retrying" >&2
         fi
     done < <(
         DISPLAY="$outer_display" xwininfo -root -tree 2>/dev/null |
@@ -215,7 +243,12 @@ for ((i=0; i<120; i++)); do
     sleep 0.25
 done
 
-(( tagged )) || echo "WARNING: Gamescope window was not identified" >&2
+if (( ! tagged )); then
+    echo "WARNING: Gamescope window was not identified or tagged with STEAM_GAME $app_id; Steam may keep it behind its own UI (no focus)" >&2
+fi
+# Read-only diagnostics: Steam's current Gamescope layer order (never changed here).
+base_layer=$(DISPLAY="$outer_display" xprop -root GAMESCOPECTRL_BASELAYER_APPID 2>/dev/null) || base_layer=""
+echo "Gamescope base layer: ${base_layer#*= }"
 wait "$child" || status=$?
 show_launch_message
 exit "${status:-0}"

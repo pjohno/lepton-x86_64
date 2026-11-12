@@ -188,6 +188,63 @@ for mode in kde gaming; do
 done
 "$real_grep" -qx 'xprop -id 0x500003 -f STEAM_GAME 32c -set STEAM_GAME 123' "$work/log" || fail 'Binder popup not tagged'
 
+# SteamRT64 Gaming Mode (2026-11 Steam client): host X11 tools may be missing
+# or unable to reach Steam's display. Each X11 step degrades with a message;
+# none may end the launch silently (set -e), and Gamescope is never orphaned.
+x11=(env -i PATH="$work/x11:$work/bin:/usr/bin:/bin" HOME="$work" WORK="$work" LOG="$work/log" SteamAppId=123 "${gaming[@]}")
+x11_run() { rm -f "$work/log" "$work/gamescope.pid"; "${x11[@]}" "$@" "$bridge" direct-game > "$work/out" 2> "$work/err"; }
+mkdir -p "$work/x11"
+xfake() { printf '#!/bin/bash\n%s\n' "$2" > "$work/x11/$1"; chmod +x "$work/x11/$1"; }
+missing_xdpyinfo() { xfake xdpyinfo 'echo "bash: xdpyinfo: command not found" >&2; exit 127'; }
+# xdpyinfo unusable: the real size comes from the root window via xwininfo.
+missing_xdpyinfo
+xfake xwininfo 'if [[ "$*" == "-root" ]]; then printf "  Width: 1920\n  Height: 1080\n"; else exec "$WORK/bin/xwininfo" "$@"; fi'
+x11_run || fail "launch ended when xdpyinfo was unusable: $(cat "$work/err")"
+expect "$(gaming_cmd 1920x1080)"
+"$real_grep" -q 'WARNING: xdpyinfo cannot read the X11 screen size on :0' "$work/err" || fail 'xdpyinfo failure not reported'
+"$real_grep" -qx 'Screen size from xwininfo: 1920x1080' "$work/out"
+"$real_grep" -qx 'xprop -id 0x400001 -f STEAM_GAME 32c -set STEAM_GAME 123' "$work/log" || fail 'window not tagged after size fallback'
+"$real_grep" -qx 'Lepton Gaming Mode X11: DISPLAY=:0 XAUTHORITY=<unset>; xdpyinfo='"$work"'/x11/xdpyinfo xwininfo='"$work"'/x11/xwininfo xprop='"$work"'/bin/xprop awk='"$(command -v awk)" "$work/out" || fail 'X11 environment not logged'
+# Neither tool can read the display: the documented 1280x800 fallback.
+xfake xwininfo 'if [[ "$*" == "-root" ]]; then echo "xwininfo: error: unable to open display \":0\"" >&2; exit 1; fi; exec "$WORK/bin/xwininfo" "$@"'
+x11_run || fail "launch ended when no X11 size was available: $(cat "$work/err")"
+expect "$(gaming_cmd 1280x800)"
+"$real_grep" -q 'WARNING: Invalid or unavailable resolution' "$work/err"
+"$real_grep" -q 'xwininfo cannot read the X11 screen size either' "$work/err"
+# An explicit size skips every query (the field workaround) and still tags.
+x11_run LEPTON_RESOLUTION=1280x800 || fail 'explicit resolution launch failed'
+expect "$(gaming_cmd 1280x800)"; ! "$real_grep" -q 'cannot read the X11 screen size' "$work/err"
+rm -f "$work/x11/"*
+# _NET_WM_PID unreadable: tagging is retried and reported; the bridge still
+# waits for its Gamescope (which must not be orphaned) and passes its status.
+xfake xprop 'echo "X Error of failed request: BadWindow" >&2; exit 1'
+x11_run || fail "launch ended when xprop failed: $(cat "$work/err")"
+"$real_grep" -q '^gamescope ' "$work/log" || fail 'Gamescope not started'
+"$real_grep" -q 'WARNING: Gamescope window was not identified or tagged with STEAM_GAME 123' "$work/err"
+! "$real_grep" -q 'stopped at line' "$work/err" || fail "bridge stopped early: $(cat "$work/err")"
+[[ -s "$work/gamescope.pid" ]] && ! kill -0 "$(cat "$work/gamescope.pid")" 2>/dev/null || fail 'bridge returned while Gamescope still ran'
+# STEAM_GAME cannot be set: reported, retried, no early exit.
+xfake xprop 'if [[ "$*" == *_NET_WM_PID* ]]; then exec "$WORK/bin/xprop" "$@"; fi; [[ "$*" != *-set* ]] || { echo "X Error: BadAccess" >&2; exit 1; }'
+x11_run || fail "launch ended when STEAM_GAME could not be set: $(cat "$work/err")"
+"$real_grep" -q 'WARNING: could not set STEAM_GAME on Gamescope window 0x400001; retrying' "$work/err"
+"$real_grep" -q 'WARNING: Gamescope window was not identified or tagged' "$work/err"
+rm -f "$work/x11/"*
+# Successful tagging is confirmed by reading STEAM_GAME back; the base layer
+# order is logged read-only and never changed by the bridge.
+xfake xprop 'case "$*" in *_NET_WM_PID*|*-set*) exec "$WORK/bin/xprop" "$@" ;; *-root*) echo "xprop $*" >> "$LOG"; echo "GAMESCOPECTRL_BASELAYER_APPID(CARDINAL) = 769, 123" ;; *) echo "STEAM_GAME(CARDINAL) = 123" ;; esac'
+x11_run || fail 'tagged launch failed'
+"$real_grep" -qx 'Assigned Steam AppID 123 to window 0x400001 (_NET_WM_PID '"$(cat "$work/gamescope.pid")"'; STEAM_GAME now 123)' "$work/out" || fail "tag not confirmed: $(cat "$work/out")"
+"$real_grep" -qx 'Gamescope base layer: 769, 123' "$work/out"
+! "$real_grep" -q -- '-root.*-set\|-set.*GAMESCOPECTRL' "$work/log" || fail 'bridge changed the Gamescope layer order'
+rm -f "$work/x11/"*
+# Any other unexpected stop names its line and command instead of vanishing.
+xfake sleep 'exit 1'
+xfake xwininfo 'exit 0'
+xfake gamescope 'echo "$$" > "$WORK/gamescope.pid"; echo "gamescope $*" >> "$LOG"; exec /bin/sleep 0.6'
+if x11_run; then fail 'bridge ignored a failing command'; fi
+"$real_grep" -qE '^ERROR: lepton-gamescope-bridge stopped at line [0-9]+: sleep 0.25 \(exit 1\)$' "$work/err" || fail "unexpected stop was silent: $(cat "$work/err")"
+rm -f "$work/x11/"*
+
 # The bridge never asks Gamescope for a borderless window.
 ! "$real_grep" -qE -- '(^|[[:space:]])(-b|--borderless)([[:space:]]|$)' "$bridge" || fail 'bridge passes --borderless'
-echo 'PASS: gamescope bridge: desktop default 1, Gaming Mode default 4 and experimental overrides 0/1/4, scoped validation and logging, window/fullscreen sizing and Steam tagging, direct Wayland unchanged, refused launches and missing Binder shown as popups'
+echo 'PASS: gamescope bridge: desktop default 1, Gaming Mode default 4 and experimental overrides 0/1/4, scoped validation and logging, window/fullscreen sizing and Steam tagging, direct Wayland unchanged, refused launches and missing Binder shown as popups; SteamRT64 Gaming Mode X11 failures degrade with messages (size fallback, tagging retries, no silent stop)'
