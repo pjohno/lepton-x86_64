@@ -154,7 +154,7 @@ fi
 # only that builder can run them.
 MESA_CLC_BOOTSTRAP="$ROOT/image-14/scripts/internal/bootstrap-mesa-clc.sh"
 MESA_CLC_BIN="$TARGET/out/host/mesa-clc-ubuntu26/bin"
-[[ "$BUILDER" == lepton-builder-ubuntu26:latest ]] ||
+[[ "$BUILDER" == lepton-builder-ubuntu26:latest || "$ACTION" == --package-only || "$ACTION" == --repair ]] ||
   fail "Intel Mesa drivers need the Ubuntu 26 builder (LEPTON_BUILD_CONTAINER=lepton-builder-ubuntu26:latest)"
 MESA_CLC_MOUNT=(
   -v "$MESA_CLC_BIN/mesa_clc:/usr/local/bin/mesa_clc:ro"

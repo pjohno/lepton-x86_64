@@ -7,6 +7,13 @@ work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 LEPTON_DIR="$ROOT/compat_tool/liblepton"  # normally set by liblepton.sh
 source "$ROOT/compat_tool/liblepton/properties.sh"
+# GPU selection comes from mounting.sh; a fake host with one AMD GPU.
+for fn in lepton_render_nodes lepton_host_gpu_vendor lepton_vulkan_hal lepton_selected_gpu lepton_gpu_render_node; do
+    eval "$(sed -n "/^function $fn()/,/^}/p" "$ROOT/compat_tool/liblepton/mounting.sh")"
+done
+mkdir -p "$work/drm/renderD128/device"
+echo 0x1002 > "$work/drm/renderD128/device/vendor"; echo 0x163f > "$work/drm/renderD128/device/device"
+export LEPTON_SYSFS_DRM="$work/drm"
 prefix() { printf '%s' "$work"; }
 print() { printf '%s' "$*"; }
 println() { printf '%s\n' "$*"; }
@@ -24,6 +31,20 @@ setup_props
 grep -qx 'persist.lepton.forward_web_intents=false' "$work/lepton.prop"
 grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
 ! grep -q 'c2-poolmask' "$work/lepton.prop"
+# x86_64 hardware graphics: the detected GPU's Vulkan driver and render node.
+grep -qx 'ro.hardware.vulkan=radeon' "$work/lepton.prop"
+grep -qx 'gralloc.gbm.device=/dev/dri/renderD128' "$work/lepton.prop"
+# NVIDIA first, Intel second: ANV, and gralloc on the Intel node.
+mkdir -p "$work/drm-intel/renderD128/device" "$work/drm-intel/renderD129/device"
+echo 0x10de > "$work/drm-intel/renderD128/device/vendor"; echo 0x8086 > "$work/drm-intel/renderD129/device/vendor"
+LEPTON_SYSFS_DRM="$work/drm-intel" setup_props
+grep -qx 'ro.hardware.vulkan=intel' "$work/lepton.prop"
+grep -qx 'gralloc.gbm.device=/dev/dri/renderD129' "$work/lepton.prop"
+# Software rendering: no hardware HAL and no render node.
+LEPTON_FORCE_SOFTWARE=true setup_props
+grep -qx 'ro.hardware.vulkan=pastel' "$work/lepton.prop"
+! grep -q 'gralloc.gbm.device' "$work/lepton.prop"
+LEPTON_SYSFS_DRM="$work/drm" setup_props
 # Valve upstream: shared-library replacements by GNU build ID.
 grep -qx 'ro.lepton.soreplace.25f52dbf904d24e2=/data/steamvr/runtime/bin/androidarm64/libopenxr_loader.so' "$work/lepton.prop"
 LEPTON_CODEC2=true LEPTON_FORWARD_WEB_INTENTS=true setup_props

@@ -460,20 +460,49 @@ function disable_qti_display()
     podman_mount_entry "$(prefix)/qti-display.rc" "/vendor/etc/init/vendor.qti.hardware.display.allocator-service.rc" rw,U
 }
 
-# x86_64 port: the Android image ships only AMD (RADV/radeonsi) GPU drivers.
-# Stop early with a clear message instead of an opaque Android graphics failure.
+# x86_64 port: hardware graphics with Mesa RADV/RadeonSI (AMD) or ANV/Iris
+# (Intel). One GPU is chosen per launch, and Android only sees its render node.
+# Unusable setups stop early with a clear message instead of an opaque Android
+# graphics failure.
+
+# Intel GPUs (PCI device IDs) that ANV does not drive: Gen2 to Gen8. From Mesa
+# 26.0.8 include/pci_ids: all of i915_pci_ids.h and crocus_pci_ids.h, plus the
+# Broadwell/Cherryview entries of iris_pci_ids.h (ANV needs Gen9, Skylake).
+LEPTON_INTEL_PRE_GEN9_IDS="
+0x0042 0x0046 0x0102 0x0106 0x010a 0x0112 0x0116 0x0122 0x0126 0x0152 0x0155 0x0156 0x0157
+0x015a 0x0162 0x0166 0x016a 0x0402 0x0406 0x040a 0x040b 0x040e 0x0412 0x0416 0x041a 0x041b
+0x041e 0x0422 0x0426 0x042a 0x042b 0x042e 0x0a02 0x0a06 0x0a0a 0x0a0b 0x0a0e 0x0a12 0x0a16
+0x0a1a 0x0a1b 0x0a1e 0x0a22 0x0a26 0x0a2a 0x0a2b 0x0a2e 0x0c02 0x0c06 0x0c0a 0x0c0b 0x0c0e
+0x0c12 0x0c16 0x0c1a 0x0c1b 0x0c1e 0x0c22 0x0c26 0x0c2a 0x0c2b 0x0c2e 0x0d02 0x0d06 0x0d0a
+0x0d0b 0x0d0e 0x0d12 0x0d16 0x0d1a 0x0d1b 0x0d1e 0x0d22 0x0d26 0x0d2a 0x0d2b 0x0d2e 0x0f31
+0x0f32 0x0f33 0x1602 0x1606 0x160a 0x160b 0x160d 0x160e 0x1612 0x1616 0x161a 0x161b 0x161d
+0x161e 0x1622 0x1626 0x162a 0x162b 0x162d 0x162e 0x22b0 0x22b1 0x22b2 0x22b3 0x2582 0x258a
+0x2592 0x2772 0x27a2 0x27ae 0x2972 0x2982 0x2992 0x29a2 0x29b2 0x29c2 0x29d2 0x2a02 0x2a12
+0x2a42 0x2e02 0x2e12 0x2e22 0x2e32 0x2e42 0x2e92 0xa001 0xa011
+"
+
+# The host's render nodes, one "renderDN vendor device" line each, in order.
+function lepton_render_nodes()
+{
+    local dir vendor device
+    for dir in "${LEPTON_SYSFS_DRM:-/sys/class/drm}"/renderD*; do
+        [[ -r "${dir}/device/vendor" ]] || continue
+        vendor="$(<"${dir}/device/vendor")"
+        device=unknown
+        [[ -r "${dir}/device/device" ]] && device="$(<"${dir}/device/device")"
+        echo "${dir##*/} ${vendor,,} ${device,,}"
+    done
+}
+
 # The GPU family Lepton drives with hardware graphics: "amd" (vendor 0x1002)
 # when any AMD render node exists, else "intel" (0x8086), else empty.
 function lepton_host_gpu_vendor()
 {
-    local vendor_file vendor found=""
-    for vendor_file in "${LEPTON_SYSFS_DRM:-/sys/class/drm}"/renderD*/device/vendor; do
-        [[ -r "${vendor_file}" ]] || continue
-        vendor="$(<"${vendor_file}")"
-        [[ "${vendor}" == "0x1002" ]] && { echo amd; return 0; }
-        [[ "${vendor}" == "0x8086" ]] && found=intel
-    done
-    echo "${found}"
+    local nodes
+    nodes="$(lepton_render_nodes)"
+    if grep -q ' 0x1002 ' <<< "${nodes}"; then echo amd
+    elif grep -q ' 0x8086 ' <<< "${nodes}"; then echo intel
+    fi
 }
 
 # Android Vulkan HAL suffix (vendor/lib64/hw/vulkan.<suffix>.so) for this host.
@@ -486,21 +515,53 @@ function lepton_vulkan_hal()
     if [[ "$(lepton_host_gpu_vendor)" == intel ]]; then echo intel; else echo radeon; fi
 }
 
+# "renderDN device" of the first render node of the GPU that the selected
+# Vulkan driver drives; empty when there is none.
+function lepton_selected_gpu()
+{
+    local vendor=0x1002 name node_vendor device
+    [[ "$(lepton_vulkan_hal)" == intel ]] && vendor=0x8086
+    while read -r name node_vendor device; do
+        [[ "${node_vendor}" == "${vendor}" ]] && { echo "${name} ${device}"; return 0; }
+    done < <(lepton_render_nodes)
+}
+
+# /dev/dri path of the selected GPU's render node (Android's gralloc and
+# Vulkan driver use it, and no other); empty when there is none.
+function lepton_gpu_render_node()
+{
+    local name=""
+    read -r name _ < <(lepton_selected_gpu) || true
+    [[ -n "${name}" ]] && echo "/dev/dri/${name}"
+    return 0
+}
+
 function check_host_gpu()
 {
     [[ "$(uname -m)" == "x86_64" ]] || return 0
     [[ "${LEPTON_FORCE_SOFTWARE:-}" != "true" && "${LEPTON_SKIP_GPU_CHECK:-false}" != "true" ]] || return 0
-    case "$(lepton_host_gpu_vendor)" in
-        amd) return 0 ;;
-        intel)
-            [[ -f "$(lepton_rootfs_dir)/vendor/lib64/hw/vulkan.intel.so" ]] && return 0
+    local hal name="" device="" software="Set LEPTON_FORCE_SOFTWARE=true to try slow software rendering instead."
+    hal="$(lepton_vulkan_hal)"
+    read -r name device < <(lepton_selected_gpu) || true
+    if [[ -z "${name}" ]]; then
+        [[ -z "$(lepton_host_gpu_vendor)" ]] ||
+            die "Lepton x86_64: LEPTON_VULKAN_DRIVER=${hal}, but this computer has no matching GPU." \
+                "Unset LEPTON_VULKAN_DRIVER to use the GPU Lepton detects."
+        die "Lepton x86_64: no AMD or Intel GPU render node (/dev/dri/renderD*) found." \
+            "This build only includes AMD (RADV/radeonsi) and Intel (ANV/Iris) drivers." "${software}"
+    fi
+    if [[ ! -f "$(lepton_rootfs_dir)/vendor/lib64/hw/vulkan.${hal}.so" ]]; then
+        [[ "${hal}" == intel ]] &&
             die "Lepton x86_64: this Lepton tool has no Intel graphics drivers (an AMD-only bundle)." \
-                "Install a bundle built with Intel support, or set LEPTON_FORCE_SOFTWARE=true to try slow software rendering instead."
-            ;;
-    esac
-    die "Lepton x86_64: no AMD or Intel GPU render node (/dev/dri/renderD*) found." \
-        "This build only includes AMD (RADV/radeonsi) and Intel (ANV/Iris) drivers." \
-        "Set LEPTON_FORCE_SOFTWARE=true to try slow software rendering instead."
+                "Install a bundle built with Intel support, or ${software/#Set/set}"
+        die "Lepton x86_64: this Lepton tool has no ${hal} Vulkan driver (vendor/lib64/hw/vulkan.${hal}.so)." \
+            "Reinstall the Lepton tool. ${software}"
+    fi
+    if [[ "${hal}" == intel && " ${LEPTON_INTEL_PRE_GEN9_IDS//$'\n'/ } " == *" ${device} "* ]]; then
+        die "Lepton x86_64: this Intel GPU (device ${device}) is too old for Lepton's Intel Vulkan driver, which needs Gen9 (Skylake, 2015) or newer." \
+            "${software}"
+    fi
+    return 0
 }
 
 function setup_podman_mounts()
@@ -550,8 +611,13 @@ function setup_podman_mounts()
     # On gitlab we run via swiftshader.
     if [[ "${LEPTON_FORCE_SOFTWARE:-}" != "true" ]]; then
         if [[ "$(uname -m)" == "x86_64" ]]; then
+            # Only the selected GPU's render node: on multi-GPU hosts gralloc
+            # would otherwise allocate on whichever node it finds first.
+            local render_node
+            render_node="$(lepton_gpu_render_node)"
             for dev in /dev/dri/renderD* /dev/dri/card*; do
                 [[ -e "${dev}" ]] || continue
+                [[ "${dev}" != /dev/dri/renderD* || -z "${render_node}" || "${dev}" == "${render_node}" ]] || continue
                 podman_mount_entry "${dev}" "${dev}" rw
             done
         else

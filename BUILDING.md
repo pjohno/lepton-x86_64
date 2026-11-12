@@ -417,9 +417,13 @@ only reads and never installs anything) and stops if something is missing:
 - the **native Steam** package, started once. Flatpak Steam cannot start
   Lepton's containers and is not supported.
 
-Graphics: an **AMD GPU** is required; the Android image only contains AMD
-drivers. Software rendering on other GPUs (for example Intel) does not work
-yet: `--allow-non-amd` installs anyway, for testing only. Desktops: KDE Plasma on Wayland is tested (it is what the
+Graphics: an **AMD GPU** gets hardware graphics. **Intel** GPUs (Gen9,
+Skylake, or newer) get hardware graphics only from a bundle built with Intel
+drivers (`vendor/lib64/hw/vulkan.intel.so`; experimental), which the
+installer checks for. Lepton picks one GPU per launch (AMD first, then Intel;
+`LEPTON_VULKAN_DRIVER=radeon|intel` overrides) and gives Android only that
+GPU's render node. On other GPUs, `--allow-non-amd` installs anyway; launch
+games with `LEPTON_FORCE_SOFTWARE=true` for slow software rendering. Desktops: KDE Plasma on Wayland is tested (it is what the
 Deck's Desktop Mode uses). Other desktops, such as GNOME, are **untested**:
 the check warns but allows them.
 
