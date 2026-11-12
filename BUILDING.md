@@ -191,6 +191,51 @@ bash image-14/scripts/make-deck-bundle-x86_64.sh --execute \
   --bundle-id split-test --rootfs-source /path/to/transferred/rootfs
 ```
 
+#### Two computers: compile on a build host, test on another
+
+This keeps the build host's checkout and `aosp/out/` intermediates, and its
+default `images/`, `rootfs/`, `stages/` and `bundles/`. Only the bundle is copied
+to the test computer. Run these on the build host, from the repository root, with
+a checkout already prepared for this branch (no `prepare --reset`):
+
+```bash
+source .build-env; W="$LEPTON_OUTPUT_DIR"; TAG=intel-test   # new name each time
+bash image-14/scripts/preflight-x86_64.sh existing --workflow images
+bash image-14/scripts/build-images-x86_64.sh --check \
+  --images-dir "$W/images-$TAG" --rootfs-dir "$W/rootfs-$TAG"
+# Detached, so a dropped SSH connection does not stop it (needs lingering:
+# loginctl enable-linger). Progress: the images-*.log in $W/logs.
+systemd-run --user --unit=lepton-build-$TAG --collect --working-directory="$PWD" \
+  bash image-14/scripts/build-images-x86_64.sh --execute \
+  --images-dir "$W/images-$TAG" --rootfs-dir "$W/rootfs-$TAG"
+# Bundle with software sysbake (needs BinderFS, cargo and a systemd session).
+bash image-14/scripts/make-deck-bundle-x86_64.sh --execute --bundle-id "$TAG" \
+  --rootfs-source "$W/rootfs-$TAG" --stage-dir "$W/$TAG/stage" \
+  --bundle-dir "$W/$TAG/bundles" --from-stage "$W/stages/EXISTING_STAGE"
+```
+
+Soong's analysis step needs about 14 GB of memory. On a desktop with 24 GB,
+systemd-oomd may kill the build (exit 137, `Killed ... due to memory pressure`
+in `journalctl`) while other sessions use memory. That is not a build error:
+close large programs and run the same `--execute` again; it continues
+incrementally.
+
+On the test computer, copy the three bundle files, check them, and install the
+bundle as a separate tool (`--new` refuses to replace an existing one):
+
+```bash
+rsync -a -e 'ssh -p PORT' 'USER@BUILD_HOST:WORKSPACE/TAG/bundles/lepton-x86_64-TAG.*' ./
+sha256sum -c lepton-x86_64-TAG.tar.gz.sha256
+bash lepton-x86_64-TAG.install.sh --check --new && bash lepton-x86_64-TAG.install.sh --new
+bash ~/.local/share/lepton_x86_64_TAG/tests/runtime/run-apk.sh --gpu-check --execute
+```
+
+The new install becomes the default for `~/.local/bin/lepton-*` and
+`~/.config/lepton-x86_64/default.env`; other installs and their game data are
+not changed. Copy a packaged rootfs instead only to bundle on the test
+computer. Use `rsync -a` without `-X`: the rootfs extended attributes are the
+build host's SELinux labels, not Android metadata.
+
 These scope choices do not bypass ownership, path-safety, locking, image
 validation or overwrite protections. Complete wrappers always require the
 complete host; there is no blanket `--force` switch. Network downloads,

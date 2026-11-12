@@ -592,11 +592,14 @@ elif [[ "$INTERACTIVE" == true ]]; then
     python3 "$installed_manage" --gui --quiet-if-empty --exclude "$TOOL_ID" \
         --prompt "Installed $TOOL_NAME. Optionally remove older Lepton installs:" || true
 fi
+expected_driver='SwiftShader: software rendering'
+[[ "$amd" != true ]] || expected_driver=RADV
+[[ "$amd" == true || "$bundle_has_intel" != true ]] || expected_driver='Intel (ANV)'
 
 cat <<EOF
 
 Next steps (desktop icons or application menu > Games; no typing needed)
-  1. "Lepton: Check graphics" (about a minute; should report RADV)
+  1. "Lepton: Check graphics" (about a minute; should report $expected_driver)
   2. "Lepton: Add Android game": pick an APK; exit Steam when asked,
      then start Steam again once it reports success
   3. In the game's controller layout enable Touchscreen Native Support
