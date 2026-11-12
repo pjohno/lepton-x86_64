@@ -19,7 +19,19 @@ Nothing below builds Android, downloads AOSP or reads `.build-env`.
 - **The first Test A run found two packaging bugs, fixed in `eddeaef`:**
   - `tests/runtime` helpers were dropped.
   - Packaging a fresh sysbake that contains sockets crashed.
-- **Not yet run:** Test B on the PC, then the Steam Deck install and gameplay.
+- **Test B, first run (PC):**
+  - Injection worked.
+  - Sysbake first hung: SELinux denied the container Binder. After the one-time
+    policy module install, sysbake succeeded in about 2 minutes and registered
+    57 packages.
+  - Packaging and comparison worked, and showed all the expected Android
+    changes. The comparison also exposed a mode bug in the shared NDK
+    injector: base directories became `2755`, inheriting setgid from the
+    inputs' folder. Fixed in `a6ca691`.
+  - Don't install that first `full-base-20261112` bundle.
+- **Still needed:** a base bundle packaged at `a6ca691` or later, so its stage
+  helpers include the injector fix. Then rerun Test B, followed by the Steam
+  Deck install and gameplay.
 
 ## 0. Linux PC preparation (can be done now)
 
@@ -150,8 +162,8 @@ Pass on the PC when all of the following hold:
     `PrebuiltGmsCore`, `Phonesky`, `GoogleServicesFramework`, Chrome/Trichrome
     and `vendor/apex/com.google.android.widevine/*`;
   - `system/build.prop`, `vendor/build.prop` and `vendor/odm/etc/build.prop` changed;
-  - `system/bin 0751 -> 0755` is expected (the shared NDK injector does this, as
-    in earlier GApps + NDK release-pipeline bundles);
+  - no `permissions changed` entries in the rootfs: injection keeps every base
+    directory mode (`a6ca691`);
   - Sysbake DIFFERENT;
   - registered packages gained `com.google.android.gms`, `com.android.vending`,
     `com.google.android.gsf`, `com.android.chrome` and `com.google.android.trichromelibrary_*`;
