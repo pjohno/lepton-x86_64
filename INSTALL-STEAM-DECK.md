@@ -29,7 +29,10 @@ also detects conventional Linux hosts and selects direct Wayland with native
 fullscreen. Fedora GNOME and KDE Plasma Wayland are supported launch
 environments; desktop game compatibility remains experimental. X11 is
 unsupported for the direct profile. Other GPUs are not supported (the image
-only contains AMD RADV/radeonsi drivers).
+only contains AMD RADV/radeonsi drivers). On Fedora and other
+SELinux-enforcing systems, install Lepton's SELinux policy module once before
+the first game launch:
+[one-time SELinux setup](compat_tool/LOCAL-DESKTOP.md#one-time-selinux-setup-fedora).
 
 Both installers accept `--install-profile local-desktop` or
 `--install-profile steamos` to override OS detection. Replacement installs

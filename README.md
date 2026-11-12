@@ -29,10 +29,13 @@ touchscreen, and keeps its saves between launches.
 - The **Android games** you want to play, as `.apk` files or split-APK bundles
   (`.apkm`).
 
-Desktop PCs with an **AMD GPU** can install Lepton, but this is experimental:
-games start and draw, but mouse and keyboard don't reach them yet
-([issue #9](https://github.com/pjohno/lepton-x86_64/issues/9)). Other GPUs are
-not supported, because the Android image only contains AMD graphics drivers.
+**Desktop PCs** with an **AMD GPU** and a **Wayland** desktop can install
+Lepton too, but this is experimental. On Fedora GNOME and KDE Plasma, games
+run full screen with mouse and keyboard input. Other GPUs are not supported, because the
+Android image only contains AMD graphics drivers. **Fedora and other
+SELinux-enforcing systems** need a small SELinux policy module installed once,
+or Android never finishes starting: see
+[desktop setup](compat_tool/LOCAL-DESKTOP.md#one-time-selinux-setup-fedora).
 
 ## Install on a Steam Deck
 
@@ -130,7 +133,8 @@ Compatibility varies from game to game.
 - **Controller hotplug** (`LEPTON_GAMEPAD_HOTPLUG=true`) gives Android read
   access to *all* the computer's input devices, not just controllers. Leave it
   off unless you need it.
-- **Desktops other than KDE Plasma** are untested. With several monitors or
+- **Desktops other than GNOME and KDE Plasma on Wayland** are untested; X11
+  is not supported. With several monitors or
   fractional scaling, Android may get the wrong screen size; set
   `LEPTON_RESOLUTION`.
 

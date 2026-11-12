@@ -11,9 +11,12 @@ supported by Valve.
 
 ## Supported hardware
 
-**Steam Deck only.** Desktop PCs with an AMD GPU can install this release, but
-desktop use is experimental: games start and draw, but mouse and keyboard do
-not reach them yet ([#9](https://github.com/pjohno/lepton-x86_64/issues/9)).
+**Steam Deck** is the main target. Desktop PCs with an AMD GPU and a Wayland
+desktop can install this release, but desktop use is experimental (tested on
+Fedora GNOME and KDE Plasma, with mouse and keyboard input). **Fedora and other
+SELinux-enforcing systems** need a one-time SELinux policy module, or Android
+never finishes starting: see
+[one-time SELinux setup](https://github.com/pjohno/lepton-x86_64/blob/main/compat_tool/LOCAL-DESKTOP.md#one-time-selinux-setup-fedora).
 The Android image contains AMD graphics drivers only; other GPUs (for example
 Intel) are not supported.
 
@@ -64,7 +67,8 @@ for details, including installing by double-click.
   shuts down, so Stop takes a few seconds. A game that only saves at certain
   points (for example at checkpoints) can still lose progress since its last
   save; to be safe, close the game from inside the game.
-- **Desktop PCs** are experimental: no mouse or keyboard input in games yet (#9),
-  and the picture may only update after switching windows (#8).
+- **Desktop PCs** are experimental: only Fedora GNOME and KDE Plasma on
+  Wayland have been tested, and SELinux-enforcing systems need the one-time policy module (see
+  Supported hardware).
 
 <!-- Maintainer: replace this comment with the changes since the previous release. -->
