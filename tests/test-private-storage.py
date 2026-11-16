@@ -215,6 +215,16 @@ class SysbakeOrderingTests(unittest.TestCase):
         self.assertEqual([line for line in lines if re.match(r'\s*(setfacl|getfacl)\b', line)], [])
         self.assertTrue(any('scan-acls "$ROOTFS"' in line for line in lines))
 
+    def test_orphans_cannot_hold_the_run_lock(self):
+        text = SYSBAKE.read_text()
+        # Lepton and Weston start without the lock fd; cleanup stops this run's leftovers.
+        lepton = text.index('./lepton sysbake')
+        self.assertIn('exec {RUN_LOCK}>&-', text[text.rindex('(', 0, lepton):lepton])
+        self.assertRegex(text, r'\( exec \{RUN_LOCK\}>&-; exec "\$WESTON_BIN"')
+        self.assertIn('local marker="LEPTON_LOCK_PATH=$WORK/lock"', text)
+        cleanup = text[text.index('cleanup() {'):text.index('trap cleanup EXIT')]
+        self.assertIn('stop_run_processes || true', cleanup)
+
 
 @unittest.skipUnless(os.environ.get('LEPTON_TEST_PODMAN_IMAGE'), 'set LEPTON_TEST_PODMAN_IMAGE to run rootless Podman')
 class RootlessPodmanTests(Base):
