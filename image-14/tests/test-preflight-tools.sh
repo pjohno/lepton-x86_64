@@ -10,7 +10,7 @@ mkdir -p "$fake/image-14/scripts/lib" "$fake/image-14/scripts/internal" "$work/b
 cp "$repo/image-14/scripts/preflight-x86_64.sh" "$fake/image-14/scripts/"
 cp "$repo/image-14/scripts/lib/"{workspace.sh,packaging-fuse.sh} "$fake/image-14/scripts/lib/"
 # Host tools are checked by the shared capability checker (also used by do_build).
-cp "$repo/image-14/scripts/internal/"{check-host-capabilities.py,probe-binderfs.py} "$fake/image-14/scripts/internal/"
+cp "$repo/image-14/scripts/internal/"{check-host-capabilities.py,probe-binderfs.py,private_storage.py} "$fake/image-14/scripts/internal/"
 cat > "$fake/.build-env" <<ENV
 LEPTON_OUTPUT_DIR=$work/ws
 LEPTON_BUILD_TARGET=aosp_lepton_x86_64-ap2a-userdebug

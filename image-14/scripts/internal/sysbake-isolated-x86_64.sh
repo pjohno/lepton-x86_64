@@ -51,6 +51,19 @@ grep -Fq 'ETHERNET_APEX_CONFIG=' "$TOOL/liblepton/mounting.sh" || fail 'Missing 
 for bin in podman weston systemctl rsync getfattr setfattr timeout python3 flock realpath mktemp fuse-overlayfs; do
     command -v "$bin" >/dev/null 2>&1 || fail "Missing host command: $bin"
 done
+PRIVATE_STORAGE="$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")/private_storage.py"
+[[ -f "$PRIVATE_STORAGE" ]] || fail "Missing helper: $PRIVATE_STORAGE"
+# Lepton mounts the rootfs with `--rootfs ROOTFS:O` under
+# --userns=keep-id:uid=0,gid=0. ACL entries naming UIDs outside that namespace
+# make crun fail with "get xattr system.posix_acl_access ... Invalid argument".
+# The stage is never modified here; report it instead.
+ACL_RC=0
+ACL_REPORT="$(python3 -I -B "$PRIVATE_STORAGE" scan-acls "$ROOTFS" 2>&1)" || ACL_RC=$?
+if (( ACL_RC != 0 )); then
+    printf '%s\n' "$ACL_REPORT" >&2
+    (( ACL_RC == 1 )) || fail "Cannot check staged rootfs for POSIX ACLs: $ROOTFS"
+    fail "Staged rootfs carries POSIX ACLs (often inherited from a workspace parent with default ACLs); rootless Android cannot boot from it. Recreate the stage under a directory without default ACLs, or remove them from this stage yourself (setfacl -R -b \"$ROOTFS\")"
+fi
 # PATH is narrowed before Lepton runs; keep using the commands checked here.
 WESTON_BIN="$(command -v weston)"
 SYSTEMCTL_BIN="$(command -v systemctl)"
@@ -92,6 +105,32 @@ PARTIAL_XATTR=
 # on exit anyway.
 TTY_STATE=
 if [[ -t 0 ]]; then TTY_STATE="$(stty -g 2>/dev/null || true)"; fi
+# `timeout --foreground` never signals Lepton's children, so its background
+# polling loops, log filters and Podman watchers can outlive a failed run.
+# Stop exactly the processes carrying this run's unique LEPTON_LOCK_PATH;
+# the environment is read with builtins only, so no helper process matches.
+stop_run_processes() {
+    local marker="LEPTON_LOCK_PATH=$WORK/lock" signal environ pid entry found
+    local -a entries
+    for signal in TERM KILL; do
+        found=0
+        for environ in /proc/[0-9]*/environ; do
+            pid="${environ#/proc/}"
+            pid="${pid%/environ}"
+            [[ "$pid" != "$$" && "$pid" != "$BASHPID" && -O "$environ" ]] || continue
+            mapfile -d '' -t entries 2>/dev/null < "$environ" || continue
+            for entry in "${entries[@]}"; do
+                if [[ "$entry" == "$marker" ]]; then
+                    kill -s "$signal" "$pid" 2>/dev/null && found=1
+                    break
+                fi
+            done
+        done
+        (( found )) || return 0
+        if [[ "$signal" == TERM ]]; then sleep 2; fi
+    done
+    return 0
+}
 cleanup() {
     rc=$?
     trap - EXIT INT TERM
@@ -106,6 +145,9 @@ cleanup() {
     # Stop whatever still uses this run's private runroot (a unique path).
     if [[ -n "$RUNROOT" ]]; then
         pkill -f -- "--runroot=$RUNROOT( |$)" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$WORK" ]]; then
+        stop_run_processes || true
     fi
     # The runner preflights this slice as inactive, then only sysbake creates it.
     "$SYSTEMCTL_BIN" --user stop lepton-sysbake.slice >/dev/null 2>&1 || true
@@ -134,6 +176,12 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# Before anything is created inside them: a workspace parent's default ACLs
+# (or setgid) would otherwise be inherited by Podman's storage and break
+# rootless containers ("creating /etc/mtab symlink: invalid argument").
+python3 -I -B "$PRIVATE_STORAGE" private "$WORK" "$RUNROOT" ||
+    fail "Cannot make sysbake storage private: $WORK"
 
 mkdir -p "$WORK/bin" "$WORK/home/.steam" "$WORK/home/.config" "$WORK/home/.local/share" "$WORK/tmp" "$GRAPHROOT"
 touch "$WORK/home/.steam/steam.pipe"
@@ -228,7 +276,7 @@ RUN_ACTUAL="$(podman info --format '{{.Store.RunRoot}}')" || fail 'Isolated Podm
 [[ "$(realpath -m "$RUN_ACTUAL")" == "$(realpath -m "$RUNROOT")" ]] || fail "Podman runroot escaped isolation: $RUN_ACTUAL"
 pass 'Podman graphroot and runroot are isolated'
 
-"$WESTON_BIN" --no-config --backend=headless --renderer=pixman --socket="$SOCKET" --log="$WORK/weston.log" &
+( exec {RUN_LOCK}>&-; exec "$WESTON_BIN" --no-config --backend=headless --renderer=pixman --socket="$SOCKET" --log="$WORK/weston.log" ) &
 WESTON_PID=$!
 READY=false
 for (( i=0; i<50; i++ )); do
@@ -246,6 +294,8 @@ pass "Headless Wayland compositor ready: $SOCKET"
 
 info "Booting fresh Android 14 for sysbake (timeout ${TIMEOUT}s)"
 (
+    # Stray Lepton children must never keep the run lock (and block later runs).
+    exec {RUN_LOCK}>&-
     cd "$WORK/compat_tool"
     timeout --foreground --signal=TERM --kill-after=20s "${TIMEOUT}s" ./lepton sysbake
 ) < /dev/null > "$WORK/sysbake.log" 2>&1 || {

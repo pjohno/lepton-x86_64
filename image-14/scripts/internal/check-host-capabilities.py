@@ -18,6 +18,8 @@ import sys
 import tempfile
 import time
 
+from private_storage import make_private
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 
 
@@ -167,7 +169,14 @@ class Capabilities:
         parent = Path(self.args.workspace).absolute()
         while not parent.is_dir() and parent != parent.parent:
             parent = parent.parent
-        return Path(tempfile.mkdtemp(prefix='.lepton-host-check.', dir=parent))
+        work = Path(tempfile.mkdtemp(prefix='.lepton-host-check.', dir=parent))
+        # The probe's Podman graph/runroot live here: never inherit workspace ACLs.
+        try:
+            make_private(work)
+        except OSError:
+            work.rmdir()
+            raise
+        return work
 
     def rootless(self, work, stage):
         needed = ('podman', 'fuse-overlayfs', 'newuidmap', 'newgidmap', 'awk', 'sh')

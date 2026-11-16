@@ -28,6 +28,24 @@ storage directories before invoking Lepton. Rootless Podman still uses host
 resources such as networking and the `lepton-sysbake.slice` user-systemd unit;
 this is **storage and data isolation**, not a full VM or host isolation.
 
+### Workspaces with POSIX ACLs
+
+If the workspace (or any parent) has **default ACLs**, for example to give
+another account read access, every new directory inherits them. Inside a
+rootless user namespace those entries name unmapped UIDs, and Podman fails
+with errors such as `creating /etc/mtab symlink: invalid argument` or
+`get xattr system.posix_acl_access ... Invalid argument`.
+
+* The fresh `.sysbake-work.*` directory and the private runroot are made
+  private (mode 0700, no setgid, no access/default ACL) before anything is
+  created in them. Only those new, empty directories are changed; the run
+  stops if that cannot be done. `getfacl`/`setfacl` are not required.
+* The staged rootfs is Lepton's `--rootfs …:O` lower layer under
+  `--userns=keep-id`, so ACLs on it break the boot as well. The runner never
+  modifies the stage: `--check` fails and lists affected paths. Recreate the
+  stage under a directory without default ACLs, or remove them yourself with
+  `setfacl -R -b <stage>/compat_tool/images/rootfs`.
+
 It copies the compat tool to an isolated work directory under the stage, but
 **symlinks the staged rootfs** to avoid copying over 1 GiB of Android files.
 The private launcher disables its normal management of the user's

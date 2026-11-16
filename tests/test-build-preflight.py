@@ -38,7 +38,8 @@ class PreflightTests(unittest.TestCase):
                  'image-14/scripts/build-incremental-bundle-x86_64.sh',
                  'image-14/scripts/lib/workspace.sh', 'image-14/scripts/lib/packaging-fuse.sh',
                  'image-14/scripts/internal/check-host-capabilities.py',
-                 'image-14/scripts/internal/probe-binderfs.py')
+                 'image-14/scripts/internal/probe-binderfs.py',
+                 'image-14/scripts/internal/private_storage.py')
         for name in files:
             dest = self.repo / name
             dest.parent.mkdir(parents=True, exist_ok=True)
