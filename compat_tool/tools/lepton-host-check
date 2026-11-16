@@ -56,9 +56,17 @@ else
     need 'Neither zenity nor kdialog is installed: the Lepton menu entries need one of them'
 fi
 
-# Steam: the native package/installer (~/.local/share/Steam). Flatpak Steam
-# cannot start Podman containers on the host.
-if [[ -d "$HOME/.local/share/Steam" ]]; then
+# Steam: the native package/installer (~/.steam/root, usually the same folder
+# as ~/.local/share/Steam), found by the same resolver the installer uses.
+# Flatpak Steam cannot start Podman containers on the host.
+manage="$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")/lepton-manage-installs"
+if have python3 && [[ -f "$manage" ]]; then
+    if steam_dir="$(python3 "$manage" --steam-root 2>&1)"; then
+        pass "Steam ($steam_dir)"
+    else
+        need "${steam_dir#ERROR: }"
+    fi
+elif [[ -d "$HOME/.local/share/Steam" ]]; then
     pass "Steam ($HOME/.local/share/Steam)"
 elif [[ -d "$HOME/.var/app/com.valvesoftware.Steam" ]]; then
     need 'Only Flatpak Steam was found; Lepton needs the native Steam package'

@@ -259,8 +259,11 @@ No system/vendor image rebuild is required for this development test.
 ## Launcher-only Fedora deployment
 
 For the existing test installation, verify the 2048 shortcut's selected tool
-against `~/.local/share/Steam/config/config.vdf` and its matching registration
-in `~/.local/share/Steam/compatibilitytools.d/`. The selected test tool is
+against `~/.steam/root/config/config.vdf` and its matching registration in
+`~/.steam/root/compatibilitytools.d/` (on native Steam, `~/.steam/root` usually
+resolves to `~/.local/share/Steam`): a `<tool id>.vdf` for an install in
+`~/.local/share`, or `<tool id>/compatibilitytool.vdf` for one installed with
+`--steam-compat`. The selected test tool is
 currently `lepton_x86_64_v0_1_1_alpha`, not the separately registered tool named
 “development”. Stop the game normally before the next test launch.
 

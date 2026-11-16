@@ -286,6 +286,7 @@ class Harness:
                    FAKE_ADB_ZIP=str(self.adb_zip), FAKE_CURL_LOG=str(home.parent / 'curl.log'))
         home.mkdir()
         (home / 'Desktop').mkdir()
+        (home / '.local/share/Steam').mkdir(parents=True)  # a native Steam install
         result = subprocess.run(['bash', str(archive_dir / f'lepton-x86_64-{bundle_id}.install.sh'), '--allow-non-amd'],
                                 env=env, capture_output=True, text=True, timeout=300)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
