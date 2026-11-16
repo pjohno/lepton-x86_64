@@ -374,6 +374,13 @@ class SysbakePackageTests(Harness, unittest.TestCase):
         self.assertIn('Isolated sysbake preflight passed', output)
         self.assertEqual(tree(self.stage), before)
 
+    def test_intel_sysbake_option_reaches_staged_driver_validation(self):
+        before = tree(self.stage)
+        output = self.run_tool(self.stage, 'sysbake', '--check', '--stage-dir', str(self.stage),
+                               '--rendering', 'intel', ok=False)
+        self.assertIn('intel Vulkan rootfs missing (vulkan.intel.so)', output)
+        self.assertEqual(tree(self.stage), before)
+
     def test_fresh_sysbake_packages_and_installs_with_existing_installer(self):
         output = self.sysbake(self.stage)
         self.assertIn('fresh sysbake validated', output)

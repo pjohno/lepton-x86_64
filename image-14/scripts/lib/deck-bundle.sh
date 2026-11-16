@@ -329,6 +329,7 @@ mkdir -p "$tmp/payload/tools/customize/internal" "$tmp/payload/tools/customize/l
 for helper in sysbake-isolated-x86_64.sh inject-ndk-translation.sh extract-ndk-translation.sh; do
     install -m 755 "$repo/image-14/scripts/internal/$helper" "$tmp/payload/tools/customize/internal/$helper"
 done
+install -m 644 "$repo/image-14/scripts/internal/private_storage.py" "$tmp/payload/tools/customize/internal/private_storage.py"
 for helper in google-services.sh workspace.sh; do
     install -m 644 "$repo/image-14/scripts/lib/$helper" "$tmp/payload/tools/customize/lib/$helper"
 done

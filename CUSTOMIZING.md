@@ -317,7 +317,7 @@ isolated sysbake helper on a `prepared` or `customized` stage:
 ```bash
 lepton-customize sysbake --check   --stage-dir ~/lepton-work/ndk-stage
 lepton-customize sysbake --execute --stage-dir ~/lepton-work/ndk-stage \
-  [--rendering software|amd] [--timeout 600]
+  [--rendering software|amd|intel] [--timeout 600]
 ```
 
 Host requirements are checked together and reported with Fedora/Ubuntu package
@@ -327,7 +327,10 @@ names: rootless Podman with `newuidmap`/`newgidmap` (`shadow-utils`),
 user session (`systemctl --user is-system-running`) and `/run/user/UID`. On
 Fedora: `sudo dnf install podman fuse-overlayfs weston attr rsync util-linux
 procps-ng shadow-utils`. Software rendering is the default and needs no GPU;
-`--rendering amd` uses the AMD Vulkan driver.
+`--rendering amd` uses RADV and `--rendering intel` uses ANV (Intel Gen9 or
+newer). Hardware modes require the matching staged driver and host GPU.
+The helper checks staged rootfs ACLs read-only and removes inherited ACLs
+only from its newly created empty private storage directories.
 
 **Fedora and other SELinux-enforcing hosts** also need Lepton's small policy
 module once. Without it, Android's service managers are denied
@@ -562,7 +565,7 @@ The release packager (`deck-bundle.sh`) includes `lepton-customize` with its
 companions (`lepton_customize_inject.py`, `lepton_customize_package.py`,
 `lepton_bundle_lib.py`), `lepton-compare-bundles`, this guide,
 and the source-only helpers `tools/customize/internal/sysbake-isolated-x86_64.sh`,
-`internal/inject-ndk-translation.sh`, `internal/extract-ndk-translation.sh`,
+`internal/private_storage.py`, `internal/inject-ndk-translation.sh`, `internal/extract-ndk-translation.sh`,
 `lib/google-services.sh`, `lib/workspace.sh` and `prepare-google-inputs.sh`. These helpers operate on
 explicit directories, not an AOSP checkout. The input preparer needs an
 explicit `--output DIR` to avoid its build-workspace defaults. Injection delegates

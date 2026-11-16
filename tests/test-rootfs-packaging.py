@@ -46,7 +46,7 @@ class PackagingTests(unittest.TestCase):
         scripts = ('build-images-x86_64.sh', 'preflight-x86_64.sh', 'lib/workspace.sh',
                    'lib/packaging-fuse.sh', 'lib/package-images.sh', 'lib/image-provenance.sh',
                    'internal/check-active-compilation.py', 'internal/validate-android-images.py',
-                   'internal/check-host-capabilities.py', 'internal/probe-binderfs.py',
+                   'internal/check-host-capabilities.py', 'internal/probe-binderfs.py', 'internal/private_storage.py',
                    'internal/package-repro-rootfs.sh', 'internal/patch-binderfs-init.sh')
         for name in scripts:
             dest = self.repo / 'image-14/scripts' / name

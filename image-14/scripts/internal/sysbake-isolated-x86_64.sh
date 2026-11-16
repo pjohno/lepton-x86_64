@@ -9,7 +9,7 @@ STAGE=
 TIMEOUT=600
 RENDERING=software
 usage() {
-    echo "Usage: $0 [--check|--execute] --stage-dir ABSOLUTE_PATH [--timeout SECONDS] [--rendering software|amd]"
+    echo "Usage: $0 [--check|--execute] --stage-dir ABSOLUTE_PATH [--timeout SECONDS] [--rendering software|amd|intel]"
 }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 info() { printf '[INFO] %s\n' "$*"; }
@@ -24,7 +24,7 @@ while (( $# )); do
         *) usage >&2; fail "Unknown argument: $1" ;;
     esac
 done
-[[ "$RENDERING" == software || "$RENDERING" == amd ]] || fail "Unknown rendering mode: $RENDERING"
+[[ "$RENDERING" == software || "$RENDERING" == amd || "$RENDERING" == intel ]] || fail "Unknown rendering mode: $RENDERING"
 [[ -n "$STAGE" && "$STAGE" = /* ]] || fail 'Supply an absolute --stage-dir path'
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail '--timeout must be a positive integer'
 [[ "$(id -u)" != 0 ]] || fail 'Run as an unprivileged user (no sudo)'
@@ -42,7 +42,9 @@ if [[ "$RENDERING" == software ]]; then
     grep -Fq 'gbm-software-vintf.xml' "$TOOL/liblepton/mounting.sh" ||
         fail 'Software GBM HAL masking fix missing from staged Lepton'
 else
-    [[ -f "$ROOTFS/vendor/lib64/hw/vulkan.radeon.so" ]] || fail 'AMD Vulkan rootfs missing'
+    VULKAN_HAL=radeon
+    [[ "$RENDERING" != intel ]] || VULKAN_HAL=intel
+    [[ -f "$ROOTFS/vendor/lib64/hw/vulkan.$VULKAN_HAL.so" ]] || fail "$RENDERING Vulkan rootfs missing (vulkan.$VULKAN_HAL.so)"
 fi
 [[ -f "$TOOL/images/rootfs_overlay/system/etc/init/hw/init.rc" || -d "$TOOL/images/rootfs_overlay" ]] || fail 'Rootfs overlay missing'
 [[ ! -e "$TOOL/sysbake" && ! -L "$TOOL/sysbake" && ! -e "$TOOL/sysbake.xattrs" && ! -L "$TOOL/sysbake.xattrs" ]] || fail 'Existing sysbake present: refusing overwrite'
@@ -260,8 +262,10 @@ export XDG_RUNTIME_DIR="$RUNTIME" GAMESCOPE_WAYLAND_DISPLAY="$SOCKET"
 export LEPTON_ISOLATED_SYSBAKE=1 LEPTON_LOCK_PATH="$WORK/lock"
 if [[ "$RENDERING" == software ]]; then
     export LEPTON_FORCE_SOFTWARE=true
+    unset LEPTON_VULKAN_DRIVER
 else
     export LEPTON_FORCE_SOFTWARE=false
+    export LEPTON_VULKAN_DRIVER="$VULKAN_HAL"
 fi
 export LEPTON_ALLOW_LOCAL_SYSBAKE=1
 export LEPTON_ALLOW_KMSG=false LEPTON_GAMEPAD_PASSTHROUGH=false

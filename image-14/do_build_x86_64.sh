@@ -26,7 +26,7 @@ Usage:
   Optional: --with-ndk --ndk-payload /path/to/extracted/payload
             --with-gapps --google-images /path/to/logical-partitions
             --tool-id lepton_unique_id --tool-name "Lepton GApps"
-            --sysbake-rendering software|amd (default software)
+            --sysbake-rendering software|amd|intel (default software)
 GApps includes Play services, GSF, Play Store, Chrome and Trichrome, extracted
 only from local API 34 images. GApps and NDK remain independent opt-ins.
 
@@ -63,7 +63,7 @@ while (( $# )); do
             (( $# >= 2 )) || fail '--sysbake-timeout requires seconds'
             SYSBAKE_TIMEOUT="$2"; shift 2 ;;
         --sysbake-rendering)
-            (( $# >= 2 )) || fail '--sysbake-rendering requires software or amd'
+            (( $# >= 2 )) || fail '--sysbake-rendering requires software, amd or intel'
             SYSBAKE_RENDERING="$2"; shift 2 ;;
         --with-ndk) WITH_NDK=true; shift ;;
         --with-gapps) WITH_GAPPS=true; shift ;;
@@ -81,7 +81,7 @@ done
 [[ "$BUNDLE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${#BUNDLE_ID} -le 64 ]] ||
     fail 'Bundle ID must be 1-64 letters, digits, dots, hyphens or underscores'
 [[ "$SYSBAKE_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail 'Invalid sysbake timeout'
-[[ "$SYSBAKE_RENDERING" == software || "$SYSBAKE_RENDERING" == amd ]] || fail 'Invalid sysbake rendering mode'
+[[ "$SYSBAKE_RENDERING" == software || "$SYSBAKE_RENDERING" == amd || "$SYSBAKE_RENDERING" == intel ]] || fail 'Invalid sysbake rendering mode'
 [[ $(id -u) -ne 0 ]] || fail 'Run as a normal user (without sudo)'
 [[ $(uname -m) == x86_64 ]] || fail 'x86_64 build host required'
 [[ -f "$CONFIG" ]] || fail "Missing $CONFIG"

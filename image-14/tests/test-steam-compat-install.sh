@@ -102,10 +102,13 @@ printf 'ID=steamos\nNAME="SteamOS"\n' > "$work/steamos"
 
 inst() {   # inst BUNDLE_ID [installer options...]
     local bundle="$1"; shift
+    local gpu_args=(--allow-non-amd)
+    [[ "$bundle" != intel ]] || gpu_args=()
     env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u DISPLAY -u WAYLAND_DISPLAY HOME="$home" \
         PATH="${EXTRA_PATH:+$EXTRA_PATH:}$PATH" LEPTON_SKIP_HOST_CHECK=1 LEPTON_INSTALL_IN_TERMINAL=1 \
-        LEPTON_NO_DIALOGS=1 LEPTON_HOST_OS_RELEASE="$work/steamos" \
-        bash "$out/lepton-x86_64-$bundle.install.sh" --allow-non-amd --adb-zip "$work/fake-adb/platform-tools.zip" \
+        LEPTON_NO_DIALOGS=1 LEPTON_HOST_OS_RELEASE="${TEST_OS_RELEASE:-$work/steamos}" \
+        LEPTON_SYSFS_DRM="${TEST_DRM:-/sys/class/drm}" \
+        bash "$out/lepton-x86_64-$bundle.install.sh" "${gpu_args[@]}" --adb-zip "$work/fake-adb/platform-tools.zip" \
         "$@" < /dev/null > "$work/out" 2>&1
 }
 manage() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$home" python3 "$repo/compat_tool/tools/lepton-manage-installs" "$@"; }
@@ -260,4 +263,30 @@ manage --remove lepton_x86_64_v0_1_0_alpha lepton_x86_64_oldname lepton_x86_64_c
 [[ "$(cat "$steam/steamapps/compatdata/2000000000/baked/save")" == 'level 7' ]] || fail 'game data removed'
 not compgen -G "$home/.local/share/lepton_x86_64_*" > /dev/null
 not compgen -G "$tools/.lepton-install.*" > /dev/null
+# 13. Intel-enabled bundles use hardware rendering in both layouts and after
+# migration; no --allow-non-amd is passed, even for the preflight check.
+intel_drm="$work/intel-drm"
+mkdir -p "$intel_drm/renderD128/device"
+printf '0x8086\n' > "$intel_drm/renderD128/device/vendor"
+printf 'test-anv\n' > "$stage/compat_tool/images/rootfs/vendor/lib64/hw/vulkan.intel.so"
+printf 'ID=fedora\nNAME=Fedora\n' > "$work/fedora"
+package intel
+TEST_DRM="$intel_drm" TEST_OS_RELEASE="$work/fedora" inst intel --check --steam-compat ||
+    { cat "$work/out"; fail 'Intel Steam-layout preflight'; }
+TEST_DRM="$intel_drm" TEST_OS_RELEASE="$work/fedora" inst intel --new ||
+    { cat "$work/out"; fail 'Intel legacy installation'; }
+[[ "$(envval lepton_x86_64_intel LEPTON_X86_RENDERING)" == intel ]] || fail 'Intel forced to software'
+[[ -f "$home/.local/share/lepton_x86_64_intel/compat_tool/install-profile" ]] || fail 'Intel desktop profile missing'
+TEST_DRM="$intel_drm" TEST_OS_RELEASE="$work/fedora" inst intel --replace --steam-compat ||
+    { cat "$work/out"; fail 'Intel migration'; }
+[[ "$(envval lepton_x86_64_intel LEPTON_X86_RENDERING)" == intel ]] || fail 'Intel rendering lost on migration'
+[[ "$(envval lepton_x86_64_intel LEPTON_X86_LAYOUT)" == steam-compat ]] || fail 'Intel migration layout'
+[[ -f "$tools/lepton_x86_64_intel/compatibilitytool.vdf" && ! -e "$tools/lepton_x86_64_intel.vdf" ]] || fail 'Intel registration'
+grep -q 'should report Intel (ANV)' "$work/out" || fail 'Intel graphics instructions'
+manage --remove lepton_x86_64_intel --execute > /dev/null
+TEST_DRM="$intel_drm" inst intel --new --steam-compat ||
+    { cat "$work/out"; fail 'Intel new Steam-layout installation'; }
+[[ "$(envval lepton_x86_64_intel LEPTON_X86_RENDERING)" == intel ]] || fail 'new Steam install lost Intel'
+manage --remove lepton_x86_64_intel --execute > /dev/null
+
 echo 'PASS: steam-compat install: --check changes nothing, both layouts, updates keep layout and refresh the version-first name, migration keeps tool ID/profiles/mappings/data with one registration, rollback, duplicate tool IDs refused, names, add-game, layout window, removal leaves GE-Proton'

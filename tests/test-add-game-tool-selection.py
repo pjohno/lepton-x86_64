@@ -101,6 +101,25 @@ class ToolSelectionTests(unittest.TestCase):
         self.assertIn('--until-exit', tail)
         self.assertNotIn('--accept-runtime-update', tail)
 
+    def test_profile_uses_selected_installs_saved_rendering(self):
+        self.prepare_profile()
+        self.module.CONFIG_DIR.mkdir(parents=True)
+        settings = self.module.CONFIG_DIR / (self.module.TOOL + '.env')
+        for rendering in ('intel', 'software', 'amd'):
+            with self.subTest(rendering=rendering):
+                settings.write_text('LEPTON_X86_INSTALL_DIR=' + shlex.quote(str(self.alt)) + '\n'
+                                    'LEPTON_X86_RENDERING=' + rendering + '\n')
+                self.run_main('--install-dir', str(self.alt), '--runtime-profile', 'playgames-native')
+                shortcuts = self.user / 'shortcuts.vdf'
+                entries, _, _ = self.module.read_binary(shortcuts.read_bytes())
+                options = shlex.split(entries['0']['LaunchOptions'])
+                self.assertEqual(options[options.index('--rendering') + 1], rendering)
+                shortcuts.unlink()
+        settings.write_text('LEPTON_X86_INSTALL_DIR=' + str(self.alt) + '\nLEPTON_X86_RENDERING=bogus\n')
+        with self.assertRaisesRegex(ValueError, 'Invalid saved rendering'):
+            self.run_main('--install-dir', str(self.alt), '--runtime-profile', 'playgames-native')
+        self.assertFalse((self.user / 'shortcuts.vdf').exists())
+
     def test_profile_dry_run_and_duplicate_guard(self):
         self.prepare_profile()
         args = ('--install-dir', str(self.alt), '--runtime-profile', 'playgames-native')

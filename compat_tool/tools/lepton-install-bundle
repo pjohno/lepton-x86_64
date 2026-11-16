@@ -69,7 +69,7 @@ Options:
                    the move has succeeded)
   --remove TOOL_ID Remove another install after a successful install (repeatable;
                    see lepton-manage-installs --list)
-  --allow-non-amd  Install on a host without an AMD GPU (software rendering only)
+  --allow-non-amd  Allow unsupported GPU/bundle combinations for software testing
   --pause          End with "Press Enter to close" (used by desktop icons)
   --adb-zip FILE   Use an already downloaded copy of Google's official
                    platform-tools_r37.0.1-linux.zip instead of downloading it
@@ -232,7 +232,7 @@ elif [[ "$ALLOW_NON_AMD" == true ]]; then
 elif [[ "$intel" == true ]]; then
     fail 'Intel GPU found, but this bundle has no Intel drivers (AMD only). Install a bundle built with Intel support, or use --allow-non-amd to install anyway'
 else
-    fail 'No AMD GPU found. This build only ships AMD drivers; use --allow-non-amd to install anyway'
+    fail 'No AMD GPU found and no supported Intel GPU found; use --allow-non-amd for software testing'
 fi
 
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -646,7 +646,7 @@ cat > "$apps/lepton-x86_64-gpu-check.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=Lepton: Check graphics
-Comment=Boot Android once and confirm AMD hardware acceleration
+Comment=Boot Android once and check the selected graphics driver
 Exec=$check_exec
 Icon=video-display
 Terminal=$check_terminal

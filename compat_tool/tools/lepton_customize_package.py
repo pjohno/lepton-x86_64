@@ -261,7 +261,7 @@ def host_problems(rendering, stage=None):
     runtime = os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')
     if not (runtime.startswith('/run/user/') and os.path.isdir(runtime) and os.stat(runtime).st_uid == os.getuid()):
         problems.append(f'User runtime directory unavailable or unexpected: {runtime}')
-    if rendering not in ('software', 'amd'):
+    if rendering not in ('software', 'amd', 'intel'):
         problems.append(f'Unknown rendering mode: {rendering}')
     return problems
 
@@ -946,7 +946,7 @@ def main(argv, core, command):
     elif command == 'adb':
         parser.add_argument('--adb-zip', help="already downloaded official Google platform-tools ZIP (offline)")
     elif command == 'sysbake':
-        parser.add_argument('--rendering', choices=('software', 'amd'), default='software')
+        parser.add_argument('--rendering', choices=('software', 'amd', 'intel'), default='software')
         parser.add_argument('--timeout', type=int, default=600)
     elif command == 'package':
         parser.add_argument('--output-dir', required=True)

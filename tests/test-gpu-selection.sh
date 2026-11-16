@@ -133,7 +133,7 @@ printf 'test-anv\n' > "$stage/compat_tool/images/rootfs/vendor/lib64/hw/vulkan.i
 package intel
 install_check() {   # install_check SYSFS BUNDLE [ARGS...] -> output in $work/out
     local sysfs="$1" bundle="$2"; shift 2
-    mkdir -p "$work/home"
+    mkdir -p "$work/home/.local/share/Steam"
     env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u DISPLAY -u WAYLAND_DISPLAY HOME="$work/home" \
         LEPTON_SKIP_HOST_CHECK=1 LEPTON_NO_DIALOGS=1 LEPTON_SYSFS_DRM="$sysfs" \
         bash "$repo/compat_tool/tools/lepton-install-bundle" --check "$@" "$out/lepton-x86_64-$bundle.tar.gz" > "$work/out" 2>&1

@@ -18,7 +18,7 @@ Bundle options are forwarded unchanged to make-deck-bundle-x86_64.sh:
   --with-ndk [--ndk-payload DIR] --with-gapps [--google-images DIR]
   --with-widevine --services-jar FILE --tool-id ID --tool-name NAME
   --from-stage DIR | --adb-zip FILE
-  --sysbake-rendering software|amd --sysbake-timeout SECONDS
+  --sysbake-rendering software|amd|intel --sysbake-timeout SECONDS
 Google/NDK inputs stay opt-in. A fresh sysbake is always generated.
 HELP
 }

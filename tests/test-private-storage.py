@@ -226,6 +226,43 @@ class SysbakeOrderingTests(unittest.TestCase):
         self.assertIn('stop_run_processes || true', cleanup)
 
 
+class SysbakeRenderingTests(Base):
+    def test_hardware_modes_require_the_requested_staged_driver(self):
+        tool = self.root / 'compat_tool'
+        hw = tool / 'images/rootfs/vendor/lib64/hw'
+        hw.mkdir(parents=True)
+        (tool / 'liblepton').mkdir()
+        (tool / 'lepton').touch()
+        (tool / 'liblepton/baking.sh').touch()
+        shell = tool / 'images/rootfs/system/bin/sh'
+        shell.parent.mkdir(parents=True)
+        shell.write_text('#!/bin/sh\n')
+        shell.chmod(0o755)
+        (shell.parent.parent / 'build.prop').write_text('ro.build.version.sdk=34\n')
+        for rendering, driver in (('amd', 'radeon'), ('intel', 'intel')):
+            args = ['bash', str(SYSBAKE), '--check', '--stage-dir', str(self.root), '--rendering', rendering]
+            run = subprocess.run(args, capture_output=True, text=True)
+            self.assertIn(f'{rendering} Vulkan rootfs missing (vulkan.{driver}.so)', run.stderr)
+            (hw / f'vulkan.{driver}.so').touch()
+            run = subprocess.run(args, capture_output=True, text=True)
+            self.assertIn('Rootfs overlay missing', run.stderr)
+            (hw / f'vulkan.{driver}.so').unlink()
+        self.assertFalse((self.root / 'sysbake').exists())
+        self.assertEqual(list(self.root.glob('.sysbake-work.*')), [])
+
+    def test_rendering_mode_pins_driver_and_clears_inherited_override_for_software(self):
+        text = SYSBAKE.read_text()
+        block = text[text.index('if [[ "$RENDERING" == software ]]; then', text.index('export LEPTON_ISOLATED_SYSBAKE=')):
+                     text.index('export LEPTON_ALLOW_LOCAL_SYSBAKE=')]
+        for rendering, driver in (('amd', 'radeon'), ('intel', 'intel'), ('software', 'unset')):
+            run = subprocess.run(['bash', '-euc', block +
+                                  '\nprintf "%s %s" "$LEPTON_FORCE_SOFTWARE" "${LEPTON_VULKAN_DRIVER-unset}"'],
+                                 env={**os.environ, 'RENDERING': rendering, 'VULKAN_HAL': driver,
+                                      'LEPTON_VULKAN_DRIVER': 'inherited'}, capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(run.stdout, ('true' if rendering == 'software' else 'false') + ' ' + driver)
+
+
 @unittest.skipUnless(os.environ.get('LEPTON_TEST_PODMAN_IMAGE'), 'set LEPTON_TEST_PODMAN_IMAGE to run rootless Podman')
 class RootlessPodmanTests(Base):
     """Small containers only; no Android image is built or booted."""

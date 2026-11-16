@@ -6,7 +6,13 @@ Do **not** run the upstream CI script on an existing host: it contains
 
 The runner needs a previously staged Android 14 x86_64 rootfs and compatibility
 tool, including provisioned `tools/bin/inotifywait`. It uses headless Weston
-with Pixman; no logged-in graphical desktop is required.
+with Pixman; no logged-in graphical desktop is required. Android defaults to
+software rendering (SwiftShader), independently of Weston. Optional
+`--rendering amd` (RADV) or `--rendering intel` (ANV, Gen9 or newer) pins the
+Android driver and requires that driver in the staged rootfs and an accessible
+matching host GPU. The bundle wrappers expose this as
+`--sysbake-rendering software|amd|intel`. Runtime GPU validation still applies;
+unsupported hardware is never silently switched to software.
 
 ```bash
 source .build-env

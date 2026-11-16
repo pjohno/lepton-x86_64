@@ -91,6 +91,20 @@ def registration(tool):
     return found[0] if found else None
 
 
+def installed_rendering(tool, install):
+    """Use this install's saved graphics choice for persistent-profile launches."""
+    path = CONFIG_DIR / (tool + ".env")
+    if not path.is_file():
+        return "amd"  # older installs predate Intel support
+    values = read_env(path)
+    if Path(values.get("LEPTON_X86_INSTALL_DIR", "")).resolve() != install.resolve():
+        fail("Saved graphics settings do not match the selected install")
+    rendering = values.get("LEPTON_X86_RENDERING", "amd")
+    if rendering not in ("amd", "intel", "software"):
+        fail("Invalid saved rendering mode: " + rendering)
+    return rendering
+
+
 def default_tool():
     """Pick the install this script belongs to, then the default install, then legacy."""
     try:
@@ -442,7 +456,7 @@ def main():
         options = legacy_options + " " + shlex.join([
             str(runner), "--stage-dir", str(INSTALL), "--apk", str(apk),
             "--expect-abi", args.expect_abi, "--app", "--profile", args.runtime_profile,
-            "--rendering", "amd", "--display", "desktop", "--network-sysctls",
+            "--rendering", installed_rendering(TOOL, INSTALL), "--display", "desktop", "--network-sysctls",
             "--until-exit", "--execute",
         ])
     elif self_contained(INSTALL):

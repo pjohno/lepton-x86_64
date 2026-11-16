@@ -290,6 +290,27 @@ while True: time.sleep(1)
         self.assertIn('AMD sysbake render-node access', out)
         self.run_check(args=('--workflow', 'bundle', '--rendering', 'software'))
 
+    def test_intel_sysbake_requires_accessible_matching_render_node(self):
+        drm = self.work / 'intel-drm'
+        vendor = drm / 'renderD128/device/vendor'
+        write(vendor, '0x8086\n')
+        nodes = self.work / 'intel-nodes'
+        nodes.mkdir()
+        # /dev/null stands in for a readable, writable character render node.
+        (nodes / 'renderD128').symlink_to('/dev/null')
+        out = self.run_check(args=('--workflow', 'bundle', '--rendering', 'intel'),
+                             LEPTON_PREFLIGHT_DRM=str(drm), LEPTON_PREFLIGHT_DEV_DRI=str(nodes))
+        self.assertIn('[PASS] Intel sysbake render-node access', out)
+        out = self.run_check('make-deck-bundle-x86_64.sh',
+                             ('--check', '--bundle-id', 'intel', '--sysbake-rendering', 'intel'),
+                             LEPTON_PREFLIGHT_DRM=str(drm), LEPTON_PREFLIGHT_DEV_DRI=str(nodes))
+        self.assertIn('[PASS] Intel sysbake render-node access', out)
+        self.assertIn('Full Steam Deck bundle: READY', out)
+        write(vendor, '0x1002\n')
+        out = self.run_check(args=('--workflow', 'bundle', '--rendering', 'intel'), ok=False,
+                             LEPTON_PREFLIGHT_DRM=str(drm), LEPTON_PREFLIGHT_DEV_DRI=str(nodes))
+        self.assertIn('[FAIL] Intel sysbake render-node access', out)
+
     def test_individual_image_build_and_package_retain_no_binder_requirement(self):
         # Reuse the real image-workflow fixture; only Android execution and
         # extraction are mocked. This exercises both actual command entrypoints.

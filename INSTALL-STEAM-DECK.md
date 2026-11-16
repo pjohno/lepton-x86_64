@@ -28,8 +28,10 @@ fullscreen Gaming Mode and windowed Desktop Mode. The same bundle installer
 also detects conventional Linux hosts and selects direct Wayland with native
 fullscreen. Fedora GNOME and KDE Plasma Wayland are supported launch
 environments; desktop game compatibility remains experimental. X11 is
-unsupported for the direct profile. Other GPUs are not supported (the image
-only contains AMD RADV/radeonsi drivers). On Fedora and other
+unsupported for the direct profile. AMD hardware uses RADV/radeonsi. Intel Gen9 (Skylake) or newer can use
+ANV/Iris with an Intel-enabled bundle (experimental); the installer checks
+for its Intel driver. Other GPUs require explicit `--allow-non-amd` software
+testing. On Fedora and other
 SELinux-enforcing systems, install Lepton's SELinux policy module once before
 the first game launch:
 [one-time SELinux setup](compat_tool/LOCAL-DESKTOP.md#one-time-selinux-setup-fedora).
@@ -94,7 +96,7 @@ The installer also adds these entries to the application menu and the desktop:
 | --- | --- |
 | **Lepton: Install / Update / Repair** | Later versions, updates and repair (below) |
 | **Lepton: Add Android game** | Add an APK or APKM to Steam |
-| **Lepton: Check graphics** | Check the AMD hardware graphics |
+| **Lepton: Check graphics** | Check the selected graphics driver |
 | **Lepton: Remove installs** | Remove old installs |
 
 ### Later versions, updates and repair
