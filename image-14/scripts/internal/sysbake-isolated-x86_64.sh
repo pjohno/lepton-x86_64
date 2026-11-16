@@ -51,6 +51,19 @@ grep -Fq 'ETHERNET_APEX_CONFIG=' "$TOOL/liblepton/mounting.sh" || fail 'Missing 
 for bin in podman weston systemctl rsync getfattr setfattr timeout python3 flock realpath mktemp fuse-overlayfs; do
     command -v "$bin" >/dev/null 2>&1 || fail "Missing host command: $bin"
 done
+PRIVATE_STORAGE="$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")/private_storage.py"
+[[ -f "$PRIVATE_STORAGE" ]] || fail "Missing helper: $PRIVATE_STORAGE"
+# Lepton mounts the rootfs with `--rootfs ROOTFS:O` under
+# --userns=keep-id:uid=0,gid=0. ACL entries naming UIDs outside that namespace
+# make crun fail with "get xattr system.posix_acl_access ... Invalid argument".
+# The stage is never modified here; report it instead.
+ACL_RC=0
+ACL_REPORT="$(python3 -I -B "$PRIVATE_STORAGE" scan-acls "$ROOTFS" 2>&1)" || ACL_RC=$?
+if (( ACL_RC != 0 )); then
+    printf '%s\n' "$ACL_REPORT" >&2
+    (( ACL_RC == 1 )) || fail "Cannot check staged rootfs for POSIX ACLs: $ROOTFS"
+    fail "Staged rootfs carries POSIX ACLs (often inherited from a workspace parent with default ACLs); rootless Android cannot boot from it. Recreate the stage under a directory without default ACLs, or remove them from this stage yourself (setfacl -R -b \"$ROOTFS\")"
+fi
 # PATH is narrowed before Lepton runs; keep using the commands checked here.
 WESTON_BIN="$(command -v weston)"
 SYSTEMCTL_BIN="$(command -v systemctl)"
@@ -134,6 +147,12 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# Before anything is created inside them: a workspace parent's default ACLs
+# (or setgid) would otherwise be inherited by Podman's storage and break
+# rootless containers ("creating /etc/mtab symlink: invalid argument").
+python3 -I -B "$PRIVATE_STORAGE" private "$WORK" "$RUNROOT" ||
+    fail "Cannot make sysbake storage private: $WORK"
 
 mkdir -p "$WORK/bin" "$WORK/home/.steam" "$WORK/home/.config" "$WORK/home/.local/share" "$WORK/tmp" "$GRAPHROOT"
 touch "$WORK/home/.steam/steam.pipe"
