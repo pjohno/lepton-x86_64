@@ -67,12 +67,15 @@ else
 fi
 
 # Graphics: the Android image only contains AMD drivers.
-amd=false
+amd=false intel=false
 for vendor_file in "$DRM"/renderD*/device/vendor; do
     [[ -r "$vendor_file" && "$(<"$vendor_file")" == 0x1002 ]] && amd=true
+    [[ -r "$vendor_file" && "$(<"$vendor_file")" == 0x8086 ]] && intel=true
 done
 if [[ "$amd" == true ]]; then
     pass 'AMD GPU (hardware graphics)'
+elif [[ "$intel" == true ]]; then
+    warn 'Intel GPU: hardware graphics only with a bundle built with Intel drivers (experimental)'
 else
     warn 'No AMD GPU: hardware graphics are not available (AMD drivers only); see --allow-non-amd'
 fi

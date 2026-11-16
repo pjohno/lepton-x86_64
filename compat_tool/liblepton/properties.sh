@@ -97,10 +97,15 @@ function setup_props()
         props_echo "ro.hardware.vulkan=pastel"
     else
         if [[ "$(uname -m)" == "x86_64" ]]; then
-            # x86_64: ANGLE for EGL/GLES, RADV for Vulkan, generic minigbm.
+            # x86_64: ANGLE for EGL/GLES, RADV (AMD) or ANV (Intel) for
+            # Vulkan, generic minigbm.
             props_echo "ro.hardware.egl=angle"
-            props_echo "ro.hardware.vulkan=radeon"
+            props_echo "ro.hardware.vulkan=$(lepton_vulkan_hal)"
             props_echo "ro.hardware.gralloc=minigbm_gbm_mesa"
+            # minigbm otherwise opens the first render node it finds.
+            local render_node
+            render_node="$(lepton_gpu_render_node)"
+            [[ -z "${render_node}" ]] || props_echo "gralloc.gbm.device=${render_node}"
             props_echo "debug.angle.feature_overrides_disabled=supportsSwapchainMaintenance1"
         else
             # Default to using turnip as our driver, but allow using the qcom driver

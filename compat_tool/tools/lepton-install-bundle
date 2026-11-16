@@ -201,14 +201,24 @@ grep -Fq " $(basename -- "$ARCHIVE")" "$CHECKSUM" || grep -Fq "*$(basename -- "$
     fail 'Checksum file does not list this archive'
 pass 'Archive checksum verified'
 
-amd=false
-for vendor_file in /sys/class/drm/renderD*/device/vendor; do
+amd=false intel=false
+for vendor_file in "${LEPTON_SYSFS_DRM:-/sys/class/drm}"/renderD*/device/vendor; do
     [[ -r "$vendor_file" && "$(<"$vendor_file")" == 0x1002 ]] && amd=true
+    [[ -r "$vendor_file" && "$(<"$vendor_file")" == 0x8086 ]] && intel=true
 done
+bundle_has_intel=false
+if [[ "$amd" != true && "$intel" == true ]] &&
+    tar -tzf "$ARCHIVE" 2>/dev/null | grep '/vendor/lib64/hw/vulkan\.intel\.so$' >/dev/null; then
+    bundle_has_intel=true
+fi
 if [[ "$amd" == true ]]; then
     pass 'AMD GPU render node found (hardware acceleration available)'
+elif [[ "$bundle_has_intel" == true ]]; then
+    pass 'Intel GPU render node found and this bundle has Intel drivers (experimental)'
 elif [[ "$ALLOW_NON_AMD" == true ]]; then
-    info 'WARNING: no AMD GPU found; launch games with LEPTON_FORCE_SOFTWARE=true'
+    info 'WARNING: no supported GPU drivers for this computer; launch games with LEPTON_FORCE_SOFTWARE=true'
+elif [[ "$intel" == true ]]; then
+    fail 'Intel GPU found, but this bundle has no Intel drivers (AMD only). Install a bundle built with Intel support, or use --allow-non-amd to install anyway'
 else
     fail 'No AMD GPU found. This build only ships AMD drivers; use --allow-non-amd to install anyway'
 fi
@@ -423,7 +433,9 @@ env_file="$CONFIG_DIR/$TOOL_ID.env"
     printf 'LEPTON_X86_GAPPS=%q\n' "$HAS_GAPPS"
     printf 'LEPTON_X86_NDK=%q\n' "$HAS_NDK"
     printf 'LEPTON_X86_WIDEVINE=%q\n' "$HAS_WIDEVINE"
-    if [[ "$amd" == true ]]; then printf 'LEPTON_X86_RENDERING=amd\n'; else printf 'LEPTON_X86_RENDERING=software\n'; fi
+    if [[ "$amd" == true ]]; then printf 'LEPTON_X86_RENDERING=amd\n'
+    elif [[ "$bundle_has_intel" == true ]]; then printf 'LEPTON_X86_RENDERING=intel\n'
+    else printf 'LEPTON_X86_RENDERING=software\n'; fi
     printf 'LEPTON_X86_DISPLAY=desktop\n'
 } > "$env_file.tmp"
 mv -f -- "$env_file.tmp" "$env_file"
@@ -580,11 +592,14 @@ elif [[ "$INTERACTIVE" == true ]]; then
     python3 "$installed_manage" --gui --quiet-if-empty --exclude "$TOOL_ID" \
         --prompt "Installed $TOOL_NAME. Optionally remove older Lepton installs:" || true
 fi
+expected_driver='SwiftShader: software rendering'
+[[ "$amd" != true ]] || expected_driver=RADV
+[[ "$amd" == true || "$bundle_has_intel" != true ]] || expected_driver='Intel (ANV)'
 
 cat <<EOF
 
 Next steps (desktop icons or application menu > Games; no typing needed)
-  1. "Lepton: Check graphics" (about a minute; should report RADV)
+  1. "Lepton: Check graphics" (about a minute; should report $expected_driver)
   2. "Lepton: Add Android game": pick an APK; exit Steam when asked,
      then start Steam again once it reports success
   3. In the game's controller layout enable Touchscreen Native Support

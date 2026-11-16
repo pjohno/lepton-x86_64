@@ -52,6 +52,8 @@ class PackagingTests(unittest.TestCase):
             dest = self.repo / 'image-14/scripts' / name
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / 'image-14/scripts' / name, dest)
+        # Mesa host tools need the real Ubuntu 26 builder; the fixture skips them.
+        write(self.repo / 'image-14/scripts/internal/bootstrap-mesa-clc.sh', '#!/bin/bash\nexit 0\n')
         write(self.repo / '.build-env', f'LEPTON_OUTPUT_DIR="{self.workspace}"\n'
               'LEPTON_BUILD_TARGET=aosp_lepton_x86_64-ap2a-userdebug\n'
               'LEPTON_BUILD_JOBS=1\nLEPTON_MIN_FREE_GIB=0\n'
