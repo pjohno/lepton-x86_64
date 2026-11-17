@@ -637,8 +637,9 @@ function setup_podman_mounts()
             podman_mount_entry "/dev/${dev}" "/dev/${dev}" rw
         fi
     done
-    # x86_64 port: media decoders (Codec2) allocate from the DMA-BUF system heap.
-    if lepton_dma_heap_usable && [[ "${LEPTON_CODEC2:-auto}" != false ]]; then
+    # x86_64 port: older images' media decoders (Codec2) allocate from the
+    # DMA-BUF system heap; images with patch 0013 use gralloc and need none.
+    if [[ "$(lepton_codec2_mode)" == heap ]]; then
         podman_mount_entry "$(lepton_dma_heap_device)" "/dev/dma_heap/system" rw
     fi
 

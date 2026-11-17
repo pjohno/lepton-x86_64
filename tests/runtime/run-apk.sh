@@ -54,7 +54,7 @@ For a regular game APK, add --app. Optional game/debug settings:
   --ndk-auxv-shim FILE        Preload experimental guest auxv compatibility shim
   --services-jar FILE        Overlay experimental services.jar without changing the stage
   --runtime-dir DIR          Test updated compat_tool scripts with stage images/sysbake
-  --codec2                  Enable experimental Codec2/gralloc media allocation
+  --codec2                  Force Codec2 with gralloc buffers (default on images with patch 0013)
   --network-sysctls          Allow netd sysctl writes in the private network namespace
   --profile NAME             Reuse private Android data; install only changed APKs
   --setup-only               Boot a profile for registration/sign-in; no APK required

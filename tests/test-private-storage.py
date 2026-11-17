@@ -67,6 +67,13 @@ class Base(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
+        # A TMPDIR below a folder with a default ACL must not change the results.
+        for name in private_storage.ACL_XATTRS:
+            try:
+                os.removexattr(self.root, name)
+            except OSError as exc:
+                if exc.errno not in (errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP):
+                    raise
         self.parent = self.root / 'workspace'
         self.parent.mkdir(mode=0o750)
         os.chmod(self.parent, 0o750)
@@ -195,6 +202,83 @@ class CommandLineTests(Base):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(result.stdout.split(), [str(rootfs / 'system/etc/hosts')])
         self.assertEqual(snapshot(rootfs / 'system/etc/hosts'), before)
+
+
+class InheritedAclTests(Base):
+    """inherited-acl: what a stage created at a path would inherit (read-only)."""
+
+    def run_helper(self, *args):
+        return subprocess.run([sys.executable, '-I', '-B', str(HELPER), *args],
+                              capture_output=True, text=True, check=False)
+
+    def test_clean_parent(self):
+        before = snapshot(self.parent)
+        self.assertEqual(private_storage.inheritance_source(self.parent / 'stage'), (str(self.parent), False))
+        self.assertEqual(snapshot(self.parent), before)
+
+    def test_default_acl_through_missing_intermediate_directories(self):
+        before = self.acl_parent()
+        target = self.parent / 'stages' / 'new' / 'id'
+        self.assertEqual(private_storage.inheritance_source(target), (str(self.parent), True))
+        self.assertFalse((self.parent / 'stages').exists(), 'check created directories')
+        self.assertEqual(snapshot(self.parent), before, 'check changed ACLs or mode')
+        # Confirm the premise: a directory made there really inherits the ACL.
+        target.mkdir(parents=True)
+        self.assertIn('system.posix_acl_default', acls(target))
+
+    def test_only_the_nearest_existing_ancestor_counts(self):
+        clean = self.parent / 'clean'
+        clean.mkdir()  # made before the parent gets its ACL: inherits nothing
+        self.acl_parent()
+        self.assertEqual(private_storage.inheritance_source(clean / 'missing' / 'stage'), (str(clean), False))
+
+    def test_access_acl_alone_is_not_inherited(self):
+        try:
+            give_acls(self.parent, default=False)
+        except OSError as exc:
+            if exc.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):
+                self.skipTest('no POSIX ACL support')
+            raise
+        self.assertEqual(private_storage.inheritance_source(self.parent / 'stage'), (str(self.parent), False))
+
+    def test_symlinked_ancestor_is_resolved_like_mkdir(self):
+        self.acl_parent()
+        link = self.root / 'link'
+        link.symlink_to(self.parent)
+        self.assertEqual(private_storage.inheritance_source(link / 'new' / 'stage'), (str(self.parent), True))
+        self.assertFalse((self.parent / 'new').exists())
+
+    def test_dangling_symlink_or_file_in_the_path_is_an_error(self):
+        dangling = self.root / 'dangling'
+        dangling.symlink_to(self.root / 'nowhere')
+        afile = self.root / 'file'
+        afile.write_text('x')
+        for path in (dangling / 'stage', afile / 'stage'):
+            with self.subTest(path=path), self.assertRaises(private_storage.PrivateDirError):
+                private_storage.inheritance_source(path)
+        self.assertFalse((self.root / 'nowhere').exists())
+
+    def test_filesystem_without_acl_support(self):
+        unsupported = OSError(errno.EOPNOTSUPP, 'Operation not supported')
+        with mock.patch.object(private_storage.os, 'getxattr', side_effect=unsupported):
+            self.assertEqual(private_storage.inheritance_source(self.parent / 'x'), (str(self.parent), False))
+
+    def test_unreadable_acl_is_an_error_not_a_pass(self):
+        denied = OSError(errno.EACCES, 'Permission denied')
+        with mock.patch.object(private_storage.os, 'getxattr', side_effect=denied), \
+                self.assertRaises(private_storage.PrivateDirError):
+            private_storage.inheritance_source(self.parent / 'x')
+
+    def test_command_line_exit_codes(self):
+        result = self.run_helper('inherited-acl', str(self.parent / 'a' / 'b'))
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, str(self.parent)), result.stderr)
+        self.acl_parent()
+        result = self.run_helper('inherited-acl', str(self.parent / 'a' / 'b'))
+        self.assertEqual((result.returncode, result.stdout.strip()), (1, str(self.parent)), result.stderr)
+        (self.root / 'file').write_text('x')
+        result = self.run_helper('inherited-acl', str(self.root / 'file' / 'stage'))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('[FAIL]', result.stderr)
 
 
 class SysbakeOrderingTests(unittest.TestCase):

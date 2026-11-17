@@ -5,13 +5,69 @@ function props_file()
     print "$(prefix)/lepton.prop"
 }
 
-# x86_64 port: host DMA-BUF system heap for Codec2 buffers (world-accessible on
-# SteamOS; the "video" group on e.g. Fedora). Overridable for tests.
+# x86_64 port: Android 14's only media decoders are Codec2's. Their buffers
+# come either from gralloc BLOB allocations (Valve's upstream pool mask, needs
+# no host access) or from the host DMA-BUF system heap, which only some users
+# may open (root-only on SteamOS, the "video" group on Fedora).
+#   blob: AMD with an image whose gbm_mesa allocator never maps buffers
+#         itself (patch 0013); allocators without it crash on BLOB buffers
+#         on AMD, so the image is checked, overlay first. Not Intel yet:
+#         iris cannot map BLOB buffers through gbm_mesa (lock(BLOB) fails).
+#         Software rendering uses gralloc.default, which handles BLOB
+#         buffers in every image.
+#   heap: older images when the user can open the heap.
+#   off:  no media decoders.
+# LEPTON_CODEC2=false forces off; LEPTON_CODEC2=true forces blob (testing).
+LEPTON_GBM_NO_MAP_MARKER='lepton-gbm-allocator-no-map-probe'
+function lepton_gralloc_blob_safe()
+{
+    [[ "${LEPTON_FORCE_SOFTWARE:-}" == "true" ]] && return 0
+    [[ "$(lepton_vulkan_hal)" == radeon ]] || return 1
+    local LIB=vendor/lib64/libgbm_mesa_wrapper.so FILE
+    for FILE in "${LEPTON_DIR}/../images/rootfs_overlay/${LIB}" \
+                "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/${LIB}"; do
+        if [[ -f "${FILE}" ]]; then
+            grep -qaF "${LEPTON_GBM_NO_MAP_MARKER}" -- "${FILE}"
+            return
+        fi
+    done
+    return 1
+}
+function lepton_codec2_mode()
+{
+    if [[ "$(uname -m)" != "x86_64" || "$(android_sdk_version)" -lt 34 || "${LEPTON_CODEC2:-auto}" == false ]]; then
+        print off
+    elif [[ "${LEPTON_CODEC2:-auto}" == true ]] || lepton_gralloc_blob_safe; then
+        print blob
+    elif lepton_dma_heap_usable; then
+        print heap
+    else
+        print off
+    fi
+}
+
+# Host DMA-BUF system heap (older images only). Overridable for tests.
 function lepton_dma_heap_device() { print "${LEPTON_DMA_HEAP_DEVICE:-/dev/dma_heap/system}"; }
 function lepton_dma_heap_usable()
 {
     local DEVICE="$(lepton_dma_heap_device)"
     [[ "$(uname -m)" == "x86_64" && -c "${DEVICE}" && -r "${DEVICE}" && -w "${DEVICE}" ]]
+}
+# Diagnostics only: why the heap is unusable. Without it Codec2 stays off and
+# Android 14 x86_64 has no media decoders, so apps that play music or video
+# (MediaPlayer, ExoPlayer, WebView) are silent, while games that mix their own
+# PCM are not. Says which, so a silent media app can be traced to the host.
+function lepton_dma_heap_problem()
+{
+    local DEVICE
+    DEVICE="$(lepton_dma_heap_device)"
+    if [[ ! -e "${DEVICE}" ]]; then
+        print "${DEVICE} does not exist on this host"
+    elif [[ ! -c "${DEVICE}" ]]; then
+        print "${DEVICE} is not a character device"
+    elif [[ ! -r "${DEVICE}" || ! -w "${DEVICE}" ]]; then
+        print "${DEVICE} is not readable and writable by $(id -un) ($(stat -c '%U:%G %A' -- "${DEVICE}" 2>/dev/null || print 'owner unknown'))"
+    fi
 }
 
 function setup_props()
@@ -68,19 +124,32 @@ function setup_props()
     # Android 14 x86_64 exposes the Codec2 software store without an OMX HAL.
     # Disabling Codec2 there leaves MediaCodecList empty (including audio), so
     # games using SoundPool/MediaPlayer/WebView audio are silent.
-    if [[ "$(uname -m)" == "x86_64" && "$(android_sdk_version)" -ge 34 && "${LEPTON_CODEC2:-auto}" == true ]]; then
-        # Experimental (video): linear buffers via gralloc BLOB + BUFFERQUEUE.
-        # Known to stop Android booting on current builds.
-        props_echo "debug.stagefright.ccodec=4"
-        props_echo "debug.stagefright.c2-poolmask=786432"
-    elif [[ "$(uname -m)" == "x86_64" && "$(android_sdk_version)" -ge 34 && "${LEPTON_CODEC2:-auto}" != false ]] &&
-         lepton_dma_heap_usable; then
-        # Codec2 allocates linear (audio) buffers from the DMA-BUF system heap,
-        # which setup_podman_mounts passes through when the user can open it.
-        props_echo "debug.stagefright.ccodec=4"
-    else
-        props_echo "debug.stagefright.ccodec=0"
-    fi
+    local CODEC2_MODE
+    CODEC2_MODE="$(lepton_codec2_mode)"
+    case "${CODEC2_MODE}" in
+        blob)
+            # Valve's upstream mask: BUFFERQUEUE, BLOB and newer allocators,
+            # never ION/DMA-BUF heap, so no host device is needed.
+            props_echo "debug.stagefright.ccodec=4"
+            props_echo "debug.stagefright.c2-poolmask=0xfc0000"
+            ;;
+        heap)
+            # Linear buffers from the host DMA-BUF heap (mounted in setup).
+            props_echo "debug.stagefright.ccodec=4"
+            ;;
+        *)
+            props_echo "debug.stagefright.ccodec=0"
+            if [[ "$(uname -m)" == "x86_64" && "$(android_sdk_version)" -ge 34 ]]; then
+                if [[ "${LEPTON_CODEC2:-auto}" == false ]]; then
+                    println "Android media decoders (Codec2): off (LEPTON_CODEC2=false); music and video apps will be silent"
+                elif [[ "$(lepton_vulkan_hal)" == intel ]]; then
+                    println "Android media decoders (Codec2): off: on Intel graphics they still need host heap access, and $(lepton_dma_heap_problem); music and video apps will be silent, games' own audio is unaffected"
+                else
+                    println "Android media decoders (Codec2): off: this Android image needs host heap access for them, and $(lepton_dma_heap_problem); music and video apps will be silent, games' own audio is unaffected. Images with patch 0013 need no host access."
+                fi
+            fi
+            ;;
+    esac
     props_echo "ro.opengles.version=196609"
     props_echo "ro.hardware.camera=v4l2"
 

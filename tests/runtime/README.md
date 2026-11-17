@@ -171,8 +171,20 @@ bash tests/runtime/run-apk.sh --stage-dir "$stage" --runtime-dir compat_tool \
 The build additionally needs host ffmpeg (libx264/libvorbis). It generates original
 local test patterns and tones, with no downloads. The run requires actual AVC
 and Vorbis decoded output plus a video-surface rendering marker; process survival
-alone cannot pass. `--codec2` enables the experimental Codec2 list and BLOB plus
-BUFFERQUEUE allocation (`LEPTON_CODEC2=true`). Default codec behavior is retained
-until decode/rendering pass. The current AMD probe fails on an invalid YCbCr
-layout from gralloc, after fixing missing ION/system-heap input allocation. That
-remaining graphics-buffer problem is separate from VIEW-intent interception.
+alone cannot pass. Images with patch 0013 enable Codec2 with Valve's gralloc pool
+mask by default; `--codec2` (`LEPTON_CODEC2=true`) forces that mode on older
+images too, where it crashes the AMD allocator at boot. Video output (AVC) is a
+separate, still open graphics-buffer problem. This runner's own audio output
+does not reach PipeWire for any app, so judge decoding here and listen in a
+normal `lepton-play` or Steam launch.
+
+The probe shows where silent media audio stops (logcat tag `LeptonMediaSmoke`;
+the launcher log also says when media decoders are off):
+
+| Marker | Meaning |
+| --- | --- |
+| `LEPTON_MEDIA_DECODERS count=0` | Codec2 is off (`debug.stagefright.ccodec=0`): an image without patch 0013 and a user who cannot open `/dev/dma_heap/system` |
+| `LEPTON_MEDIA_PCM_TRACK_PASS ... played_frames>0` | Android's audio output reaches the host; no codec involved (games' own PCM) |
+| `LEPTON_MEDIA_WAV_PLAYBACK_FAIL` | Even PCM WAV through MediaPlayer fails: it needs Codec2's raw decoder |
+| `CodecException` / `NO_MEMORY` with `DMABUFHEAPS: Unable to allocate` | Codec2 is on but tried the DMA-BUF heap (heap mode, or no BLOB pool) |
+| `allocatorID 19` in `CCodecBufferChannel` | Buffers from gralloc BLOB (patch 0013 mode); no host heap involved |

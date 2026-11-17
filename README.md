@@ -182,6 +182,8 @@ and resets Podman.
 | `0008-inputreader-separate-steam-input-pads.patch` | Steam Input controllers appear as separate Android controllers |
 | `0010-egl-hide-untranslatable-gl-extensions.patch` | Arm64 games under NDK translation don't see ANGLE GL extensions the translator can't forward (fixes Flutter/Skia games stuck loading) |
 | `0011-hwc-present-framebuffer-after-color-layers.patch` | Desktop windows keep updating when the bottom layer is a color layer (letterboxed games such as Roblox stayed on their splash screen until Alt+Tab) |
+| `0012-hwc-window-close-android14-task-codes.patch` | Closing the game's desktop window ends the game: the Waydroid task service used Android 13 binder codes, so on Android 14 the close removed nothing (also fixes per-task close/focus) |
+| `0013-minigbm-gbm-mesa-no-allocator-map.patch` | Music and video apps decode audio without host DMA-BUF heap access: the AMD allocator no longer crashes on Codec2 buffers allocated through gralloc (Valve's upstream approach) |
 
 **Where things are:**
 

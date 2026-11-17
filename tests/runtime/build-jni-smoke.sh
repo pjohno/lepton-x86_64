@@ -161,6 +161,8 @@ if [[ "$MEDIA_SMOKE" == true ]]; then
         -c:v libx264 -pix_fmt yuv420p -an "$TMP/assets/probe.mp4"
     ffmpeg -v error -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 \
         -c:a libvorbis "$TMP/assets/probe.ogg"
+    ffmpeg -v error -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 \
+        -c:a pcm_s16le "$TMP/assets/probe.wav"
     cp "$SCRIPT_DIR/media-smoke/MediaProbe.java" "$TMP/src/org/lepton/smoke/"
     sed -i '/        setContentView(view);/a\        MediaProbe.start(this);' \
         "$TMP/src/org/lepton/smoke/MainActivity.java"
@@ -181,7 +183,7 @@ echo '[INFO] Linking, aligning and signing APK'
     if [[ "$MEDIA_SMOKE" == true ]]; then
         # AssetFileDescriptor requires uncompressed sample assets.
         cp -a "$TMP/assets" .
-        zip -q -0 unsigned.apk assets/probe.mp4 assets/probe.ogg
+        zip -q -0 unsigned.apk assets/probe.mp4 assets/probe.ogg assets/probe.wav
     fi
 )
 "$ZIPALIGN" -f 4 "$TMP/apk/unsigned.apk" "$TMP/apk/aligned.apk"

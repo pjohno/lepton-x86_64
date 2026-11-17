@@ -101,6 +101,26 @@ image_provenance_write "$fake" "$aosp" "$rootfs" "$work/info"
 if image_provenance_check "$work/info" "$fake" HEAD "$prop" >/dev/null; then fail 'missing patch accepted'; fi
 git -C "$aosp/${first%%|*}" apply "$fake/image-14/patches/${first#*|}"
 
+# Stacked patches to one project: the later one edits a file the earlier one
+# creates (as 0013 does to 0004's gbm_mesa_wrapper.cpp).
+stack_status() (
+    LEPTON_CUSTOM_PATCHES+=("external/stacked|zz-1-create.patch" "external/stacked|zz-2-edit.patch")
+    image_source_status "$fake" "$aosp" | sed -n 's/^Lepton patches: //p'
+)
+mkdir -p "$aosp/external/stacked"
+printf 'diff --git a/s.c b/s.c\nnew file mode 100644\n--- /dev/null\n+++ b/s.c\n@@ -0,0 +1 @@\n+one\n' \
+    > "$fake/image-14/patches/zz-1-create.patch"
+printf 'diff --git a/s.c b/s.c\n--- a/s.c\n+++ b/s.c\n@@ -1 +1 @@\n-one\n+two\n' \
+    > "$fake/image-14/patches/zz-2-edit.patch"
+(cd "$aosp/external/stacked" && git apply --no-index "$fake/image-14/patches/zz-1-create.patch" \
+    && git apply --no-index "$fake/image-14/patches/zz-2-edit.patch")
+[[ "$(stack_status)" == applied ]] || fail "stacked patches reported $(stack_status)"
+(cd "$aosp/external/stacked" && git apply --no-index --reverse "$fake/image-14/patches/zz-2-edit.patch")
+[[ "$(stack_status)" == "missing (zz-2-edit.patch)" ]] || fail "missing top patch reported $(stack_status)"
+rm -f "$aosp/external/stacked/s.c"
+[[ "$(stack_status)" == "missing (zz-2-edit.patch zz-1-create.patch)" ]] || fail "missing stack reported $(stack_status)"
+rm -rf "$aosp/external/stacked" "$fake/image-14/patches/zz-"*.patch
+
 # The check: a different build, and later commits.
 if image_provenance_check "$work/clean-info" "$fake" HEAD "$(printf '0%.0s' {1..64})" > "$work/problems"; then fail 'other build accepted'; fi
 grep -q 'different image build' "$work/problems"
