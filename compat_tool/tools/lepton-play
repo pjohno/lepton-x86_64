@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Install and run an Android game without Steam.
+#
+# Each game gets its own persistent compatibility-data folder, named after its
+# Android package:
+#   ${XDG_DATA_HOME:-~/.local/share}/lepton-compat-data/<package>
+# It holds exactly what Steam's compatdata/<appid> would hold for the same game
+# (Android profile, saved data, unpacked .apkm), so the game is installed on its
+# first run and keeps its data afterwards. The shader cache goes to
+#   ${XDG_CACHE_HOME:-~/.cache}/lepton-shadercache/<package>
+#
+# The launch itself is the installed tool's normal Steam entry point
+# (lepton-x86_64-entry waitforexitandrun), given the same environment Steam
+# would give a non-Steam shortcut, so display routing (direct Wayland or
+# Gamescope), .apkm handling and profile checks are unchanged.
+set -Eeuo pipefail
+
+usage() {
+    cat <<'HELP'
+Usage: lepton-play [options] GAME.apk|GAME.apkm
+       lepton-play --list [--data-root DIR]
+
+Installs the game into its own Android profile on first run, then starts it.
+Later runs reuse the profile (saved games, sign-ins) and only reinstall the
+game when the file changed. Nothing is added to Steam.
+
+Options:
+  --tool ID|DIR      Lepton install to use (default: the install containing
+                     this command, else ~/.config/lepton-x86_64/default.env)
+  --data-root DIR    Parent of the per-game folders
+                     (default: ~/.local/share/lepton-compat-data)
+  --dry-run          Print the tool, package and folders; change nothing
+  --list             List games that have a folder under the data root
+  -h, --help         This help
+
+The game's folder is DATA_ROOT/<package>, for example
+~/.local/share/lepton-compat-data/org.andstatus.game2048. Delete it to reset
+the game. Stop a running game with Ctrl-C in this terminal, or by quitting
+the game itself. (Closing its window on a desktop does not yet stop it.)
+HELP
+}
+
+fail() { printf 'lepton-play: %s\n' "$*" >&2; exit 1; }
+info() { printf 'lepton-play: %s\n' "$*"; }
+
+TOOL_ARG=''
+DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/lepton-compat-data"
+CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/lepton-shadercache"
+DRY_RUN=false
+LIST=false
+GAME=''
+while (($#)); do
+    case "$1" in
+        --tool) [[ $# -ge 2 ]] || fail "--tool needs a value"; TOOL_ARG="$2"; shift 2 ;;
+        --data-root) [[ $# -ge 2 ]] || fail "--data-root needs a value"; DATA_ROOT="$2"; shift 2 ;;
+        --dry-run) DRY_RUN=true; shift ;;
+        --list) LIST=true; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; [[ $# -eq 1 ]] || fail "expected one game file after --"; GAME="$1"; shift ;;
+        -*) fail "unknown option: $1 (see --help)" ;;
+        *) [[ -z "$GAME" ]] || fail "only one game file at a time"; GAME="$1"; shift ;;
+    esac
+done
+[[ "$DATA_ROOT" == /* ]] || DATA_ROOT="$PWD/$DATA_ROOT"
+
+if [[ "$LIST" == true ]]; then
+    [[ -d "$DATA_ROOT" ]] || { info "no games yet ($DATA_ROOT does not exist)"; exit 0; }
+    for dir in "$DATA_ROOT"/*/; do
+        [[ -d "$dir" ]] || continue
+        dir="${dir%/}"
+        printf '%s\t%s\n' "$(basename -- "$dir")" "$(du -sh -- "$dir" 2>/dev/null | cut -f1)"
+    done
+    exit 0
+fi
+
+[[ -n "$GAME" ]] || { usage >&2; exit 2; }
+[[ -f "$GAME" ]] || fail "no such file: $GAME"
+GAME="$(realpath -e -- "$GAME")"
+case "${GAME,,}" in
+    *.apk|*.apkm) ;;
+    *) fail "expected an .apk or .apkm file: $GAME" ;;
+esac
+
+# --- Which Lepton install ---------------------------------------------------
+tool_from_install() {   # INSTALL_ROOT -> its compat_tool dir, if valid
+    local root="$1"
+    [[ -x "$root/compat_tool/lepton-x86_64-entry" ]] && printf '%s\n' "$root/compat_tool"
+}
+TOOL=''
+if [[ -n "$TOOL_ARG" ]]; then
+    if [[ -d "$TOOL_ARG" ]]; then
+        candidate="$(realpath -e -- "$TOOL_ARG")"
+        TOOL="$(tool_from_install "$candidate" || true)"
+        [[ -n "$TOOL" || ! -x "$candidate/lepton-x86_64-entry" ]] || TOOL="$candidate"
+    else
+        [[ "$TOOL_ARG" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "invalid tool ID: $TOOL_ARG"
+        for root in "${XDG_DATA_HOME:-$HOME/.local/share}/$TOOL_ARG" \
+                    "${XDG_DATA_HOME:-$HOME/.local/share}/Steam/compatibilitytools.d/$TOOL_ARG"; do
+            TOOL="$(tool_from_install "$root" || true)"
+            [[ -z "$TOOL" ]] || break
+        done
+    fi
+    [[ -n "$TOOL" ]] || fail "no Lepton install found for --tool $TOOL_ARG"
+else
+    self="$(realpath -e -- "${BASH_SOURCE[0]}")"
+    own="$(dirname -- "$(dirname -- "$self")")"          # .../compat_tool
+    if [[ -x "$own/lepton-x86_64-entry" && -d "$own/images/rootfs" ]]; then
+        TOOL="$own"
+    else
+        env_file="${XDG_CONFIG_HOME:-$HOME/.config}/lepton-x86_64/default.env"
+        [[ -r "$env_file" ]] || fail "no default Lepton install ($env_file missing); use --tool"
+        # Read data, never shell code.
+        install_dir="$(sed -n 's/^LEPTON_X86_INSTALL_DIR=//p' "$env_file" | tail -1)"
+        install_dir="${install_dir//\\ / }"
+        [[ -n "$install_dir" ]] || fail "$env_file names no LEPTON_X86_INSTALL_DIR"
+        TOOL="$(tool_from_install "$install_dir" || true)"
+        [[ -n "$TOOL" ]] || fail "default install is incomplete: $install_dir"
+    fi
+fi
+INSTALL_ROOT="$(dirname -- "$TOOL")"
+
+# --- Which game ---------------------------------------------------------------
+EXTRACTOR="$TOOL/liblepton/apk_extractor/bin/apk-info-extractor"
+[[ -x "$EXTRACTOR" ]] || fail "missing $EXTRACTOR in this Lepton install"
+TMP="$(mktemp -d)"
+trap 'rm -rf -- "$TMP"' EXIT
+apk_for_metadata="$GAME"
+if [[ "${GAME,,}" == *.apkm ]]; then
+    python3 -I - "$GAME" "$TMP/base.apk" <<'PY' || fail "cannot read base.apk from $GAME"
+import shutil, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as z, z.open("base.apk") as src, open(sys.argv[2], "wb") as dst:
+    shutil.copyfileobj(src, dst)
+PY
+    apk_for_metadata="$TMP/base.apk"
+fi
+PACKAGE="$("$EXTRACTOR" --print-app-id "$apk_for_metadata" 2>/dev/null || true)"
+[[ "$PACKAGE" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$ ]] ||
+    fail "cannot read a valid Android package name from $GAME (got '${PACKAGE}')"
+
+# A stable ID per package, made like Steam's non-Steam shortcut IDs (CRC32
+# with the top bit set) so it never collides with a store AppID. It names the
+# Android container (steamlaunch-ID) while the game runs.
+APP_ID="$(python3 -I -c 'import sys, zlib; print(zlib.crc32(("lepton-play:" + sys.argv[1]).encode()) | 0x80000000)' "$PACKAGE")"
+
+DATA="$DATA_ROOT/$PACKAGE"
+SHADERS="$CACHE_ROOT/$PACKAGE"
+
+if [[ "$DRY_RUN" == true ]]; then
+    printf 'Tool:        %s\n' "$INSTALL_ROOT"
+    printf 'Game:        %s\n' "$GAME"
+    printf 'Package:     %s\n' "$PACKAGE"
+    printf 'Data:        %s%s\n' "$DATA" "$([[ -d "$DATA" ]] && echo ' (exists)' || echo ' (new)')"
+    printf 'Shaders:     %s\n' "$SHADERS"
+    printf 'Container:   lepton-steamlaunch-%s\n' "$APP_ID"
+    exit 0
+fi
+
+# --- Folders --------------------------------------------------------------------
+# Android's overlays cannot use files carrying POSIX ACLs. A parent with a
+# default ACL (for example a home folder shared read-only with another user)
+# would hand one to every new file, so new folders made here drop the
+# inherited default ACL. Existing folders are never changed; they are refused.
+make_private_dir() {
+    local dir="$1" parent
+    if [[ ! -e "$dir" ]]; then
+        parent="$(dirname -- "$dir")"
+        [[ -d "$parent" ]] || make_private_dir "$parent"
+        mkdir -m 700 -- "$dir"
+        if command -v getfacl >/dev/null && getfacl -p -- "$dir" 2>/dev/null | grep -qE '^(default:|user:[^:]+:|group:[^:]+:)'; then
+            command -v setfacl >/dev/null || fail "$dir inherited an ACL and setfacl is missing (package acl)"
+            setfacl -b -k -- "$dir"
+        fi
+    fi
+    [[ -d "$dir" && ! -L "$dir" && -O "$dir" ]] || fail "not a folder you own: $dir"
+}
+has_default_acl() { command -v getfacl >/dev/null && getfacl -p -- "$1" 2>/dev/null | grep -q '^default:'; }
+
+make_private_dir "$DATA_ROOT"
+make_private_dir "$DATA"
+make_private_dir "$SHADERS"
+for dir in "$DATA" "$SHADERS"; do
+    ! has_default_acl "$dir" ||
+        fail "$dir has a default ACL, which Android cannot use. Remove it (setfacl -R -b '$dir') or choose another --data-root."
+done
+
+info "$PACKAGE with $(basename -- "$INSTALL_ROOT")"
+info "data: $DATA"
+
+# Steam's environment for a non-Steam shortcut, without Steam.
+unset STEAM_COMPAT_INSTALL_PATH STEAM_COMPAT_LIBRARY_PATHS
+export SteamAppId="$APP_ID"
+export STEAM_COMPAT_DATA_PATH="$DATA"
+export STEAM_COMPAT_SHADER_PATH="$SHADERS"
+export STEAM_FOSSILIZE_DUMP_PATH="$SHADERS/fozpipelinesv6/steamapp_pipeline_cache"
+rm -rf -- "$TMP"; trap - EXIT
+cd -- "$DATA"
+# Same argument shape as Steam (toolmanifest: "%verb% --" then the game).
+exec "$TOOL/lepton-x86_64-entry" waitforexitandrun -- "$GAME"

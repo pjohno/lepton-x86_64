@@ -44,6 +44,7 @@ LINKS = {
     "lepton-add-game-gui": "compat_tool/tools/lepton-add-game-gui",
     "lepton-in-terminal": "compat_tool/tools/lepton-in-terminal",
     "lepton-manage-installs": "compat_tool/tools/lepton-manage-installs",
+    "lepton-play": "compat_tool/tools/lepton-play",
     "lepton-run-apk": "tests/runtime/run-apk.sh",
 }
 DESKTOP_ENTRIES = ("lepton-x86_64-add-game.desktop", "lepton-x86_64-gpu-check.desktop",

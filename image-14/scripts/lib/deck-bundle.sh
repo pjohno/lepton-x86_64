@@ -306,6 +306,8 @@ install -m 755 "$repo/compat_tool/tools/lepton-add-game-gui" \
     "$tmp/payload/compat_tool/tools/lepton-add-game-gui"
 install -m 755 "$repo/compat_tool/tools/lepton-in-terminal" \
     "$tmp/payload/compat_tool/tools/lepton-in-terminal"
+install -m 755 "$repo/compat_tool/tools/lepton-play" \
+    "$tmp/payload/compat_tool/tools/lepton-play"
 install -m 755 "$repo/compat_tool/tools/lepton-manage-installs" \
     "$tmp/payload/compat_tool/tools/lepton-manage-installs"
 install -m 755 "$repo/compat_tool/tools/lepton-host-check" \

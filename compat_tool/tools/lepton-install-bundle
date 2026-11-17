@@ -641,7 +641,8 @@ ln -sfn -- "$DEST/tests/runtime/run-apk.sh" "$bin_dir/lepton-run-apk"
 ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game-gui" "$bin_dir/lepton-add-game-gui"
 ln -sfn -- "$DEST/compat_tool/tools/lepton-in-terminal" "$bin_dir/lepton-in-terminal"
 ln -sfn -- "$DEST/compat_tool/tools/lepton-manage-installs" "$bin_dir/lepton-manage-installs"
-pass "Commands: $bin_dir/lepton-add-game, $bin_dir/lepton-add-game-gui, $bin_dir/lepton-run-apk"
+ln -sfn -- "$DEST/compat_tool/tools/lepton-play" "$bin_dir/lepton-play"
+pass "Commands: $bin_dir/lepton-add-game, $bin_dir/lepton-add-game-gui, $bin_dir/lepton-run-apk, $bin_dir/lepton-play"
 
 # Menu (and desktop) entries: usable without a keyboard. They use the
 # ~/.local/bin links, so they always follow the default (latest) install.
