@@ -9,10 +9,12 @@ function props_file()
 # come either from gralloc BLOB allocations (Valve's upstream pool mask, needs
 # no host access) or from the host DMA-BUF system heap, which only some users
 # may open (root-only on SteamOS, the "video" group on Fedora).
-#   blob: images whose gbm_mesa allocator never maps buffers itself (patch
-#         0013); allocators without it crash on BLOB buffers on AMD, so the
-#         image is checked, overlay first. Software rendering uses
-#         gralloc.default, which handles BLOB buffers in every image.
+#   blob: AMD with an image whose gbm_mesa allocator never maps buffers
+#         itself (patch 0013); allocators without it crash on BLOB buffers
+#         on AMD, so the image is checked, overlay first. Not Intel yet:
+#         iris cannot map BLOB buffers through gbm_mesa (lock(BLOB) fails).
+#         Software rendering uses gralloc.default, which handles BLOB
+#         buffers in every image.
 #   heap: older images when the user can open the heap.
 #   off:  no media decoders.
 # LEPTON_CODEC2=false forces off; LEPTON_CODEC2=true forces blob (testing).
@@ -20,6 +22,7 @@ LEPTON_GBM_NO_MAP_MARKER='lepton-gbm-allocator-no-map-probe'
 function lepton_gralloc_blob_safe()
 {
     [[ "${LEPTON_FORCE_SOFTWARE:-}" == "true" ]] && return 0
+    [[ "$(lepton_vulkan_hal)" == radeon ]] || return 1
     local LIB=vendor/lib64/libgbm_mesa_wrapper.so FILE
     for FILE in "${LEPTON_DIR}/../images/rootfs_overlay/${LIB}" \
                 "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/${LIB}"; do
@@ -139,6 +142,8 @@ function setup_props()
             if [[ "$(uname -m)" == "x86_64" && "$(android_sdk_version)" -ge 34 ]]; then
                 if [[ "${LEPTON_CODEC2:-auto}" == false ]]; then
                     println "Android media decoders (Codec2): off (LEPTON_CODEC2=false); music and video apps will be silent"
+                elif [[ "$(lepton_vulkan_hal)" == intel ]]; then
+                    println "Android media decoders (Codec2): off: on Intel graphics they still need host heap access, and $(lepton_dma_heap_problem); music and video apps will be silent, games' own audio is unaffected"
                 else
                     println "Android media decoders (Codec2): off: this Android image needs host heap access for them, and $(lepton_dma_heap_problem); music and video apps will be silent, games' own audio is unaffected. Images with patch 0013 need no host access."
                 fi

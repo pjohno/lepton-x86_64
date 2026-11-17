@@ -82,6 +82,12 @@ assert_mode off 0 none
 LEPTON_DMA_HEAP_DEVICE=/dev/null assert_mode heap 4 none
 if grep -q 'media decoders' "$work/log"; then echo 'FAIL: decoders reported off with a usable heap'; exit 1; fi
 LEPTON_TEST_ROOTFS="$work/missing" LEPTON_DMA_HEAP_DEVICE=/dev/null assert_mode heap 4 none
+# Intel (iris) cannot map BLOB buffers yet: even a fixed image keeps the heap
+# path there, or reports decoders off. Software rendering on Intel is fine.
+LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-new" assert_mode off 0 none
+grep -q 'off: on Intel graphics they still need host heap access, and ' "$work/log" || { echo 'FAIL: Intel reason'; exit 1; }
+LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-new" LEPTON_DMA_HEAP_DEVICE=/dev/null assert_mode heap 4 none
+LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_FORCE_SOFTWARE=true assert_mode blob 4 0xfc0000
 # Software rendering uses gralloc.default, which handles BLOB in any image.
 LEPTON_FORCE_SOFTWARE=true assert_mode blob 4 0xfc0000
 # The overlay's wrapper is the one Android loads, so it decides first.
