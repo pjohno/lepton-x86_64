@@ -646,8 +646,10 @@ Android ION/system DMA heaps absent on this host. BLOB plus BUFFERQUEUE allocati
 (pool mask 786432) got past input allocation, then AVC output failed in
 C2AllocatorGralloc with `cstride=0` / `graphic view map failed 14`.
 
-These remain explicit experiments via `--codec2` / `LEPTON_CODEC2=true`; default
-media configuration is retained until the decode/render test passes. The two
+Update (November 2026): the input-allocation crash on AMD was the gbm_mesa
+allocator mapping every new CPU-usage buffer (fixed by patch 0013). Images with
+it use Valve's gralloc pool mask by default and decode audio without host heap
+access; AVC output remains open. The two
 failed probes are retained under the Google v2 stage as
 `.jni-smoke-work.boSlnDmN` and `.jni-smoke-work.KtTNhnr1`. They expose a concrete
 media-buffer problem relevant to the reported YouTube failure, but do not prove

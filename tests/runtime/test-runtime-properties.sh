@@ -27,7 +27,18 @@ export LEPTON_FORCE_SOFTWARE=false
 probe_sdk=34
 unset LEPTON_CODEC2 LEPTON_FORWARD_WEB_INTENTS
 export LEPTON_DMA_HEAP_DEVICE="$work/no-dma-heap"   # host without a usable DMA heap
-setup_props
+# Fake images: an allocator wrapper without and with patch 0013's marker.
+mkdir -p "$work/rootfs-old/vendor/lib64" "$work/rootfs-new/vendor/lib64"
+printf 'ELF...gbm_mesa_alloc...' > "$work/rootfs-old/vendor/lib64/libgbm_mesa_wrapper.so"
+printf 'ELF...\0lepton-gbm-allocator-no-map-probe\0...' > "$work/rootfs-new/vendor/lib64/libgbm_mesa_wrapper.so"
+export LEPTON_TEST_ROOTFS="$work/rootfs-old"
+setup_props > "$work/log"
+# The silent-media cause is logged, naming the heap; properties are unchanged.
+grep -qx "Android media decoders (Codec2): off: this Android image needs host heap access for them, and $work/no-dma-heap does not exist on this host; music and video apps will be silent, games' own audio is unaffected. Images with patch 0013 need no host access." "$work/log"
+touch "$work/plain-file"
+LEPTON_DMA_HEAP_DEVICE="$work/plain-file" setup_props > "$work/log"
+grep -q "heap access for them, and $work/plain-file is not a character device;" "$work/log"
+grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
 grep -qx 'persist.lepton.forward_web_intents=false' "$work/lepton.prop"
 grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
 ! grep -q 'c2-poolmask' "$work/lepton.prop"
@@ -47,27 +58,59 @@ grep -qx 'ro.hardware.vulkan=pastel' "$work/lepton.prop"
 LEPTON_SYSFS_DRM="$work/drm" setup_props
 # Valve upstream: shared-library replacements by GNU build ID.
 grep -qx 'ro.lepton.soreplace.25f52dbf904d24e2=/data/steamvr/runtime/bin/androidarm64/libopenxr_loader.so' "$work/lepton.prop"
-LEPTON_CODEC2=true LEPTON_FORWARD_WEB_INTENTS=true setup_props
+LEPTON_FORWARD_WEB_INTENTS=true setup_props > /dev/null
 grep -qx 'persist.lepton.forward_web_intents=true' "$work/lepton.prop"
-grep -qx 'debug.stagefright.ccodec=4' "$work/lepton.prop"
-grep -qx 'debug.stagefright.c2-poolmask=786432' "$work/lepton.prop"
+
+# Media decoders (Codec2). Images with patch 0013 use Valve's gralloc pool
+# mask and need no host device, whatever the user's groups.
+assert_mode() {  # expected-mode expected-ccodec expected-mask|none
+    [[ "$(lepton_codec2_mode)" == "$1" ]] || { echo "FAIL: mode $(lepton_codec2_mode), expected $1"; exit 1; }
+    setup_props > "$work/log"
+    grep -qx "debug.stagefright.ccodec=$2" "$work/lepton.prop" || { echo "FAIL: ccodec for $1"; exit 1; }
+    if [[ "$3" == none ]]; then
+        if grep -q 'c2-poolmask' "$work/lepton.prop"; then echo "FAIL: pool mask set for $1"; exit 1; fi
+    else
+        grep -qx "debug.stagefright.c2-poolmask=$3" "$work/lepton.prop" || { echo "FAIL: mask for $1"; exit 1; }
+    fi
+}
+LEPTON_TEST_ROOTFS="$work/rootfs-new" assert_mode blob 4 0xfc0000
+if grep -q 'media decoders' "$work/log"; then echo 'FAIL: decoders reported off on a fixed image'; exit 1; fi
+LEPTON_TEST_ROOTFS="$work/rootfs-new" LEPTON_DMA_HEAP_DEVICE=/dev/null assert_mode blob 4 0xfc0000
+# Older images: the heap if usable (no BLOB mask: it crashes their AMD
+# allocator at boot), otherwise off with the reason.
+assert_mode off 0 none
+LEPTON_DMA_HEAP_DEVICE=/dev/null assert_mode heap 4 none
+if grep -q 'media decoders' "$work/log"; then echo 'FAIL: decoders reported off with a usable heap'; exit 1; fi
+LEPTON_TEST_ROOTFS="$work/missing" LEPTON_DMA_HEAP_DEVICE=/dev/null assert_mode heap 4 none
+# Intel (iris) cannot map BLOB buffers yet: even a fixed image keeps the heap
+# path there, or reports decoders off. Software rendering on Intel is fine.
+LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-new" assert_mode off 0 none
+grep -q 'off: on Intel graphics they still need host heap access, and ' "$work/log" || { echo 'FAIL: Intel reason'; exit 1; }
+LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-new" LEPTON_DMA_HEAP_DEVICE=/dev/null assert_mode heap 4 none
+LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_FORCE_SOFTWARE=true assert_mode blob 4 0xfc0000
+# Software rendering uses gralloc.default, which handles BLOB in any image.
+LEPTON_FORCE_SOFTWARE=true assert_mode blob 4 0xfc0000
+# The overlay's wrapper is the one Android loads, so it decides first.
+mkdir -p "$work/tool/liblepton" "$work/tool/images/rootfs_overlay/vendor/lib64"
+cp "$work/rootfs-old/vendor/lib64/libgbm_mesa_wrapper.so" "$work/tool/images/rootfs_overlay/vendor/lib64/"
+if LEPTON_DIR="$work/tool/liblepton" LEPTON_TEST_ROOTFS="$work/rootfs-new" lepton_gralloc_blob_safe; then
+    echo 'FAIL: unfixed overlay wrapper ignored'; exit 1
+fi
+cp "$work/rootfs-new/vendor/lib64/libgbm_mesa_wrapper.so" "$work/tool/images/rootfs_overlay/vendor/lib64/"
+LEPTON_DIR="$work/tool/liblepton" LEPTON_TEST_ROOTFS="$work/rootfs-old" lepton_gralloc_blob_safe
+# Explicit choices: false always off; true forces blob (testing).
+LEPTON_TEST_ROOTFS="$work/rootfs-new" LEPTON_CODEC2=false assert_mode off 0 none
+grep -qx 'Android media decoders (Codec2): off (LEPTON_CODEC2=false); music and video apps will be silent' "$work/log"
+LEPTON_CODEC2=true assert_mode blob 4 0xfc0000
+# Android 11 has its own decoders: Codec2 off, nothing to report.
 probe_sdk=30
-LEPTON_CODEC2=true setup_props
-grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
-# A usable DMA heap (a read/write character device) enables Codec2 for audio,
-# without the boot-breaking BLOB pool mask; LEPTON_CODEC2=false opts out.
+LEPTON_TEST_ROOTFS="$work/rootfs-new" assert_mode off 0 none
+if grep -q 'media decoders' "$work/log"; then echo 'FAIL: decoders reported off on Android 11'; exit 1; fi
 probe_sdk=34
-LEPTON_DMA_HEAP_DEVICE=/dev/null setup_props
-grep -qx 'debug.stagefright.ccodec=4' "$work/lepton.prop"
-! grep -q 'c2-poolmask' "$work/lepton.prop"
-LEPTON_DMA_HEAP_DEVICE=/dev/null LEPTON_CODEC2=false setup_props
-grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
-LEPTON_DMA_HEAP_DEVICE=/dev/null probe_sdk=30 setup_props
-grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
-# The heap is passed into the container under the same conditions.
-grep -q 'if lepton_dma_heap_usable && \[\[ "${LEPTON_CODEC2:-auto}" != false \]\]; then' "$ROOT/compat_tool/liblepton/mounting.sh"
+# The heap is passed into the container only in heap mode.
+grep -q 'if \[\[ "$(lepton_codec2_mode)" == heap \]\]; then' "$ROOT/compat_tool/liblepton/mounting.sh"
 grep -q 'podman_mount_entry "$(lepton_dma_heap_device)" "/dev/dma_heap/system" rw' "$ROOT/compat_tool/liblepton/mounting.sh"
-printf 'PASS: Android URL routing default, explicit Steam opt-in, codec opt-in, DMA-heap Codec2 audio and legacy SDK properties, so replacements\n'
+printf 'PASS: Android URL routing default, explicit Steam opt-in, Codec2 modes (gralloc on fixed images, heap or off on older ones, overlay first, software, opt-out/opt-in, Android 11), so replacements\n'
 
 # Local window policy crosses Podman via the generated property file, not env.
 LEPTON_LOCAL_DISPLAY_ACTIVE=1 setup_props

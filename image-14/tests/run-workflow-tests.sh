@@ -50,6 +50,7 @@ bash "$repo/tests/runtime/test-network-sysctls.sh"
 bash "$repo/tests/runtime/test-runtime-properties.sh"
 python3 -B "$repo/tests/runtime/test-local-display.py"
 python3 -B "$repo/tests/runtime/test-hwc-window-close.py"
+python3 -B "$repo/tests/runtime/test-minigbm-no-allocator-map.py"
 python3 -B "$repo/tests/runtime/test-profile-lifecycle.py"
 for script in "$repo/image-14/do_build_x86_64.sh" \
               "$repo/image-14/scripts/"*.sh \
