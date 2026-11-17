@@ -13,6 +13,22 @@ function lepton_dma_heap_usable()
     local DEVICE="$(lepton_dma_heap_device)"
     [[ "$(uname -m)" == "x86_64" && -c "${DEVICE}" && -r "${DEVICE}" && -w "${DEVICE}" ]]
 }
+# Diagnostics only: why the heap is unusable. Without it Codec2 stays off and
+# Android 14 x86_64 has no media decoders, so apps that play music or video
+# (MediaPlayer, ExoPlayer, WebView) are silent, while games that mix their own
+# PCM are not. Says which, so a silent media app can be traced to the host.
+function lepton_dma_heap_problem()
+{
+    local DEVICE
+    DEVICE="$(lepton_dma_heap_device)"
+    if [[ ! -e "${DEVICE}" ]]; then
+        print "${DEVICE} does not exist on this host"
+    elif [[ ! -c "${DEVICE}" ]]; then
+        print "${DEVICE} is not a character device"
+    elif [[ ! -r "${DEVICE}" || ! -w "${DEVICE}" ]]; then
+        print "${DEVICE} is not readable and writable by $(id -un) ($(stat -c '%U:%G %A' -- "${DEVICE}" 2>/dev/null || print 'owner unknown'))"
+    fi
+}
 
 function setup_props()
 {
@@ -80,6 +96,13 @@ function setup_props()
         props_echo "debug.stagefright.ccodec=4"
     else
         props_echo "debug.stagefright.ccodec=0"
+        if [[ "$(uname -m)" == "x86_64" && "$(android_sdk_version)" -ge 34 ]]; then
+            if [[ "${LEPTON_CODEC2:-auto}" == false ]]; then
+                println "Android media decoders (Codec2): off (LEPTON_CODEC2=false); music and video apps will be silent"
+            else
+                println "Android media decoders (Codec2): off: $(lepton_dma_heap_problem); music and video apps will be silent, games' own audio is unaffected"
+            fi
+        fi
     fi
     props_echo "ro.opengles.version=196609"
     props_echo "ro.hardware.camera=v4l2"

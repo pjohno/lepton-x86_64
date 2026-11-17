@@ -176,3 +176,13 @@ BUFFERQUEUE allocation (`LEPTON_CODEC2=true`). Default codec behavior is retaine
 until decode/rendering pass. The current AMD probe fails on an invalid YCbCr
 layout from gralloc, after fixing missing ION/system-heap input allocation. That
 remaining graphics-buffer problem is separate from VIEW-intent interception.
+
+Without `--codec2` the probe shows where silent media audio stops (logcat tag
+`LeptonMediaSmoke`; the launcher log also says when media decoders are off):
+
+| Marker | Meaning |
+| --- | --- |
+| `LEPTON_MEDIA_DECODERS count=0` | Codec2 is off (`debug.stagefright.ccodec=0`), usually because `/dev/dma_heap/system` is not readable and writable by the desktop user |
+| `LEPTON_MEDIA_PCM_TRACK_PASS ... played_frames>0` | Android's audio output reaches the host; no codec involved (games' own PCM) |
+| `LEPTON_MEDIA_WAV_PLAYBACK_FAIL` | Even PCM WAV through MediaPlayer fails: it needs Codec2's raw decoder |
+| `CodecException` / `NO_MEMORY` with `DMABUFHEAPS: Unable to allocate` | Codec2 is on but cannot allocate from the DMA-BUF heap |

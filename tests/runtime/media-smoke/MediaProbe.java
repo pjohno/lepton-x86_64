@@ -2,6 +2,9 @@ package org.lepton.smoke;
 
 import android.app.Activity;
 import android.content.res.AssetFileDescriptor;
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
+import android.media.AudioTrack;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
@@ -35,6 +38,11 @@ public final class MediaProbe {
                 }
                 Log.i(TAG, "LEPTON_MEDIA_DECODERS count=" + count);
                 reportDrm();
+                // Separate Android's audio output from decoding: raw PCM through
+                // AudioTrack needs no codec (the path games' own mixers use);
+                // a PCM WAV through MediaPlayer still needs Codec2's raw decoder.
+                pcmTrack();
+                playAsset(activity, "probe.wav", "WAV");
                 // Audio first: games' SoundPool/MediaPlayer/WebView audio needs
                 // these decoders even when video output is unavailable.
                 int audio = decode(activity, "probe.ogg", "audio/vorbis");
@@ -103,6 +111,58 @@ public final class MediaProbe {
             }
         } catch (Throwable error) {
             Log.w(TAG, "LEPTON_MEDIA_DRM widevine=error " + error);
+        }
+    }
+
+    // Codec-free output: a 1 s tone written as PCM to a media-usage AudioTrack
+    // (what a music player's decoded output becomes). played_frames=0 means
+    // Android's output to the host is not consuming audio. Never fails the probe.
+    private static void pcmTrack() {
+        AudioTrack track = null;
+        try {
+            final int rate = 44100;
+            short[] tone = new short[rate];
+            for (int i = 0; i < tone.length; i++)
+                tone[i] = (short) (Math.sin(2 * Math.PI * 440 * i / rate) * 8000);
+            track = new AudioTrack.Builder()
+                .setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                .setAudioFormat(new AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(rate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                .setTransferMode(AudioTrack.MODE_STREAM).build();
+            track.play();
+            // Non-blocking: a stalled output path must not stall the probe.
+            int written = track.write(tone, 0, tone.length, AudioTrack.WRITE_NON_BLOCKING);
+            android.os.SystemClock.sleep(1500);
+            int played = track.getPlaybackHeadPosition();
+            Log.i(TAG, (written > 0 && played > 0 ? "LEPTON_MEDIA_PCM_TRACK_PASS" : "LEPTON_MEDIA_PCM_TRACK_FAIL") +
+                " written=" + written + " played_frames=" + played + " rate=" + track.getSampleRate());
+        } catch (Throwable error) {
+            Log.e(TAG, "LEPTON_MEDIA_PCM_TRACK_FAIL", error);
+        } finally {
+            if (track != null) track.release();
+        }
+    }
+
+    // MediaPlayer on an asset (extractor + decoder + AudioTrack); diagnostic only.
+    private static void playAsset(Activity activity, String asset, String label) {
+        try {
+            AssetFileDescriptor fd = activity.getAssets().openFd(asset);
+            MediaPlayer player = new MediaPlayer();
+            player.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
+            // Decoder failures (e.g. NO_MEMORY) arrive after start().
+            player.setOnErrorListener((mp, what, extra) -> {
+                Log.e(TAG, "LEPTON_MEDIA_" + label + "_PLAYBACK_FAIL what=" + what + " extra=" + extra);
+                return true;
+            });
+            player.setOnCompletionListener(mp -> Log.i(TAG, "LEPTON_MEDIA_" + label + "_PLAYBACK_DONE"));
+            player.prepare();
+            player.start();
+            Log.i(TAG, "LEPTON_MEDIA_" + label + "_PLAYBACK_STARTED duration_ms=" + player.getDuration());
+        } catch (Throwable error) {
+            Log.e(TAG, "LEPTON_MEDIA_" + label + "_PLAYBACK_FAIL " + error);
         }
     }
 

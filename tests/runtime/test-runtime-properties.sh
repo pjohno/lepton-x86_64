@@ -27,7 +27,13 @@ export LEPTON_FORCE_SOFTWARE=false
 probe_sdk=34
 unset LEPTON_CODEC2 LEPTON_FORWARD_WEB_INTENTS
 export LEPTON_DMA_HEAP_DEVICE="$work/no-dma-heap"   # host without a usable DMA heap
-setup_props
+setup_props > "$work/log"
+# The silent-media cause is logged, naming the heap; properties are unchanged.
+grep -qx "Android media decoders (Codec2): off: $work/no-dma-heap does not exist on this host; music and video apps will be silent, games' own audio is unaffected" "$work/log"
+touch "$work/plain-file"
+LEPTON_DMA_HEAP_DEVICE="$work/plain-file" setup_props > "$work/log"
+grep -q "off: $work/plain-file is not a character device;" "$work/log"
+grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
 grep -qx 'persist.lepton.forward_web_intents=false' "$work/lepton.prop"
 grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
 ! grep -q 'c2-poolmask' "$work/lepton.prop"
@@ -57,13 +63,17 @@ grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
 # A usable DMA heap (a read/write character device) enables Codec2 for audio,
 # without the boot-breaking BLOB pool mask; LEPTON_CODEC2=false opts out.
 probe_sdk=34
-LEPTON_DMA_HEAP_DEVICE=/dev/null setup_props
+LEPTON_DMA_HEAP_DEVICE=/dev/null setup_props > "$work/log"
 grep -qx 'debug.stagefright.ccodec=4' "$work/lepton.prop"
+if grep -q 'media decoders' "$work/log"; then echo 'FAIL: decoders reported off with a usable heap'; exit 1; fi
 ! grep -q 'c2-poolmask' "$work/lepton.prop"
-LEPTON_DMA_HEAP_DEVICE=/dev/null LEPTON_CODEC2=false setup_props
+LEPTON_DMA_HEAP_DEVICE=/dev/null LEPTON_CODEC2=false setup_props > "$work/log"
 grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
-LEPTON_DMA_HEAP_DEVICE=/dev/null probe_sdk=30 setup_props
+grep -qx 'Android media decoders (Codec2): off (LEPTON_CODEC2=false); music and video apps will be silent' "$work/log"
+LEPTON_DMA_HEAP_DEVICE=/dev/null probe_sdk=30 setup_props > "$work/log"
 grep -qx 'debug.stagefright.ccodec=0' "$work/lepton.prop"
+# Android 11 has its own decoders: nothing to report.
+if grep -q 'media decoders' "$work/log"; then echo 'FAIL: decoders reported off on Android 11'; exit 1; fi
 # The heap is passed into the container under the same conditions.
 grep -q 'if lepton_dma_heap_usable && \[\[ "${LEPTON_CODEC2:-auto}" != false \]\]; then' "$ROOT/compat_tool/liblepton/mounting.sh"
 grep -q 'podman_mount_entry "$(lepton_dma_heap_device)" "/dev/dma_heap/system" rw' "$ROOT/compat_tool/liblepton/mounting.sh"
