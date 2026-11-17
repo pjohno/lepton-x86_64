@@ -15,8 +15,10 @@ interpreter (light-translate-or-interpret mode), which is slower and stutters.
                                  remain, which only the shim can emulate
   arm64_hints.py scan LIB_DIR    report counts without changing anything
 
-Code generated at run time, or libraries loaded straight from an APK, cannot be
-seen here; Lepton falls back to the light mode if such a game exits early.
+Code generated at run time cannot be seen here; Lepton falls back to the light
+mode if such a game exits early. An ARM64 game with no extracted libraries
+(they are loaded straight from the APK) cannot be checked and keeps the light
+mode.
 """
 import os
 import struct
@@ -78,15 +80,24 @@ def main():
         return 2
     patch, lib_dir = sys.argv[1] == "patch", sys.argv[2]
     remaining_reads = False
+    scanned = 0
     for name in sorted(os.listdir(lib_dir)):
         path = os.path.join(lib_dir, name)
         if not name.endswith(".so") or not os.path.isfile(path) or os.path.islink(path):
             continue
+        scanned += 1
         hints, reads = process(path, patch)
         if hints or reads:
             action = "patched" if patch and hints else "found"
             print(f"{name}: {action} hints {hints or 'none'}; shim-only reads {reads or 'none'}", file=sys.stderr)
         remaining_reads = remaining_reads or bool(reads)
+    if not scanned:
+        # Nothing to check: the game loads its libraries straight from the APK
+        # (extractNativeLibs=false), so unsupported reads cannot be ruled out.
+        # AAAAXY's Go runtime reads CNTFRQ_EL0 this way and crashes in tiered.
+        print("no extracted libraries to check; keeping the light mode", file=sys.stderr)
+        print("light-translate-or-interpret")
+        return 0
     print("light-translate-or-interpret" if remaining_reads else "tiered")
     return 0
 

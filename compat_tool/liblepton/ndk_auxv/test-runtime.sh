@@ -103,6 +103,8 @@ ndk_prepare_installed_app > /dev/null
 [[ "$(cat "$work/baked/lepton-ndk-mode")" == light-translate-or-interpret ]]
 python3 "$HERE/arm64_hints.py" scan "$lib" 2> "$work/scan.log" | grep -qx light-translate-or-interpret
 grep -q "libgo.so: found hints none; shim-only reads {'CNTVCT_EL0': 1}" "$work/scan.log"
+rm -f "$lib"/*.so; ndk_prepare_installed_app > /dev/null # libraries loaded from the APK (AAAAXY):
+[[ "$(cat "$work/baked/lepton-ndk-mode")" == light-translate-or-interpret ]]  # cannot be checked, never tiered
 rm -r "$lib"; ndk_prepare_installed_app > /dev/null      # x86_64 game: no choice recorded
 [[ ! -e "$work/baked/lepton-ndk-mode" ]]
 mkdir -p "$lib"; cp "$work/unity-before.so" "$lib/libunity.so"
