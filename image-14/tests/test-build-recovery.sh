@@ -17,6 +17,7 @@ mkdir -p "$fake/image-14/scripts/lib" "$fake/image-14/scripts/internal"
 cp "$repo/image-14/scripts/build-images-x86_64.sh" "$fake/image-14/scripts/"
 cp "$repo/image-14/scripts/lib/"{workspace.sh,packaging-fuse.sh,package-images.sh} "$fake/image-14/scripts/lib/"
 cp "$repo/image-14/scripts/internal/"{check-build-outputs.py,check-active-compilation.py} "$fake/image-14/scripts/internal/"
+printf '#!/bin/bash\n# Fixture: Mesa host tools need the real builder.\nexit 0\n' > "$fake/image-14/scripts/internal/bootstrap-mesa-clc.sh"
 ws="$work/ws"; aosp="$ws/aosp"; state="$aosp/.lepton-clean14-state"; out="$aosp/out"
 cat > "$fake/.build-env" <<ENV
 LEPTON_OUTPUT_DIR=$ws

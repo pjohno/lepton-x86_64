@@ -124,7 +124,8 @@ if [[ -z "$tool_id" ]]; then
     fi
 fi
 [[ "$tool_id" =~ ^[A-Za-z0-9_]{1,96}$ ]] || { echo 'ERROR: invalid tool ID' >&2; exit 2; }
-[[ -n "$tool_name" ]] || tool_name="Lepton x86_64 (community) - $bundle_id"
+# Empty: lepton_bundle_lib.py names it "lepton <bundle ID> x86_64 (community)",
+# with any GApps/NDK/Widevine after the version.
 [[ "$tool_name" != *$'\n'* && "$tool_name" != *$'\r'* ]] || { echo 'ERROR: invalid tool name' >&2; exit 2; }
 install_name="$tool_id"
 [[ "$tool_id" != lepton_x86_64_dev ]] || install_name=lepton-x86_64-dev
@@ -305,6 +306,8 @@ install -m 755 "$repo/compat_tool/tools/lepton-add-game-gui" \
     "$tmp/payload/compat_tool/tools/lepton-add-game-gui"
 install -m 755 "$repo/compat_tool/tools/lepton-in-terminal" \
     "$tmp/payload/compat_tool/tools/lepton-in-terminal"
+install -m 755 "$repo/compat_tool/tools/lepton-play" \
+    "$tmp/payload/compat_tool/tools/lepton-play"
 install -m 755 "$repo/compat_tool/tools/lepton-manage-installs" \
     "$tmp/payload/compat_tool/tools/lepton-manage-installs"
 install -m 755 "$repo/compat_tool/tools/lepton-host-check" \
@@ -328,6 +331,7 @@ mkdir -p "$tmp/payload/tools/customize/internal" "$tmp/payload/tools/customize/l
 for helper in sysbake-isolated-x86_64.sh inject-ndk-translation.sh extract-ndk-translation.sh; do
     install -m 755 "$repo/image-14/scripts/internal/$helper" "$tmp/payload/tools/customize/internal/$helper"
 done
+install -m 644 "$repo/image-14/scripts/internal/private_storage.py" "$tmp/payload/tools/customize/internal/private_storage.py"
 for helper in google-services.sh workspace.sh; do
     install -m 644 "$repo/image-14/scripts/lib/$helper" "$tmp/payload/tools/customize/lib/$helper"
 done

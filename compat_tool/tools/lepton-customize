@@ -33,6 +33,7 @@ REQUIRED = ['BUNDLE.json', 'tools/BUNDLE-PROVENANCE.txt', 'tools/IMAGE-PROVENANC
             'compat_tool/lepton', 'compat_tool/lepton-x86_64-entry', 'compat_tool/toolmanifest.vdf',
             'compat_tool/tools/lepton-customize', 'compat_tool/release-keys/allowed_signers',
             'tools/customize/internal/sysbake-isolated-x86_64.sh',
+            'tools/customize/internal/private_storage.py',
             'tools/customize/internal/inject-ndk-translation.sh',
             'tools/customize/internal/extract-ndk-translation.sh',
             'tools/customize/lib/google-services.sh', 'tools/customize/lib/workspace.sh',

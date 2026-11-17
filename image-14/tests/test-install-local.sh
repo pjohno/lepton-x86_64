@@ -95,7 +95,7 @@ local_install --execute --replace --adb-zip "$FAKE_ADB_ZIP" || { cat "$work/out"
 grep -qx local-desktop "$dest/compat_tool/install-profile"
 # An ordinary bundle replacement also preserves this installation's profile.
 env -u DISPLAY -u WAYLAND_DISPLAY HOME="$home" PATH="$work/bin:$PATH" \
-    LEPTON_SKIP_HOST_CHECK=1 LEPTON_NO_DIALOGS=1 \
+    LEPTON_SKIP_HOST_CHECK=1 LEPTON_NO_DIALOGS=1 LEPTON_SYSFS_DRM="$work/drm" \
     bash "$installer" --replace --adb-zip "$FAKE_ADB_ZIP" > "$work/out" 2>&1 || { cat "$work/out"; fail 'ordinary replacement failed'; }
 grep -qx local-desktop "$dest/compat_tool/install-profile"
 # Nothing to install from.

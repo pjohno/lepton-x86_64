@@ -513,6 +513,19 @@ def metadata_components(metadata):
 
 
 # ---------------------------------------------------------------- release metadata
+COMPONENT_LABELS = (('gapps', 'GApps'), ('ndk', 'NDK'), ('widevine', 'Widevine'))
+
+
+def default_display_name(bundle_id, components, kind='community'):
+    """Steam's name for a tool, version first so it shows in narrow menus:
+    "lepton v0.2.0-alpha x86_64 (community)", or with optional components
+    "lepton v0.2.0-alpha x86_64 (community, GApps + NDK)". lepton-install-bundle
+    applies the same rule to bundles packaged with the older names."""
+    extras = [label for key, label in COMPONENT_LABELS if components.get(key)]
+    detail = kind + (', ' + ' + '.join(extras) if extras else '')
+    return f'lepton {bundle_id} x86_64 ({detail})'
+
+
 def bundle_metadata(bundle_id, tool_id, display_name, install_directory, components, **extra):
     data = dict(format_version=2, bundle_id=bundle_id, tool_id=tool_id, display_name=display_name,
                 install_directory=install_directory)
@@ -537,7 +550,10 @@ same official ZIP.
 
 The installer verifies the checksum, extracts to ~/.local/share/{directory},
 registers the Steam compatibility tool "{name}", and writes
-~/.config/lepton-x86_64/{tool}.env. It never overwrites an existing install
+~/.config/lepton-x86_64/{tool}.env. With --steam-compat it installs instead
+into Steam's own folder, ~/.steam/root/compatibilitytools.d/{directory}, as
+one self-contained compatibility tool (like GE-Proton); updates keep the
+folder an install already uses. It never overwrites an existing install
 unless you choose to: from the desktop icon it asks "new tool or replace?" and
 then offers to remove older installs; in a terminal use --into TOOL_ID,
 --replace or --remove TOOL_ID. "Lepton: Remove installs" cleans up later.
@@ -570,6 +586,8 @@ def write_metadata(payload, bundle, tool, name, directory, archive, installer):
     """Official packager: flags come from the payload rootfs."""
     payload = Path(payload)
     components = stage_components(payload / ROOTFS)
+    # An empty name means the default (an explicit --tool-name is kept).
+    name = name or default_display_name(bundle, components)
     (payload / 'BUNDLE.json').write_text(bundle_metadata(bundle, tool, name, directory, components))
     (payload / 'STEAM-DECK-INSTALL.txt').write_text(install_text(name, bundle, installer, directory, tool))
     return components

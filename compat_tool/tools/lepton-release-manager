@@ -36,7 +36,7 @@ import urllib.request
 
 # Raise when this file changes, so installers only ever replace the installed
 # copy (~/.local/share/lepton-release-manager) with the same or a newer one.
-MANAGER_VERSION = 2
+MANAGER_VERSION = 3
 
 REPO = "pjohno/lepton-x86_64"
 API = "https://api.github.com/repos/%s/releases?per_page=100" % REPO
@@ -276,19 +276,35 @@ def manage_installs():
     return None
 
 
+def steam_folder():
+    """The Steam directory lepton-manage-installs resolves, or None."""
+    manage = manage_installs()
+    if manage is None:
+        return None
+    result = subprocess.run([sys.executable, str(manage), "--steam-root"],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return Path(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip() else None
+
+
 def installed_tools():
     """Installed Lepton tools with their bundle version and kind."""
     manage = manage_installs()
     if manage is None:
         return []
     result = subprocess.run([sys.executable, str(manage), "--list", "--json"],
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
-        return []
+        # E.g. two different Steam folders: say why, rather than "no installs".
+        message = result.stderr.strip()
+        raise ReleaseError("Could not list the Lepton installs: " +
+                           (message[len("ERROR: "):] if message.startswith("ERROR: ") else message or "unknown error"))
     tools = []
     for entry in json.loads(result.stdout or "[]"):
         if entry.get("kind") != "install":
             continue
+        # Older lepton-manage-installs copies only knew Lepton's own folder.
+        entry.setdefault("layout", "legacy")
+        entry.setdefault("conflict", False)
         try:
             meta = json.loads((Path(entry["dir"]) / "BUNDLE.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -307,12 +323,36 @@ def component_kind(meta):
     return " + ".join(names) or "base"
 
 
+LAYOUT_LABELS = {"legacy": "in Lepton's folder", "steam-compat": "in Steam's compatibility-tool folder"}
+
+
 def describe_tool(tool):
     parts = [tool["name"], "version " + (tool["bundle"] or "unknown")]
     if tool["variant"] != "base":
         parts.append(tool["variant"])
     parts.append("%d Steam shortcut(s)" % tool.get("shortcuts", 0))
+    parts.append(LAYOUT_LABELS.get(tool.get("layout", "legacy"), tool.get("layout", "legacy")))
+    if tool.get("conflict"):
+        parts.append("DUPLICATE TOOL ID")
     return " - ".join(parts)
+
+
+def supports_steam_compat(installer):
+    """True if this release's installer knows --steam-compat (newer than v0.2)."""
+    try:
+        return "--steam-compat)" in Path(installer).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def choose_layout(ui, tag):
+    """Where a new tool goes. Returns "legacy", "steam-compat" or None (cancel)."""
+    return ui.choose(
+        "Where should %s be installed?" % tag,
+        [("legacy", "Lepton's folder (~/.local/share), registered with Steam by a small file "
+                    "(how earlier versions installed)"),
+         ("steam-compat", "Steam's compatibility-tool folder (~/.steam/root/compatibilitytools.d), "
+                          "one self-contained folder like GE-Proton")])
 
 
 def repair_target(tool, releases):
@@ -499,23 +539,52 @@ TRUST_WARNING = (
     "The installer runs as your user (not as root)." % REPO)
 
 
-def install(release, target, ui, transport=None, directory=None, keys="auto", tools=None):
-    """target: None for a new tool, else the tool ID to replace (kept)."""
+def install(release, target, ui, transport=None, directory=None, keys="auto", tools=None, layout=None):
+    """target: None for a new tool, else the tool ID to replace (kept, with its
+    layout). layout: for a new tool, "legacy" or "steam-compat" (None: ask
+    when the release's installer supports both)."""
     tools = installed_tools() if tools is None else tools
     if target is None and any(t["id"] == packaged_tool_id(release.tag) for t in tools):
         raise ReleaseError("An install with tool ID %s already exists. Choose \"Replace\" or "
                            "\"Repair\" for it instead." % packaged_tool_id(release.tag))
+    current = next((t for t in tools if t["id"] == target), None) if target else None
+    if current is not None and current.get("conflict"):
+        raise ReleaseError("Tool ID %s is used by more than one install, so Steam cannot tell them apart. "
+                           "Remove the unwanted one with \"Lepton: Remove installs\" first." % target)
     verified = download_release(release, ui, transport, directory, keys)
+    steam_capable = supports_steam_compat(verified.installer)
+    if current is not None and current.get("layout") == "steam-compat" and not steam_capable:
+        raise ReleaseError("%s is installed in Steam's compatibility-tool folder, but the installer of %s "
+                           "predates that layout and cannot update it. Choose a newer release."
+                           % (current["name"], release.tag))
+    if target is None:
+        if layout is None:
+            layout = choose_layout(ui, release.tag) if steam_capable else "legacy"
+            if layout is None:
+                raise Cancelled()
+        if layout == "steam-compat" and not steam_capable:
+            raise ReleaseError("The installer of %s cannot install into Steam's compatibility-tool folder; "
+                               "choose Lepton's folder or a newer release." % release.tag)
     archive_size = verified.archive.stat().st_size
-    data = next((p for p in (DATA, *DATA.parents) if p.is_dir()), HOME)
+    # Free space where the install goes: beside the replaced copy, in Steam's
+    # folder, or in Lepton's folder.
+    place = DATA
+    if current is not None:
+        place = Path(current["dir"]).parent
+    elif layout == "steam-compat":
+        place = steam_folder() or DATA
+    data = next((p for p in (place, *place.parents) if p.is_dir()), HOME)
     free = shutil.disk_usage(data).free
     if free < 3 * archive_size and not ui.question(
             "Installing needs roughly %.1f GiB free in %s, but only %.1f GiB is free. Try anyway?"
-            % (3 * archive_size / GIB, DATA, free / GIB), "Try anyway"):
+            % (3 * archive_size / GIB, place, free / GIB), "Try anyway"):
         raise Cancelled()
     if not verified.authenticated and not ui.question(TRUST_WARNING, "Install anyway"):
         raise Cancelled()
+    # Replacing keeps the install's tool ID and layout (the installer keeps it).
     args = ["--new"] if target is None else ["--into", target]
+    if target is None and layout == "steam-compat":
+        args.append("--steam-compat")
     ok = run_installer(verified, args, ui)
     if ok:
         keep = target or packaged_tool_id(release.tag)
@@ -666,7 +735,7 @@ def choose_target(ui, release, tools):
     """New tool, or which base install to replace. Returns ('new', None),
     ('replace', tool) or None (cancel)."""
     rows = [("new", "Install %s alongside the existing versions (a new Steam tool)" % release.tag)]
-    replaceable = [t for t in tools if t["variant"] == "base"]
+    replaceable = [t for t in tools if t["variant"] == "base" and not t.get("conflict")]
     for tool in replaceable:
         older = tool["version"] is not None and release.version < tool["version"]
         rows.append((tool["id"], "Replace %s%s (its Steam tool ID is kept)" % (

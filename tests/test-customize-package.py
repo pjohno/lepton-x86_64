@@ -286,6 +286,7 @@ class Harness:
                    FAKE_ADB_ZIP=str(self.adb_zip), FAKE_CURL_LOG=str(home.parent / 'curl.log'))
         home.mkdir()
         (home / 'Desktop').mkdir()
+        (home / '.local/share/Steam').mkdir(parents=True)  # a native Steam install
         result = subprocess.run(['bash', str(archive_dir / f'lepton-x86_64-{bundle_id}.install.sh'), '--allow-non-amd'],
                                 env=env, capture_output=True, text=True, timeout=300)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -371,6 +372,13 @@ class SysbakePackageTests(Harness, unittest.TestCase):
         before = tree(self.stage)
         output = self.run_tool(self.stage, 'sysbake', '--check', '--stage-dir', str(self.stage))
         self.assertIn('Isolated sysbake preflight passed', output)
+        self.assertEqual(tree(self.stage), before)
+
+    def test_intel_sysbake_option_reaches_staged_driver_validation(self):
+        before = tree(self.stage)
+        output = self.run_tool(self.stage, 'sysbake', '--check', '--stage-dir', str(self.stage),
+                               '--rendering', 'intel', ok=False)
+        self.assertIn('intel Vulkan rootfs missing (vulkan.intel.so)', output)
         self.assertEqual(tree(self.stage), before)
 
     def test_fresh_sysbake_packages_and_installs_with_existing_installer(self):

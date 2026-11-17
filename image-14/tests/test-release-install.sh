@@ -51,6 +51,8 @@ home="$work/home"
 mkdir -p "$home/Desktop" "$home/.local/share/Steam/userdata/1/config" \
     "$home/.local/share/Steam/steamapps/compatdata/2000000000/baked/data_overlay"
 echo 'level 7' > "$home/.local/share/Steam/steamapps/compatdata/2000000000/baked/data_overlay/save"
+# As native Steam sets it up: ~/.steam/root is a link to ~/.local/share/Steam.
+mkdir -p "$home/.steam" && ln -s ../.local/share/Steam "$home/.steam/root"
 env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u DISPLAY -u WAYLAND_DISPLAY HOME="$home" PATH="$work/bin:$PATH" \
     LEPTON_SKIP_HOST_CHECK=1 python3 -B - "$repo" "$out" "$home" <<'PY'
 import hashlib, importlib.machinery, importlib.util, json, os, subprocess, sys
@@ -116,8 +118,8 @@ def check(condition, message):
     if not condition:
         sys.exit("FAIL: " + message)
 
-# 1. Install v0.1.0-alpha as a new tool.
-ui = UI()
+# 1. Install v0.1.0-alpha as a new tool, in Lepton's folder (the first choice).
+ui = UI(answers=["legacy"])
 check(M.install(old, None, ui, T, keys=None) is True, "first install failed")
 tool_dir = share / "lepton_x86_64_v0_1_0_alpha"
 check(json.loads((tool_dir / "BUNDLE.json").read_text())["bundle_id"] == "v0.1.0-alpha", "installed version")
@@ -182,7 +184,35 @@ check(not (home / "Desktop/lepton-x86_64-add-game.desktop").exists(), "per-insta
 check(save.read_text() == "level 7\n", "compatdata changed by removal")
 out_ = subprocess.run([sys.executable, str(manager), "--version"], stdout=subprocess.PIPE, text=True, check=True)
 check(out_.stdout.strip() == str(M.MANAGER_VERSION), "manager no longer runs")
+
+# 7. The same releases in Steam's compatibility-tool folder: new install,
+#    update and repair keep that layout; removal takes its registration too.
+tools_dir = steam / "compatibilitytools.d"
+check(M.install(old, None, UI(answers=["steam-compat"]), T, keys=None) is True, "steam-compat install failed")
+steam_tool = tools_dir / "lepton_x86_64_v0_1_0_alpha"
+registration = (steam_tool / "compatibilitytool.vdf").read_text()
+check('"install_path" "."' in registration and '"from_oslist" "android"' in registration, "self-contained registration")
+check('"lepton v0.1.0-alpha x86_64 (community)"' in registration, "version-first name: " + registration)
+check(not (tools_dir / "lepton_x86_64_v0_1_0_alpha.vdf").exists(), "a standalone .vdf was also written")
+check(not (share / "lepton_x86_64_v0_1_0_alpha").exists(), "installed into Lepton's folder too")
+check((steam_tool / "tools/platform-tools/adb").is_file(), "ADB missing from the self-contained install")
+tool = next(t for t in M.installed_tools() if t["id"] == "lepton_x86_64_v0_1_0_alpha")
+check(tool["layout"] == "steam-compat" and "Steam's compatibility-tool folder" in M.describe_tool(tool), "layout listed")
+check(M.install(new, "lepton_x86_64_v0_1_0_alpha", UI(), T, keys=None) is True, "steam-compat update failed")
+registration = (steam_tool / "compatibilitytool.vdf").read_text()
+check('"lepton v0.2.0-alpha x86_64 (community)"' in registration, "name not refreshed after update")
+check(json.loads((steam_tool / "BUNDLE.json").read_text())["bundle_id"] == "v0.2.0-alpha", "not updated in place")
+check(not (share / "lepton_x86_64_v0_1_0_alpha").exists() and not list(tools_dir.glob("*.vdf")), "update changed layout")
+check(not list(tools_dir.glob("*.previous-*")), "update left a backup")
+(steam_tool / "compat_tool/lepton").write_text("damaged")
+check(M.flow_repair(UI(answers=["lepton_x86_64_v0_1_0_alpha"]), releases, T) is True, "steam-compat repair failed")
+check((steam_tool / "compat_tool/lepton").read_text() != "damaged" and (steam_tool / "compatibilitytool.vdf").is_file(),
+      "repair did not restore the self-contained install")
+subprocess.run([sys.executable, str(manager.parent / "lepton-manage-installs"),
+                "--remove", "lepton_x86_64_v0_1_0_alpha", "--execute"], check=True, stdout=subprocess.DEVNULL)
+check(not steam_tool.exists() and not list(tools_dir.iterdir()), "steam-compat removal left files")
+check(save.read_text() == "level 7\n", "compatdata changed by the steam-compat flow")
 PY
 # Reinstalling never duplicates icons.
 test "$(find "$home/Desktop" -name 'lepton-release-manager*' | wc -l)" = 1
-echo 'PASS: release install: new install, in-place update (tool ID kept), repair from cached verified files, clashing install refused, manager never downgraded and kept after removing every install, no game data touched'
+echo 'PASS: release install: new install, in-place update (tool ID kept), repair from cached verified files, clashing install refused, manager never downgraded and kept after removing every install, the same in Steam'"'"'s compatibility-tool folder (layout kept, name refreshed), no game data touched'

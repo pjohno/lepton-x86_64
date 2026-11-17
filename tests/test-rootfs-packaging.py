@@ -46,12 +46,14 @@ class PackagingTests(unittest.TestCase):
         scripts = ('build-images-x86_64.sh', 'preflight-x86_64.sh', 'lib/workspace.sh',
                    'lib/packaging-fuse.sh', 'lib/package-images.sh', 'lib/image-provenance.sh',
                    'internal/check-active-compilation.py', 'internal/validate-android-images.py',
-                   'internal/check-host-capabilities.py', 'internal/probe-binderfs.py',
+                   'internal/check-host-capabilities.py', 'internal/probe-binderfs.py', 'internal/private_storage.py',
                    'internal/package-repro-rootfs.sh', 'internal/patch-binderfs-init.sh')
         for name in scripts:
             dest = self.repo / 'image-14/scripts' / name
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / 'image-14/scripts' / name, dest)
+        # Mesa host tools need the real Ubuntu 26 builder; the fixture skips them.
+        write(self.repo / 'image-14/scripts/internal/bootstrap-mesa-clc.sh', '#!/bin/bash\nexit 0\n')
         write(self.repo / '.build-env', f'LEPTON_OUTPUT_DIR="{self.workspace}"\n'
               'LEPTON_BUILD_TARGET=aosp_lepton_x86_64-ap2a-userdebug\n'
               'LEPTON_BUILD_JOBS=1\nLEPTON_MIN_FREE_GIB=0\n'

@@ -151,7 +151,11 @@ LEPTON_LOCAL_USE_GAMESCOPE=1 %command%
 
 The fallback selects the existing Wayland Gamescope Desktop Mode path, windowed
 by default with touch mode 1. Explicit desktop sizing/fullscreen overrides
-remain available. Gaming Mode's SDL/X11 fullscreen path and touch mode 4 are
+remain available. The main screen's size comes from `kscreen-doctor` on KDE
+Plasma, or from Mutter's DisplayConfig D-Bus API (via `busctl`) on GNOME, so
+`LEPTON_DESKTOP_FULLSCREEN=1` renders at the screen's real resolution on both;
+without either answer the window is 1024x640. Gamescope is a separate package
+on desktop Linux (Steam does not provide it). Gaming Mode's SDL/X11 fullscreen path and touch mode 4 are
 unchanged for normal Deck installs. Unmarked tools still support the existing
 experimental `LEPTON_DESKTOP_DIRECT=1` opt-in; it uses the same direct helper.
 The explicit local Gamescope fallback takes precedence over that older option.
@@ -259,8 +263,11 @@ No system/vendor image rebuild is required for this development test.
 ## Launcher-only Fedora deployment
 
 For the existing test installation, verify the 2048 shortcut's selected tool
-against `~/.local/share/Steam/config/config.vdf` and its matching registration
-in `~/.local/share/Steam/compatibilitytools.d/`. The selected test tool is
+against `~/.steam/root/config/config.vdf` and its matching registration in
+`~/.steam/root/compatibilitytools.d/` (on native Steam, `~/.steam/root` usually
+resolves to `~/.local/share/Steam`): a `<tool id>.vdf` for an install in
+`~/.local/share`, or `<tool id>/compatibilitytool.vdf` for one installed with
+`--steam-compat`. The selected test tool is
 currently `lepton_x86_64_v0_1_1_alpha`, not the separately registered tool named
 “development”. Stop the game normally before the next test launch.
 

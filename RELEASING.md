@@ -33,6 +33,14 @@ Renaming a signed release would invalidate its checksum manifest or signature.
 - The version is also the bundle ID and the Git tag.
 - The installed Steam tool ID is `lepton_x86_64_` plus the version, with `.`
   and `-` replaced by `_` (for example `lepton_x86_64_v0_1_0_alpha`).
+- Steam shows the version first: `lepton v0.1.0-alpha x86_64 (community)`.
+  The packager writes this name into `BUNDLE.json` (a `--tool-name` given when
+  packaging is kept), and the installer applies the same rule to bundles named
+  the older way (`Lepton x86_64 (community) - VERSION`). Replacing an install
+  keeps its tool ID but shows the new version's name.
+- The same archive installs into Lepton's folder or, with `--steam-compat`,
+  into Steam's `compatibilitytools.d` as a self-contained tool (see
+  [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md#installing-into-steams-compatibility-tool-folder-optional)).
 - A version with a `-` part (alpha, beta, rc) is published as a GitHub
   **prerelease**.
 
@@ -311,6 +319,11 @@ The manager makes sure nothing downloaded runs before it is verified:
 `compat_tool/tools/lepton-release-manager` has a `MANAGER_VERSION` number.
 **Increase it whenever the file (or the `lepton-manage-installs` copy it uses)
 changes.**
+
+| Version | Change |
+| --- | --- |
+| 2 | Releases, updates, repair, signatures |
+| 3 | Installs in Steam's `compatibilitytools.d` (`--steam-compat`): asks where a new tool goes, keeps each install's layout on update and repair, refuses older installers for such installs, reports Steam-folder problems |
 
 **How installers update it:**
 - Every bundle installer copies the manager into

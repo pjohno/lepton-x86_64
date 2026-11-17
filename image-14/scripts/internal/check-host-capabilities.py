@@ -18,6 +18,8 @@ import sys
 import tempfile
 import time
 
+from private_storage import make_private
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 
 
@@ -88,21 +90,22 @@ class Capabilities:
         self.report('compilation', f'Workspace free space: {free} GiB; required {self.args.min_free_gib}', free >= self.args.min_free_gib)
 
     def graphics(self):
-        if self.args.rendering != 'amd':
+        if self.args.rendering == 'software':
             print('[INFO] Software sysbake selected; no AMD GPU required.')
             return
         drm = Path(os.environ.get('LEPTON_PREFLIGHT_DRM', '/sys/class/drm'))
         nodes = Path(os.environ.get('LEPTON_PREFLIGHT_DEV_DRI', '/dev/dri'))
+        label, vendor_id = ('Intel', '0x8086') if self.args.rendering == 'intel' else ('AMD', '0x1002')
         usable = False
         for vendor in drm.glob('renderD*/device/vendor'):
             try:
                 node = nodes / vendor.parents[1].name
-                usable |= vendor.read_text().strip() == '0x1002' and stat.S_ISCHR(node.stat().st_mode) and os.access(node, os.R_OK | os.W_OK)
+                usable |= vendor.read_text().strip() == vendor_id and stat.S_ISCHR(node.stat().st_mode) and os.access(node, os.R_OK | os.W_OK)
             except OSError:
                 continue
-        self.report('bundle', 'AMD sysbake render-node access', usable)
+        self.report('bundle', f'{label} sysbake render-node access', usable)
         if not usable:
-            print('[INFO] Select --sysbake-rendering software to bake without an AMD GPU, or provide accessible AMD render nodes for the requested hardware path.')
+            print(f'[INFO] Select --sysbake-rendering software to bake without a GPU, or provide accessible {label} render nodes for the requested hardware path.')
 
     def binder(self):
         available = any(line.split()[-1:] == ['binder'] for line in
@@ -167,7 +170,14 @@ class Capabilities:
         parent = Path(self.args.workspace).absolute()
         while not parent.is_dir() and parent != parent.parent:
             parent = parent.parent
-        return Path(tempfile.mkdtemp(prefix='.lepton-host-check.', dir=parent))
+        work = Path(tempfile.mkdtemp(prefix='.lepton-host-check.', dir=parent))
+        # The probe's Podman graph/runroot live here: never inherit workspace ACLs.
+        try:
+            make_private(work)
+        except OSError:
+            work.rmdir()
+            raise
+        return work
 
     def rootless(self, work, stage):
         needed = ('podman', 'fuse-overlayfs', 'newuidmap', 'newgidmap', 'awk', 'sh')
@@ -372,7 +382,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--workflow', choices=('complete', 'images', 'packaging', 'bundle'), default='complete')
     parser.add_argument('--workspace', default=tempfile.gettempdir())
-    parser.add_argument('--rendering', choices=('software', 'amd'), default='software')
+    parser.add_argument('--rendering', choices=('software', 'amd', 'intel'), default='software')
     parser.add_argument('--jobs', type=int, default=1)
     parser.add_argument('--min-free-gib', type=int, default=0)
     for name in ('with-gapps', 'with-ndk', 'with-widevine', 'transfer'):

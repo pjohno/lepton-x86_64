@@ -261,7 +261,7 @@ def host_problems(rendering, stage=None):
     runtime = os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')
     if not (runtime.startswith('/run/user/') and os.path.isdir(runtime) and os.stat(runtime).st_uid == os.getuid()):
         problems.append(f'User runtime directory unavailable or unexpected: {runtime}')
-    if rendering not in ('software', 'amd'):
+    if rendering not in ('software', 'amd', 'intel'):
         problems.append(f'Unknown rendering mode: {rendering}')
     return problems
 
@@ -640,8 +640,9 @@ def package_main(args, core):
     args.tool_id = args.tool_id or 'lepton_custom_' + re.sub(r'[.-]', '_', args.bundle_id)
     safe_id(args.tool_id, r'[A-Za-z0-9_]+', 'tool ID', core, 96)
     core.require(args.tool_id != metadata.get('tool_id'), 'Choose a new --tool-id; the source tool ID belongs to the original release')
-    args.tool_name = args.tool_name or f'Lepton x86_64 (custom) - {args.bundle_id}'
-    core.require(args.tool_name.strip() and not any(ord(c) < 32 or ord(c) == 127 for c in args.tool_name), 'Invalid tool name')
+    if args.tool_name is not None:
+        core.require(args.tool_name.strip() and not any(ord(c) < 32 or ord(c) == 127 for c in args.tool_name),
+                     'Invalid tool name')
     output = Path(os.path.abspath(args.output_dir))
     core.require(output.parent.is_dir() and output.parent.resolve() == output.parent and not output.is_symlink(),
                  'Output directory parent must exist without symlinks')
@@ -652,6 +653,8 @@ def package_main(args, core):
         core.require(not target.exists() and not target.is_symlink(), f'Output already exists; refusing overwrite: {target}')
     check_stage_for_package(root, state, core)
     components = check_components(root, state, core)
+    # Version first, with the optional components: "lepton ID x86_64 (custom, GApps + NDK)".
+    args.tool_name = args.tool_name or L.default_display_name(args.bundle_id, components, 'custom')
     print('Verifying the Android rootfs and sysbake against the stage record...', flush=True)
     rootfs_records, sysbake_records = stage_integrity(root, state, core)
     fingerprint = L.stage_fingerprint(root)['fingerprint']
@@ -943,7 +946,7 @@ def main(argv, core, command):
     elif command == 'adb':
         parser.add_argument('--adb-zip', help="already downloaded official Google platform-tools ZIP (offline)")
     elif command == 'sysbake':
-        parser.add_argument('--rendering', choices=('software', 'amd'), default='software')
+        parser.add_argument('--rendering', choices=('software', 'amd', 'intel'), default='software')
         parser.add_argument('--timeout', type=int, default=600)
     elif command == 'package':
         parser.add_argument('--output-dir', required=True)

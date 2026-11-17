@@ -19,4 +19,8 @@
 
 <resources>
     <bool name="def_device_provisioned">true</bool>
+    <!-- Android's screen is a game window: the host (desktop or SteamOS)
+         decides when the real screen blanks. Android's own 60 s timeout
+         turned the window off on menus and sign-in screens with no input. -->
+    <integer name="def_screen_off_timeout">2147483647</integer>
 </resources>

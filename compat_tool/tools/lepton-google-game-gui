@@ -17,7 +17,13 @@ ROOT="$(dirname -- "$(dirname -- "$TOOLS")")"
 ENTRY="$ROOT/compat_tool/lepton-x86_64-entry"
 ADD_GAME="$TOOLS/lepton-add-game"
 GSF_READER="$ROOT/tests/runtime/read-gsf-id.py"
-STEAM_DIR="${LEPTON_STEAM_DIR:-$HOME/.local/share/Steam}"
+# Steam's folder: the shared resolver (~/.steam/root, usually the same folder
+# as ~/.local/share/Steam) unless LEPTON_STEAM_DIR names it.
+STEAM_DIR="${LEPTON_STEAM_DIR:-}"
+if [[ -z "$STEAM_DIR" ]]; then
+    STEAM_DIR="$(python3 "$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")/lepton-manage-installs" --steam-root 2>/dev/null)" ||
+        STEAM_DIR="$HOME/.local/share/Steam"
+fi
 COMPAT="$STEAM_DIR/steamapps/compatdata"
 MARKER=lepton-google-game
 TITLE='Lepton: Google game'

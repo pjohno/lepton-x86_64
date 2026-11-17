@@ -43,7 +43,7 @@ Options:
   --tool-id ID / --tool-name NAME         Steam tool identity
   --from-stage DIR | --adb-zip FILE       Offline Deck tool provisioning (the
                               staged ADB is never put in the archive)
-  --sysbake-rendering software|amd        (default software; no GPU needed)
+  --sysbake-rendering software|amd|intel        (default software; no GPU needed)
   --sysbake-timeout SECONDS               (default 600)
   --deck-ip IPv4              Transfer archive, checksum and installer after packaging
 
@@ -78,7 +78,7 @@ done
 [[ -n "$MODE" && -n "$BUNDLE_ID" ]] || { usage >&2; fail 'A mode and --bundle-id are required'; }
 [[ "$BUNDLE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && ${#BUNDLE_ID} -le 64 ]] ||
     fail 'Bundle ID must be 1-64 letters, digits, dots, hyphens or underscores'
-[[ "$SYSBAKE_RENDERING" == software || "$SYSBAKE_RENDERING" == amd ]] || fail 'Invalid --sysbake-rendering'
+[[ "$SYSBAKE_RENDERING" == software || "$SYSBAKE_RENDERING" == amd || "$SYSBAKE_RENDERING" == intel ]] || fail 'Invalid --sysbake-rendering'
 [[ "$SYSBAKE_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail 'Invalid --sysbake-timeout'
 [[ $(id -u) -ne 0 ]] || fail 'Run as a normal user (without sudo)'
 [[ -f "$CONFIG" ]] || fail "Missing $CONFIG (copy .build-env.example)"

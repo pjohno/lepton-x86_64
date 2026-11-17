@@ -22,6 +22,7 @@ echo "env SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-} ENABLE_GAMESCOPE_WSI=${ENABLE_GAM
 [[ -z "${FAKE_MESSAGE:-}" ]] || printf "%s\n" "$FAKE_MESSAGE" > "$LEPTON_MESSAGE_FILE"
 [[ "${SDL_VIDEODRIVER:-}" != x11 ]] || sleep 0.6'
 fake kscreen-doctor '[[ -n "${KSCREEN_JSON:-}" ]] || exit 1; printf "%s\n" "$KSCREEN_JSON"'
+fake busctl '[[ -n "${GNOME_JSON:-}" && "$*" == *GetCurrentState* ]] || exit 1; printf "%s\n" "$GNOME_JSON"'
 fake xdpyinfo 'echo "  dimensions:    1280x800 pixels (338x211 millimeters)"'
 fake xwininfo 'echo "     0x400001 \"gamescope\": (\"gamescope\" \"gamescope\")  1280x800+0+0  +0+0"
 echo "     0x500002 \"Lepton: game could not start\": (\"kdialog\")  600x300+0+0  +0+0"
@@ -65,6 +66,25 @@ run "${kde[@]}" KSCREEN_JSON="$(monitor 2560 1440 1.5)"; expect "$(desktop_cmd 1
 run "${kde[@]}" KSCREEN_JSON="$(monitor 2560 1600 1)"; expect "$(desktop_cmd 2048x1280)"
 # The old opt-in is now the default and still accepted.
 run "${kde[@]}" KSCREEN_JSON="$deck" LEPTON_DESKTOP_WINDOWED=1; expect "$(desktop_cmd 1024x640)"
+
+# GNOME (no kscreen-doctor answer): Mutter's DisplayConfig over busctl. The
+# primary logical monitor's current mode is used, rotated and scaled like KDE.
+# mutter W H SCALE TRANSFORM [PRIMARY_FIRST]: a primary monitor DP-1 plus a
+# non-primary 1280x1024 HDMI-A-1 listed first, so the primary must be chosen.
+mutter() {
+    printf '{"type":"(ua((ssss)a(siiddada{sv})a{sv})a(iiduba(ssss)a{sv})a{sv})","data":[1,'
+    printf '[[["HDMI-A-1","v","p","s"],[["1280x1024@60",1280,1024,60.0,1.0,[1.0],{"is-current":{"type":"b","data":true}}]],{}],'
+    printf '[["DP-1","v","p","s"],[["1920x1080@60",1920,1080,60.0,1.0,[1.0],{}],["%sx%s@60",%s,%s,60.0,%s,[1.0],{"is-current":{"type":"b","data":true}}]],{}]],' "$1" "$2" "$1" "$2" "$3"
+    printf '[[1920,0,1.0,0,false,[["HDMI-A-1","v","p","s"]],{}],[0,0,%s,%s,true,[["DP-1","v","p","s"]],{}]],{}]}' "$3" "$4"
+}
+gnome=(XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=GNOME WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$work")
+run "${gnome[@]}" GNOME_JSON="$(mutter 3440 1440 1 0)"; expect "$(desktop_cmd 1842x1152)"  # height-limited
+run "${gnome[@]}" GNOME_JSON="$(mutter 3440 1440 1 0)" LEPTON_DESKTOP_FULLSCREEN=1; expect "$(desktop_cmd 3440x1440 -f)"
+"$real_grep" -q 'mode: desktop; resolution: 3440x1440; fullscreen' "$work/out"
+run "${gnome[@]}" GNOME_JSON="$(mutter 2560 1440 1.5 0)"; expect "$(desktop_cmd 1228x768)"
+run "${gnome[@]}" GNOME_JSON="$(mutter 800 1280 1 3)" LEPTON_DESKTOP_FULLSCREEN=1; expect "$(desktop_cmd 1280x800 -f)"
+# Neither KDE nor GNOME answers: the same safe 1024x640 window.
+run "${gnome[@]}"; expect "$(desktop_cmd 1024x640)"
 
 # Every supported Gamescope touch mode is accepted explicitly on the desktop.
 # In particular, touchscreen testing can restore passthrough (4).

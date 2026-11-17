@@ -56,9 +56,17 @@ else
     need 'Neither zenity nor kdialog is installed: the Lepton menu entries need one of them'
 fi
 
-# Steam: the native package/installer (~/.local/share/Steam). Flatpak Steam
-# cannot start Podman containers on the host.
-if [[ -d "$HOME/.local/share/Steam" ]]; then
+# Steam: the native package/installer (~/.steam/root, usually the same folder
+# as ~/.local/share/Steam), found by the same resolver the installer uses.
+# Flatpak Steam cannot start Podman containers on the host.
+manage="$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")/lepton-manage-installs"
+if have python3 && [[ -f "$manage" ]]; then
+    if steam_dir="$(python3 "$manage" --steam-root 2>&1)"; then
+        pass "Steam ($steam_dir)"
+    else
+        need "${steam_dir#ERROR: }"
+    fi
+elif [[ -d "$HOME/.local/share/Steam" ]]; then
     pass "Steam ($HOME/.local/share/Steam)"
 elif [[ -d "$HOME/.var/app/com.valvesoftware.Steam" ]]; then
     need 'Only Flatpak Steam was found; Lepton needs the native Steam package'
@@ -66,15 +74,19 @@ else
     need 'Steam not found: install Steam and start it once'
 fi
 
-# Graphics: the Android image only contains AMD drivers.
-amd=false
+# Graphics: AMD is supported; Intel requires an Intel-enabled bundle.
+# Runtime also validates the selected driver and rejects pre-Gen9 Intel GPUs.
+amd=false intel=false
 for vendor_file in "$DRM"/renderD*/device/vendor; do
     [[ -r "$vendor_file" && "$(<"$vendor_file")" == 0x1002 ]] && amd=true
+    [[ -r "$vendor_file" && "$(<"$vendor_file")" == 0x8086 ]] && intel=true
 done
 if [[ "$amd" == true ]]; then
     pass 'AMD GPU (hardware graphics)'
+elif [[ "$intel" == true ]]; then
+    warn 'Intel GPU: hardware graphics only with a bundle built with Intel drivers (experimental)'
 else
-    warn 'No AMD GPU: hardware graphics are not available (AMD drivers only); see --allow-non-amd'
+    warn 'No AMD or Intel GPU: hardware graphics are not available; see --allow-non-amd for explicit software testing'
 fi
 
 # Direct launch needs the same live socket required by lepton-direct-wayland.

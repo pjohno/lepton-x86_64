@@ -41,11 +41,12 @@ script, else ~/.config/lepton-x86_64/default.env. Installed bundles default to
 --rendering amd --display desktop (from the env file) and --expect-abi x86_64.
 
 --gpu-check boots Android without an APK and verifies that ANGLE is running on
-the expected driver (RADV for --rendering amd, SwiftShader for software).
+the expected driver (RADV for --rendering amd, ANV for intel, SwiftShader for
+software), and that SurfaceFlinger loaded that Vulkan driver.
 
 For a regular game APK, add --app. Optional game/debug settings:
   --apk FILE                 Single APK or APKMirror .apkm bundle (app mode)
-  --rendering software|amd    Android graphics driver (default software)
+  --rendering software|amd|intel  Android graphics driver (default software)
   --display headless|desktop  Headless Weston or current Wayland desktop
   --seconds N                Observe the game for N seconds (default 20)
   --until-exit               Keep an app session open until it exits or is stopped
@@ -132,7 +133,10 @@ fi
 [[ "$UNTIL_EXIT" == false || ( "$APP_MODE" == true && "$SETUP_ONLY" == false && "$MEDIA_SMOKE" == false ) ]] || fail '--until-exit requires a regular --app session'
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail 'Timeout must be a positive integer'
 [[ "$OBSERVE_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail 'Seconds must be a positive integer'
-[[ "$RENDERING" == software || "$RENDERING" == amd ]] || fail 'Rendering must be software or amd'
+[[ "$RENDERING" == software || "$RENDERING" == amd || "$RENDERING" == intel ]] || fail 'Rendering must be software, amd or intel'
+VULKAN_HAL=pastel
+[[ "$RENDERING" != amd ]] || VULKAN_HAL=radeon
+[[ "$RENDERING" != intel ]] || VULKAN_HAL=intel
 [[ "$DISPLAY_MODE" == headless || "$DISPLAY_MODE" == desktop ]] || fail 'Display must be headless or desktop'
 [[ -n "$STAGE" && ( -n "$APK" || "$SETUP_ONLY" == true || "$GPU_CHECK" == true ) ]] || { usage >&2; fail 'Supply stage and APK, --setup-only or --gpu-check'; }
 if [[ -n "$PROFILE" ]]; then
@@ -176,7 +180,7 @@ if [[ "$RENDERING" == software ]]; then
     [[ -f "$ROOTFS/vendor/lib64/hw/gralloc.default.so" ]] || fail 'Software gralloc driver missing'
     grep -Fq 'gbm-software-vintf.xml' "$TOOL/liblepton/mounting.sh" || fail 'Stage lacks software GBM HAL masking fix; restage current launcher or use --rendering amd'
 else
-    [[ -f "$ROOTFS/vendor/lib64/hw/vulkan.radeon.so" ]] || fail 'AMD Vulkan driver missing'
+    [[ -f "$ROOTFS/vendor/lib64/hw/vulkan.$VULKAN_HAL.so" ]] || fail "$RENDERING Vulkan driver missing (vulkan.$VULKAN_HAL.so)"
 fi
 grep -qx 'ro.build.version.sdk=34' "$ROOTFS/system/build.prop" || fail 'Expected Android 14'
 [[ -x "$STAGE/tools/bin/inotifywait" ]] || fail 'Staged inotifywait missing'
@@ -432,6 +436,8 @@ export LEPTON_LOCK_PATH="$WORK/lock"
 LEPTON_FORCE_SOFTWARE=false
 [[ "$RENDERING" != software ]] || LEPTON_FORCE_SOFTWARE=true
 export LEPTON_FORCE_SOFTWARE
+# Hardware modes test the requested driver even on a host with both GPUs.
+if [[ "$RENDERING" == software ]]; then unset LEPTON_VULKAN_DRIVER; else export LEPTON_VULKAN_DRIVER="$VULKAN_HAL"; fi
 export LEPTON_ALLOW_KMSG=false LEPTON_GAMEPAD_PASSTHROUGH=false
 export LEPTON_NO_PORT_FORWARDING=true TERM=dumb TMPDIR="$WORK/tmp"
 export LEPTON_NO_DEBUG_PORTS=true
@@ -539,9 +545,21 @@ for name in ro.hardware.egl ro.hardware.vulkan ro.hardware.gralloc; do
     info "$name=$(grep -F "[$name]" "$WORK/properties.txt" | sed 's/.*: \[\(.*\)\]/\1/')"
 done
 if [[ "$GPU_CHECK" == true ]]; then
+    grep -Fqx "[ro.hardware.vulkan]: [$VULKAN_HAL]" "$WORK/properties.txt" ||
+        fail "ro.hardware.vulkan is not $VULKAN_HAL; see $WORK/properties.txt"
+    # The Vulkan HAL ANGLE uses is mapped into SurfaceFlinger.
+    podman exec "$container" /system/bin/sh -c \
+        'grep -o "/vendor/lib64/hw/vulkan[^ ]*" /proc/$(pidof surfaceflinger)/maps | sort -u' > "$WORK/surfaceflinger-vulkan.txt" 2>&1 || true
+    info "SurfaceFlinger Vulkan HAL: $(tr '\n' ' ' < "$WORK/surfaceflinger-vulkan.txt")"
+    [[ "$RENDERING" == software ]] || grep -qx "/vendor/lib64/hw/vulkan.$VULKAN_HAL.so" "$WORK/surfaceflinger-vulkan.txt" ||
+        fail "SurfaceFlinger did not load vulkan.$VULKAN_HAL.so; see $WORK/surfaceflinger-vulkan.txt"
     if [[ "$RENDERING" == amd ]]; then
         [[ "$gles_line" == *RADV* ]] || fail "ANGLE is not running on AMD RADV; see $WORK/surfaceflinger.txt"
         pass 'Hardware acceleration: ANGLE on Vulkan/RADV'
+    elif [[ "$RENDERING" == intel ]]; then
+        [[ "$gles_line" == *Intel* && "$gles_line" != *SwiftShader* ]] ||
+            fail "ANGLE is not running on Intel ANV; see $WORK/surfaceflinger.txt"
+        pass 'Hardware acceleration: ANGLE on Vulkan/ANV (Intel)'
     else
         [[ "$gles_line" == *SwiftShader* ]] || fail "Expected SwiftShader software rendering; see $WORK/surfaceflinger.txt"
         pass 'Software rendering: ANGLE on SwiftShader'

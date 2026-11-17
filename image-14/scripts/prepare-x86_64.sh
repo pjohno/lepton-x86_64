@@ -111,7 +111,8 @@ for name in \
   "$IMAGE/patches/0007-eventhub-preserve-evdev-axes.patch" \
   "$IMAGE/patches/0008-inputreader-separate-steam-input-pads.patch" \
   "$IMAGE/patches/0009-hwc-local-wayland-fullscreen.patch" \
-  "$IMAGE/patches/0010-egl-hide-untranslatable-gl-extensions.patch"; do
+  "$IMAGE/patches/0010-egl-hide-untranslatable-gl-extensions.patch" \
+  "$IMAGE/patches/0011-hwc-present-framebuffer-after-color-layers.patch"; do
   [[ -f "$name" ]] || err "Missing required file: $name"
 done
 podman image exists "$BUILDER" || err "Missing builder image: $BUILDER"
@@ -364,6 +365,7 @@ apply_custom /workspace/output/frameworks/native /workspace/patches/0007-eventhu
 apply_custom /workspace/output/frameworks/native /workspace/patches/0008-inputreader-separate-steam-input-pads.patch SteamInputPads
 apply_custom /workspace/output/hardware/waydroid /workspace/patches/0009-hwc-local-wayland-fullscreen.patch LocalWaylandFullscreen
 apply_custom /workspace/output/frameworks/native /workspace/patches/0010-egl-hide-untranslatable-gl-extensions.patch NdkGlExtensions
+apply_custom /workspace/output/hardware/waydroid /workspace/patches/0011-hwc-present-framebuffer-after-color-layers.patch HwcColorLayerPresent
 INNER
   touch "$STATE/patches.done"
   rm -- "$STATE/patches.started"
