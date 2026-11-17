@@ -1,0 +1,266 @@
+Lepton: closing a desktop window ends the game (Android 14 task codes)
+
+Closing the game's window on a desktop (GNOME's Close) hid the window, but the
+game and its audio kept running. HWC handles xdg_toplevel.close for the
+full-UI window (task "0") by asking vendor.waydroid.task to
+removeAllVisibleRecentTasks(). That service calls IActivityTaskManager over
+raw binder with hard-coded transaction codes, which upstream set for Android
+13 (setFocusedTask 20, removeTask 21, removeAllVisibleRecentTasks 22). On
+Android 14 those methods are 19, 20 and 21, so every call ran the next method:
+the close ran getTasks() and removed nothing, closing a per-task window
+removed all tasks, and focusing one removed it.
+
+Use the Android 14 codes, log binder failures in the task service instead of
+dropping them, and log each close with its task, app and chosen action
+(lepton.hwc.trace additionally logs configure events). The close decision is
+in lepton-close.h so it can be tested on the host; a non-numeric task ID is
+refused instead of aborting HWC in stoi().
+
+diff --git a/hwcomposer/lepton-close.h b/hwcomposer/lepton-close.h
+new file mode 100644
+index 0000000..e5101c9
+--- /dev/null
++++ b/hwcomposer/lepton-close.h
+@@ -0,0 +1,47 @@
++// Lepton: what closing a desktop window asks Android to do. Header-only and
++// free of Android dependencies so the decision can be tested on the host.
++#pragma once
++
++#include <string>
++
++namespace lepton {
++
++enum class close_action {
++    remove_visible_tasks, // full-UI window (task "0"): end the game's task(s)
++    remove_task,          // per-task window: end only that task
++    window_only,          // no task behind the window ("none"): just hide it
++    no_task_service,      // vendor.waydroid.task unavailable: cannot end anything
++    invalid_task_id,      // not a task number: refuse rather than guess
++};
++
++inline bool is_task_number(const std::string &id) {
++    if (id.empty() || id.size() > 9)
++        return false;
++    for (char c : id)
++        if (c < '0' || c > '9')
++            return false;
++    return true;
++}
++
++inline close_action close_action_for(const std::string &task_id, bool have_task_service) {
++    if (task_id == "none")
++        return close_action::window_only;
++    if (!have_task_service)
++        return close_action::no_task_service;
++    if (task_id == "0")
++        return close_action::remove_visible_tasks;
++    return is_task_number(task_id) ? close_action::remove_task : close_action::invalid_task_id;
++}
++
++inline const char *close_action_name(close_action action) {
++    switch (action) {
++    case close_action::remove_visible_tasks: return "removeAllVisibleRecentTasks";
++    case close_action::remove_task: return "removeTask";
++    case close_action::window_only: return "window-only";
++    case close_action::no_task_service: return "none (no task service)";
++    case close_action::invalid_task_id: return "none (invalid task id)";
++    }
++    return "unknown";
++}
++
++} // namespace lepton
+diff --git a/hwcomposer/wayland-hwc.cpp b/hwcomposer/wayland-hwc.cpp
+index f9b9c7c..47f61ae 100644
+--- a/hwcomposer/wayland-hwc.cpp
++++ b/hwcomposer/wayland-hwc.cpp
+@@ -67,6 +67,7 @@
+ #include <cinttypes>
+ 
+ #include "gralloc_handler.h"
++#include "lepton-close.h"
+ 
+ #include <wayland-client.h>
+ #include <wayland-android-client-protocol.h>
+@@ -239,6 +240,10 @@ xdg_toplevel_handle_configure(void *data, struct xdg_toplevel *,
+     struct window *window = (struct window *)data;
+     struct display *display = window->display;
+ 
++    if (property_get_bool("lepton.hwc.trace", false))
++        ALOGI("Lepton trace: xdg_toplevel.configure task=%s app=%s %dx%d",
++              window->taskID.c_str(), window->appID.c_str(), width, height);
++
+     if (display->local_display) {
+         // xdg_toplevel state is latched only when xdg_surface.configure is acked.
+         window->pending_width = width;
+@@ -281,15 +286,18 @@ xdg_toplevel_handle_close(void *data, struct xdg_toplevel *)
+     send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_PRESSED);
+     send_key_event(window->display, 0, WL_KEYBOARD_KEY_STATE_RELEASED);
+ 
+-    if (display->task != nullptr) {
+-        if (window->taskID != "none") {
+-            if (window->taskID == "0") {
+-                property_set("waydroid.active_apps", "none");
+-                display->task->removeAllVisibleRecentTasks();
+-            } else {
+-                display->task->removeTask(stoi(window->taskID));
+-            }
+-        }
++    // Lepton: one line per close (a rare event) so a window that disappears
++    // while the game keeps running can be traced to its cause.
++    const lepton::close_action action = lepton::close_action_for(window->taskID, display->task != nullptr);
++    ALOGI("Lepton: xdg_toplevel.close task=%s app=%s action=%s", window->taskID.c_str(),
++          window->appID.c_str(), lepton::close_action_name(action));
++    if (action == lepton::close_action::remove_visible_tasks) {
++        property_set("waydroid.active_apps", "none");
++        if (!display->task->removeAllVisibleRecentTasks().isOk())
++            ALOGE("Lepton: close: vendor.waydroid.task removeAllVisibleRecentTasks transport failed");
++    } else if (action == lepton::close_action::remove_task) {
++        if (!display->task->removeTask(static_cast<uint32_t>(std::stoul(window->taskID))).isOk())
++            ALOGE("Lepton: close: vendor.waydroid.task removeTask transport failed");
+     }
+ 
+     std::scoped_lock lock(window->display->windowsMutex);
+diff --git a/interfaces/task/1.0/default/WaydroidTask.cpp b/interfaces/task/1.0/default/WaydroidTask.cpp
+index 392b718..5713230 100644
+--- a/interfaces/task/1.0/default/WaydroidTask.cpp
++++ b/interfaces/task/1.0/default/WaydroidTask.cpp
+@@ -14,8 +14,12 @@
+  * limitations under the License.
+  */
+ 
++#define LOG_TAG "vendor.waydroid.task@1.0-service"
++
+ #include "WaydroidTask.h"
+ 
++#include <log/log.h>
++
+ #include <android/api-level.h>
+ #include <utils/String16.h>
+ #include <utils/String8.h>
+@@ -33,20 +37,32 @@ Return<void> WaydroidTask::setFocusedTask(uint32_t taskID) {
+         if (binderTask != nullptr)
+             mActivityTaskManager = android::interface_cast<IActivityTaskManager>(binderTask);
+     }
+-    if (mActivityTaskManager != nullptr)
+-        mActivityTaskManager->setFocusedTask(taskID);
++    if (mActivityTaskManager == nullptr) {
++        ALOGW("setFocusedTask: activity_task service unavailable");
++        return Void();
++    }
++    android::binder::Status status = mActivityTaskManager->setFocusedTask(taskID);
++    if (!status.isOk())
++        ALOGW("setFocusedTask(%u) failed: exception %d, error %d", taskID,
++              status.exceptionCode(), status.transactionError());
+     return Void();
+ }
+ 
+ Return<void> WaydroidTask::removeTask(uint32_t taskID) {
+-    bool ret;
++    bool ret = false;
+     if (mActivityTaskManager == nullptr) {
+         sp<IBinder> binderTask = android::defaultServiceManager()->getService(android::String16("activity_task"));
+         if (binderTask != nullptr)
+             mActivityTaskManager = android::interface_cast<IActivityTaskManager>(binderTask);
+     }
+-    if (mActivityTaskManager != nullptr)
+-        mActivityTaskManager->removeTask(taskID, &ret);
++    if (mActivityTaskManager == nullptr) {
++        ALOGW("removeTask: activity_task service unavailable");
++        return Void();
++    }
++    android::binder::Status status = mActivityTaskManager->removeTask(taskID, &ret);
++    if (!status.isOk() || !ret)
++        ALOGW("removeTask(%u) failed: exception %d, error %d, removed %d", taskID,
++              status.exceptionCode(), status.transactionError(), status.isOk() && ret);
+     return Void();
+ }
+ 
+@@ -56,8 +72,14 @@ Return<void> WaydroidTask::removeAllVisibleRecentTasks() {
+         if (binderTask != nullptr)
+             mActivityTaskManager = android::interface_cast<IActivityTaskManager>(binderTask);
+     }
+-    if (mActivityTaskManager != nullptr)
+-        mActivityTaskManager->removeAllVisibleRecentTasks();
++    if (mActivityTaskManager == nullptr) {
++        ALOGW("removeAllVisibleRecentTasks: activity_task service unavailable");
++        return Void();
++    }
++    android::binder::Status status = mActivityTaskManager->removeAllVisibleRecentTasks();
++    if (!status.isOk())
++        ALOGW("removeAllVisibleRecentTasks failed: exception %d, error %d",
++              status.exceptionCode(), status.transactionError());
+     return Void();
+ }
+ 
+diff --git a/interfaces/task/1.0/default/binder-interfaces/IActivityTaskManager.cpp b/interfaces/task/1.0/default/binder-interfaces/IActivityTaskManager.cpp
+index 8c21235..338bac8 100644
+--- a/interfaces/task/1.0/default/binder-interfaces/IActivityTaskManager.cpp
++++ b/interfaces/task/1.0/default/binder-interfaces/IActivityTaskManager.cpp
+@@ -38,6 +38,13 @@ BpActivityTaskManager::BpActivityTaskManager(const ::android::sp<::android::IBin
+     : BpInterface<IActivityTaskManager>(_aidl_impl){
+ }
+ 
++// Lepton: these transaction codes are the method positions in
++// frameworks/base/core/java/android/app/IActivityTaskManager.aidl and must
++// follow the Android release being built. Android 14 (API 34) has
++// setFocusedTask = 19, removeTask = 20, removeAllVisibleRecentTasks = 21.
++// The Android 13 numbers (20-22) used before called removeTask,
++// removeAllVisibleRecentTasks and getTasks instead, so closing the game's
++// window removed nothing.
+ ::android::binder::Status BpActivityTaskManager::setFocusedTask(int32_t taskId) {
+   ::android::Parcel _aidl_data;
+   ::android::Parcel _aidl_reply;
+@@ -51,7 +58,7 @@ BpActivityTaskManager::BpActivityTaskManager(const ::android::sp<::android::IBin
+   if (((_aidl_ret_status) != (::android::OK))) {
+     goto _aidl_error;
+   }
+-  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 20 /* setFocusedTask */, _aidl_data, &_aidl_reply);
++  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 19 /* setFocusedTask */, _aidl_data, &_aidl_reply);
+   if (((_aidl_ret_status) != (::android::OK))) {
+     goto _aidl_error;
+   }
+@@ -80,7 +87,7 @@ BpActivityTaskManager::BpActivityTaskManager(const ::android::sp<::android::IBin
+   if (((_aidl_ret_status) != (::android::OK))) {
+     goto _aidl_error;
+   }
+-  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 21 /* removeTask */, _aidl_data, &_aidl_reply);
++  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 20 /* removeTask */, _aidl_data, &_aidl_reply);
+   if (((_aidl_ret_status) != (::android::OK))) {
+     goto _aidl_error;
+   }
+@@ -109,7 +116,7 @@ BpActivityTaskManager::BpActivityTaskManager(const ::android::sp<::android::IBin
+   if (((_aidl_ret_status) != (::android::OK))) {
+     goto _aidl_error;
+   }
+-  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 22 /* removeAllVisibleRecentTasks */, _aidl_data, &_aidl_reply);
++  _aidl_ret_status = remote()->transact(::android::IBinder::FIRST_CALL_TRANSACTION + 21 /* removeAllVisibleRecentTasks */, _aidl_data, &_aidl_reply);
+   if (((_aidl_ret_status) != (::android::OK))) {
+     goto _aidl_error;
+   }
+@@ -138,7 +145,7 @@ namespace app {
+ ::android::status_t BnActivityTaskManager::onTransact(uint32_t _aidl_code, const ::android::Parcel& _aidl_data, ::android::Parcel* _aidl_reply, uint32_t _aidl_flags) {
+   ::android::status_t _aidl_ret_status = ::android::OK;
+   switch (_aidl_code) {
+-  case ::android::IBinder::FIRST_CALL_TRANSACTION + 20 /* setFocusedTask */:
++  case ::android::IBinder::FIRST_CALL_TRANSACTION + 19 /* setFocusedTask */:
+   {
+     int32_t in_taskId;
+     if (!(_aidl_data.checkInterface(this))) {
+@@ -159,7 +166,7 @@ namespace app {
+     }
+   }
+   break;
+-  case ::android::IBinder::FIRST_CALL_TRANSACTION + 21 /* removeTask */:
++  case ::android::IBinder::FIRST_CALL_TRANSACTION + 20 /* removeTask */:
+   {
+     int32_t in_taskId;
+     bool _aidl_return;
+@@ -185,7 +192,7 @@ namespace app {
+     }
+   }
+   break;
+-  case ::android::IBinder::FIRST_CALL_TRANSACTION + 22 /* removeAllVisibleRecentTasks */:
++  case ::android::IBinder::FIRST_CALL_TRANSACTION + 21 /* removeAllVisibleRecentTasks */:
+   {
+     if (!(_aidl_data.checkInterface(this))) {
+       _aidl_ret_status = ::android::BAD_TYPE;
