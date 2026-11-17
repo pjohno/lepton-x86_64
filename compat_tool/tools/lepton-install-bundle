@@ -240,7 +240,26 @@ CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/lepton-x86_64"
 STEAM_TOOLS="$HOME/.local/share/Steam/compatibilitytools.d"
 mkdir -p -- "$DATA_HOME"
 DATA_HOME="$(realpath -e -- "$DATA_HOME")"
+
+# Android cannot boot from files carrying POSIX ACLs (the container's overlay
+# fails with "creating /etc/mtab symlink: invalid argument"). A parent with a
+# default ACL, such as a home folder shared read-only with another user,
+# would give one to every extracted file and to every profile created at run
+# time. Drop the inherited ACL from the new, still-empty folder only; the
+# parent's ACL and existing files are never changed.
+drop_inherited_acl() {
+    local dir="$1"
+    command -v getfacl >/dev/null 2>&1 || return 0
+    getfacl -p -- "$dir" 2>/dev/null | grep -qE '^(default:|user:[^:]+:|group:[^:]+:)' || return 0
+    [[ -z "$(ls -A -- "$dir")" ]] || fail "Internal error: $dir is not empty"
+    command -v setfacl >/dev/null 2>&1 ||
+        fail "$(dirname -- "$dir") has a default ACL, which Android cannot use, and setfacl is missing (package acl)"
+    setfacl -b -k -- "$dir" || fail "Could not remove the inherited ACL from $dir"
+    info "Dropped the ACL inherited from $(dirname -- "$dir") (Android cannot use files with ACLs)"
+}
+
 TEMP="$(mktemp -d "$DATA_HOME/.lepton-install.XXXXXXXX")"
+drop_inherited_acl "$TEMP"
 
 info 'Extracting bundle'
 tar -xzf "$ARCHIVE" -C "$TEMP" --no-same-owner
@@ -530,6 +549,7 @@ if [[ "$(dirname -- "$TEMP")" != "$stage_parent" ]]; then
     else
         # Another filesystem: copy (keeping modes and Lepton's user.* xattrs),
         # then remove the extracted copy as cleanup() does.
+        drop_inherited_acl "$staged"
         if ! cp -a -- "$TEMP/." "$staged/"; then
             chmod -R u+rwX -- "$staged" 2>/dev/null || true
             rm -rf -- "$staged"
