@@ -181,6 +181,7 @@ and resets Podman.
 | `0007-eventhub-preserve-evdev-axes.patch` | Keeps real controllers' axis ranges |
 | `0008-inputreader-separate-steam-input-pads.patch` | Steam Input controllers appear as separate Android controllers |
 | `0010-egl-hide-untranslatable-gl-extensions.patch` | Arm64 games under NDK translation don't see ANGLE GL extensions the translator can't forward (fixes Flutter/Skia games stuck loading) |
+| `0011-hwc-present-framebuffer-after-color-layers.patch` | Desktop windows keep updating when the bottom layer is a color layer (letterboxed games such as Roblox stayed on their splash screen until Alt+Tab) |
 
 **Where things are:**
 

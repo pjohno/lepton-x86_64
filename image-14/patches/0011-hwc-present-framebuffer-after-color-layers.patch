@@ -1,0 +1,76 @@
+Lepton: present the composited frame when the bottom layer is a color layer
+
+In the non-compositing modes (direct Wayland on a desktop), SurfaceFlinger's
+composited frame was attached at the first framebuffer layer, but hwc_set only
+visits layers that have a buffer. When that first layer was a color layer
+(letterbox bars, dim layers, splash backgrounds), the frame was never sent:
+the window kept its last image until a configure (Alt+Tab) forced a new one.
+Roblox's letterboxed sign-in screen showed only its white splash.
+
+Present at the first framebuffer layer that has a buffer (the target always
+has one). Also add a per-frame trace, off unless `setprop lepton.hwc.trace 1`.
+
+diff --git a/hwcomposer/hwcomposer.cpp b/hwcomposer/hwcomposer.cpp
+index 425c776..483640c 100644
+--- a/hwcomposer/hwcomposer.cpp
++++ b/hwcomposer/hwcomposer.cpp
+@@ -345,6 +345,10 @@ static void apply_surface_damage(hwc_layer_1 *hwc_layer, surface_context &surfac
+     });
+ }
+ 
++// Lepton: per-frame trace, enabled at run time with `setprop lepton.hwc.trace 1`.
++static unsigned lepton_trace_attached;
++static bool lepton_hwc_trace() { return property_get_bool("lepton.hwc.trace", false); }
++
+ static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pdev, hwc_layer_1 *hwc_layer, size_t hwc_layer_index, surface_context &surface_context, buffer *buf = nullptr) {
+     constexpr int acquireWarningMS = 100;
+     int res = -1;
+@@ -361,6 +365,7 @@ static int apply_hwc_layer_to_surface_context(waydroid_hwc_composer_device_1 *pd
+     hwc_layer->releaseFenceFd = -1;
+ 
+     surface_context.attach_buffer(*buf);
++    ++lepton_trace_attached;
+     apply_surface_damage(hwc_layer, surface_context);
+     surface_context.set_buffer_transform(hwc_transform_to_buffer_transform(hwc_layer->transform));
+     // Scaling can only be supported correctly with wp_viewport
+@@ -482,6 +487,21 @@ static int hwc_set(struct hwc_composer_device_1* dev,size_t numDisplays,
+ 
+     mode->post_processing(pdev, contents);
+ 
++    if (lepton_hwc_trace()) {
++        static unsigned long frame;
++        std::string layers;
++        for (size_t l = 0; l < contents->numHwLayers; l++) {
++            const auto &layer = contents->hwLayers[l];
++            char item[48];
++            snprintf(item, sizeof item, " %zu:%d%s%s", l, layer.compositionType,
++                     layer.handle ? "" : "/nobuf", (layer.flags & HWC_IS_CURSOR_LAYER) ? "/cursor" : "");
++            layers += item;
++        }
++        ALOGI("Lepton trace frame %lu: windows=%zu attached=%u layers[type]:%s",
++              ++frame, pdev->display->windows.size(), lepton_trace_attached, layers.c_str());
++    }
++    lepton_trace_attached = 0;
++
+     for (auto& [key, window] : pdev->display->windows) {
+         if (window->input_region) {
+             wl_surface_set_input_region(window->surface, window->input_region);
+diff --git a/hwcomposer/modes/waydroid_mode_impl.h b/hwcomposer/modes/waydroid_mode_impl.h
+index 000b388..c0eb712 100644
+--- a/hwcomposer/modes/waydroid_mode_impl.h
++++ b/hwcomposer/modes/waydroid_mode_impl.h
+@@ -138,7 +138,13 @@ class non_compositing_window_mode : public virtual waydroid_mode {
+     int setup_set(waydroid_hwc_composer_device_1 *, hwc_display_contents_1_t *contents) override {
+         for (size_t i = 0; i < contents->numHwLayers; ++i) {
+             auto& layer = contents->hwLayers[i];
+-            if (m_draw_framebuffer_at == UNSET_VALUE
++            // hwc_set calls handle_layer only for layers with a buffer, never
++            // for cursor layers. Choosing a color layer (letterbox, dim,
++            // splash background: no handle) here meant the composited frame
++            // was never presented, and the window kept a stale image until a
++            // configure forced a new one. The target always has a buffer.
++            if (m_draw_framebuffer_at == UNSET_VALUE && layer.handle
++                && !(layer.flags & HWC_IS_CURSOR_LAYER)
+                 && (layer.compositionType == HWC_FRAMEBUFFER || layer.compositionType == HWC_FRAMEBUFFER_TARGET)) {
+                 m_draw_framebuffer_at = i;
+             }
