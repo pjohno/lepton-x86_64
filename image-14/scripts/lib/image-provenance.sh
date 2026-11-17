@@ -79,11 +79,35 @@ image_source_status() (
             [[ "$expected" == "$src" ]] || rm -rf -- "$expected"
         fi
     done
+    # Patches to one project can build on each other (0013 changes a file 0004
+    # creates), so check each project's patches as a stack: reverse them
+    # newest first in a scratch copy of only the files they touch.
+    local -a projects=() stack_patches=()
+    local stack file i
     for entry in "${LEPTON_CUSTOM_PATCHES[@]}"; do
-        project="$aosp/${entry%%|*}" patch="$repo/image-14/patches/${entry#*|}"
-        if ! git -C "$project" apply --reverse --check "$patch" >/dev/null 2>&1; then
-            patches=missing; patch_problems+=("${entry#*|}")
-        fi
+        [[ " ${projects[*]} " == *" ${entry%%|*} "* ]] || projects+=("${entry%%|*}")
+    done
+    for project in "${projects[@]}"; do
+        stack_patches=()
+        for entry in "${LEPTON_CUSTOM_PATCHES[@]}"; do
+            if [[ "${entry%%|*}" == "$project" ]]; then stack_patches+=("${entry#*|}"); fi
+        done
+        stack="$(mktemp -d)"
+        for patch in "${stack_patches[@]}"; do
+            while IFS=$'\t' read -r _ _ file; do
+                if [[ -f "$aosp/$project/$file" ]]; then
+                    mkdir -p -- "$stack/$(dirname -- "$file")"
+                    cp -a -- "$aosp/$project/$file" "$stack/$file"
+                fi
+            done < <(git apply --numstat "$repo/image-14/patches/$patch" 2>/dev/null)
+        done
+        for ((i = ${#stack_patches[@]} - 1; i >= 0; i--)); do
+            if ! git -C "$stack" apply --no-index --reverse \
+                    "$repo/image-14/patches/${stack_patches[i]}" >/dev/null 2>&1; then
+                patches=missing; patch_problems+=("${stack_patches[i]}")
+            fi
+        done
+        rm -rf -- "$stack"
     done
     printf 'Image inputs: %s\n' "$inputs"
     printf 'Copied folders: %s%s\n' "$trees" "${tree_problems[*]:+ (${tree_problems[*]})}"
