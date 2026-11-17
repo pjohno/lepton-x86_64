@@ -106,6 +106,11 @@ fi
 # Prints the main screen as "physical_w physical_h logical_w logical_h", with
 # rotation applied (the Deck's panel is 800x1280, rotated) and scale for logical.
 desktop_screen_size() {
+    local size
+    size="$(kde_screen_size)" && [[ -n "$size" ]] || size="$(gnome_screen_size)" || return 1
+    [[ -n "$size" ]] && printf '%s\n' "$size"
+}
+kde_screen_size() {
     command -v kscreen-doctor >/dev/null 2>&1 || return 1
     kscreen-doctor -j 2>/dev/null | python3 -c '
 import json, sys
@@ -118,6 +123,33 @@ for o in outputs:
         if o.get("rotation") in (2, 8):  # left / right: portrait panel
             w, h = h, w
         scale = float(o.get("scale") or 1) or 1
+        print(w, h, int(w / scale), int(h / scale))
+        break
+' 2>/dev/null
+}
+# GNOME (and other Mutter desktops): the primary logical monitor's current mode
+# from Mutter's DisplayConfig D-Bus API, in the same format. busctl comes with
+# systemd, so no extra package is needed. Without this, GNOME fell back to
+# 1024x640 and LEPTON_DESKTOP_FULLSCREEN=1 stretched that over the screen.
+gnome_screen_size() {
+    command -v busctl >/dev/null 2>&1 || return 1
+    busctl --user --json=short call org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfig \
+        org.gnome.Mutter.DisplayConfig GetCurrentState 2>/dev/null | python3 -c '
+import json, sys
+_, monitors, logical, _ = json.load(sys.stdin)["data"]
+modes = {}
+for spec, monitor_modes, _ in monitors:
+    for mode in monitor_modes:
+        if mode[6].get("is-current", {}).get("data"):
+            modes[spec[0]] = (mode[1], mode[2])
+logical.sort(key=lambda l: not l[4])  # the primary monitor first
+for _, _, scale, transform, _, specs, _ in logical:
+    mode = next((modes[s[0]] for s in specs if s[0] in modes), None)
+    if mode:
+        w, h = mode
+        if transform % 2:  # 90 or 270 degrees (also flipped): portrait
+            w, h = h, w
+        scale = float(scale or 1) or 1
         print(w, h, int(w / scale), int(h / scale))
         break
 ' 2>/dev/null
