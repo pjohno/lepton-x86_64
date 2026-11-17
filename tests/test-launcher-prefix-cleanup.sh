@@ -44,7 +44,7 @@ case "$1 ${2:-}" in
     "container exists")
         [[ -f "$STUB_DIR/exists-status" ]] && exit "$(cat "$STUB_DIR/exists-status")"
         exit 1 ;;
-    "inspect -f") cat "$STUB_DIR/label" 2>/dev/null ;;
+    "inspect -f") cat "$STUB_DIR/label" 2>/dev/null; exit $? ;;
 esac
 exit 0
 EOF
@@ -133,10 +133,26 @@ status=0; run_start "LEPTON_PREFIX=$work/user-prefix" || status=$?
 [[ "$status" == 1 && -f "$work/user-prefix/marker" ]] || fail 'user-supplied prefix removed'
 assert_profile 'supplied prefix'
 
+# TMPDIR must not change the location of launcher-owned prefixes.
+reset_stubs
+mkdir -p "$work/alternate-tmp"
+status=0; run_start "TMPDIR=$work/alternate-tmp" || status=$?
+[[ "$status" == 1 ]] || fail 'TMPDIR: wrong exit status'
+assert_gone 'TMPDIR'
+[[ -z "$(ls -A "$work/alternate-tmp")" ]] || fail 'TMPDIR: unexpected files'
+
+# An exported ownership claim cannot make an inherited prefix ours.
+reset_stubs
+inherited="$(mktemp -d -p /tmp lepton-context.XXXXXXXXXX)"
+echo "$inherited" >> "$work/all-prefixes"
+echo keep > "$inherited/marker"
+status=0; run_start "LEPTON_PREFIX=$inherited" "LEPTON_PREFIX_OWNED=$inherited" || status=$?
+[[ "$status" == 1 && -f "$inherited/marker" ]] || fail 'forged ownership: inherited prefix removed'
+
 # 5. A container given this prefix may still use it: keep it. A container of
 #    the same name with another prefix, or an unknown state, decide as below.
 lib_fns() {
-    for fn in println remove_prefix_dir remove_owned_prefix_after_failed_start; do
+    for fn in println create_prefix profile_has_no_mounts remove_prefix remove_prefix_dir remove_owned_prefix; do
         sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/"*.sh
     done
 }
@@ -145,16 +161,51 @@ check_exists_case() {
     dir="$(mktemp -d -p /tmp lepton-context.XXXXXXXXXX)"; echo "$dir" >> "$work/all-prefixes"
     echo "$status" > "$work/exists-status"
     if [[ "$label" == same ]]; then echo "$dir" > "$work/label"; else echo "$label" > "$work/label"; fi
+    [[ "$label" != inspection-failure ]] || rm -f "$work/label"
     "${lepton_env[@]}" LEPTON_CONTEXT=bad.apk LEPTON_PREFIX_OWNED="$dir" \
-        bash -c "set -euo pipefail; print() { printf '%s' \"\$*\"; }; $(lib_fns); remove_owned_prefix_after_failed_start" 2>> "$work/out"
+        bash -c "set -euo pipefail; print() { printf '%s' \"\$*\"; }; $(lib_fns); remove_owned_prefix" 2>> "$work/out"
     if [[ "$expect" == kept ]]; then [[ -d "$dir" ]] || fail "container status $status/$label: prefix removed"
     else [[ ! -e "$dir" ]] || fail "container status $status/$label: prefix kept"; fi
 }
 reset_stubs
 check_exists_case 0 same kept
+check_exists_case 0 '' kept
+check_exists_case 0 '<no value>' kept
+# No label file makes the inspect mock fail.
+check_exists_case 0 inspection-failure kept
 check_exists_case 0 /tmp/lepton-context.other removed
 check_exists_case 125 '' kept
 check_exists_case 1 '' removed
+
+# Deletion requires ownership even when remove_prefix_dir is called directly.
+reset_stubs
+p="$(mktemp -d -p /tmp lepton-context.XXXXXXXXXX)"; echo "$p" >> "$work/all-prefixes"
+"${lepton_env[@]}" LEPTON_CONTEXT=bad.apk LEPTON_PREFIX="$p" bash -c "set -euo pipefail; $(lib_fns); remove_prefix_dir \"\$LEPTON_PREFIX\""
+[[ -d "$p" ]] || fail 'direct cleanup: unowned prefix removed'
+
+# Failed allocation must not be hidden by the export builtin under set -e.
+status=0
+"${lepton_env[@]}" bash -c "set -euo pipefail; $(lib_fns); mktemp() { return 42; }; create_prefix; exit 99" || status=$?
+[[ "$status" == 42 ]] || fail 'mktemp failure: status was hidden'
+
+# Mount and symlink guards remain effective for owned directories.
+for guard in mounted mount-error symlink noncanonical; do
+    reset_stubs
+    p="$(mktemp -d -p /tmp lepton-context.XXXXXXXXXX)"; echo "$p" >> "$work/all-prefixes"
+    echo keep > "$p/marker"
+    case "$guard" in
+        mounted) mock='findmnt() { echo "$LEPTON_PREFIX overlay"; }' ;;
+        mount-error) mock='findmnt() { return 1; }' ;;
+        symlink)
+            rm -- "$p/marker"
+            rmdir "$p"
+            ln -s "$work/user-prefix" "$p"; mock=':' ;;
+        noncanonical) p="$p/../$(basename "$p")"; mock=':' ;;
+    esac
+    "${lepton_env[@]}" LEPTON_CONTEXT=bad.apk LEPTON_PREFIX="$p" LEPTON_PREFIX_OWNED="$p" bash -c "set -euo pipefail; print() { printf '%s' \"\$*\"; }; $(lib_fns); $mock; remove_baked_workdirs() { :; }; remove_prefix" 2>> "$work/out"
+    [[ -e "$p/marker" ]] || fail "$guard: prefix guard failed"
+    [[ "$guard" != symlink ]] || rm -- "$p"
+done
 
 # 6. Mocked successful launch: teardown (not the early-exit trap) removes the
 #    prefix, exactly once; a start_container failure after the container was
@@ -169,7 +220,9 @@ start_container() {
 }
 app_install_needed() { return 1; }; auto_install_apps() { :; }
 wait_for_container() { [[ -d "$LEPTON_PREFIX" ]] && echo 'prefix present while running' >> "$STUB_DIR/events"; }
-kill_container() { echo 1 > "$STUB_DIR/exists-status"; }; cleanup_container() { :; }
+kill_container() { :; }; cleanup_container() {
+    [[ -n "${STUB_RETAIN_CONTAINER:-}" ]] || echo 1 > "$STUB_DIR/exists-status"
+}
 remove_baked_workdirs() { echo teardown >> "$STUB_DIR/events"; }
 dump_logcat() { :; }; ndk_note_early_exit() { :; }
 EOF
@@ -183,10 +236,35 @@ assert_gone 'mocked launch'
 assert_profile 'mocked launch'
 
 reset_stubs
+status=0; run_start "TMPDIR=$work/alternate-tmp" STUB_APP_ID=com.example.game STUB_ACTIVITY=.Main || status=$?
+[[ "$status" == 0 ]] || fail 'successful TMPDIR launch failed'
+assert_gone 'successful TMPDIR launch'
+
+# Successful launches also preserve supplied prefixes, including forged ownership.
+for supplied in "$inherited" "$work/user-prefix"; do
+    reset_stubs
+    status=0; run_start "LEPTON_PREFIX=$supplied" "LEPTON_PREFIX_OWNED=$supplied" STUB_APP_ID=com.example.game STUB_ACTIVITY=.Main || status=$?
+    [[ "$status" == 0 && -f "$supplied/marker" ]] || fail 'successful launch: supplied prefix removed'
+    assert_profile 'successful supplied prefix'
+done
+
+reset_stubs
 status=0; run_start STUB_APP_ID=com.example.game STUB_ACTIVITY=.Main STUB_START_FAILS=1 || status=$?
 (( status != 0 )) || fail 'failed container start: launch succeeded'
 p="$(made_prefix)"
 [[ -d "$p" ]] || fail 'failed container start: prefix of an existing container removed'
 grep -q 'Temporary prefix retained' "$work/out" || fail 'failed container start: no retention message'
 
-echo 'PASS: launcher prefix cleanup: invalid APK, failing command, SIGINT and SIGTERM remove the temporary prefix with status kept; inherited, user and in-use prefixes kept; profile kept; normal teardown removes it once'
+# Normal teardown must retain prefixes too when removal/inspection is uncertain.
+for retained in 0 125; do
+    reset_stubs
+    status=0; run_start STUB_APP_ID=com.example.game STUB_ACTIVITY=.Main STUB_RETAIN_CONTAINER=1 || status=$?
+    [[ "$status" == 0 && -d "$(made_prefix)" ]] || fail 'normal teardown: in-use prefix removed'
+    # Exercise the same normal-teardown entry point with an inspection error.
+    echo "$retained" > "$work/exists-status"
+    p="$(made_prefix)"
+    "${lepton_env[@]}" LEPTON_CONTEXT=bad.apk LEPTON_PREFIX="$p" LEPTON_PREFIX_OWNED="$p" bash -c "set -euo pipefail; print() { printf '%s' \"\$*\"; }; $(lib_fns); remove_baked_workdirs() { :; }; remove_prefix" 2>> "$work/out"
+    [[ -d "$p" ]] || fail 'normal teardown: uncertain container prefix removed'
+done
+
+echo 'PASS: prefix ownership, allocation failure, TMPDIR, signals, successful/failed launch, container uncertainty, mount/symlink guards and profile preservation (mocked lifecycle)'

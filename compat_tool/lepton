@@ -199,7 +199,7 @@ case "${COMMAND}" in
             trap - EXIT ERR
             trap "" INT TERM PIPE
             set +e
-            remove_owned_prefix_after_failed_start
+            remove_owned_prefix
             exit "${STATUS}"
         }
         trap "cleanup_failed_start" EXIT
@@ -610,6 +610,7 @@ EOF
         cp -r /proc/$(container_pid)/root/data/bootchart/* "$(logcat_debug_dir)/"
         kill_container "${LEPTON_CONTEXT}" --quiet
 
+        cleanup_container
         remove_prefix
         remove_context "${LEPTON_CONTEXT}"
 

@@ -38,10 +38,15 @@ function steamos_devmode_enabled()
     [[ -e "/etc/steamos-devkit-enabled" ]]
 }
 
+# Never trust an ownership claim inherited from the caller's environment.
+LEPTON_PREFIX_OWNED=
+export -n LEPTON_PREFIX_OWNED
+
 function create_prefix()
 {
     if [[ -z "${LEPTON_PREFIX:-}" ]]; then
-        export LEPTON_PREFIX=$(mktemp -d -t lepton-context.XXXXXXXXXX)
+        LEPTON_PREFIX=$(mktemp -d -p /tmp lepton-context.XXXXXXXXXX) || return
+        export LEPTON_PREFIX
         # Deliberately not exported: only the invocation that made the folder
         # owns it. An inherited LEPTON_PREFIX is never "ours".
         LEPTON_PREFIX_OWNED="${LEPTON_PREFIX}"
@@ -274,45 +279,47 @@ function remove_prefix()
 {
     if [[ -n "${LEPTON_PREFIX:-}" ]]; then
         remove_baked_workdirs
-        remove_prefix_dir "$LEPTON_PREFIX"
+        remove_owned_prefix
     fi
 }
 
 function remove_prefix_dir()
 {
-    local DIR="$1"
-    # Only delete launcher-created temporary directories, never an arbitrary
-    # inherited path or a symlink (including a parent symlink).
-    if [[ ! -L "$DIR" && "$(realpath -m -- "$DIR")" == "$DIR" && "$DIR" =~ ^/tmp/lepton-context\.[A-Za-z0-9]+$ ]]; then
-        rm -rf --one-file-system -- "$DIR" || println "WARNING: temporary prefix cleanup failed" >&2
-    else
+    local DIR="$1" EXISTS_STATUS=0 LABEL
+    # Ownership is process-local, not inferred from a name or container label.
+    [[ -n "${LEPTON_PREFIX_OWNED:-}" && "$DIR" == "$LEPTON_PREFIX_OWNED" ]] || return 0
+    [[ -e "$DIR" || -L "$DIR" ]] || return 0
+    if [[ -L "$DIR" || "$(realpath -m -- "$DIR")" != "$DIR" || ! "$DIR" =~ ^/tmp/lepton-context\.[A-Za-z0-9]+$ ]]; then
         println "WARNING: retaining unrecognised prefix: $DIR" >&2
+        return 0
     fi
-}
-
-# For a start that ends before teardown is armed (die, set -e or a signal):
-# delete the temporary prefix this invocation created, unless a container
-# could be using it. Persistent profiles and compatdata are never touched.
-function remove_owned_prefix_after_failed_start()
-{
-    local DIR="${LEPTON_PREFIX_OWNED:-}" EXISTS_STATUS=0 LABEL
-    LEPTON_PREFIX_OWNED=
-    [[ -n "$DIR" ]] && [[ -e "$DIR" || -L "$DIR" ]] || return 0
+    # A stopped container can still retain mounts. Fail closed on Podman errors.
     podman container exists "lepton-${LEPTON_CONTEXT}" >/dev/null 2>&1 || EXISTS_STATUS=$?
     case "$EXISTS_STATUS" in
         1) ;;
         0)
-            # A container from another launch may share the context name;
-            # only one that was given this prefix keeps it alive.
             if ! LABEL="$(podman inspect -f '{{ index .Config.Labels "PREFIX" }}' "lepton-${LEPTON_CONTEXT}" 2>/dev/null)" ||
-               [[ "$LABEL" == "$DIR" ]]; then
+               [[ "$LABEL" != /* ]] ||
+               ! LABEL="$(realpath -m -- "$LABEL")" || [[ "$LABEL" == "$DIR" ]]; then
                 println "Temporary prefix retained (container lepton-${LEPTON_CONTEXT} may use it): $DIR" >&2
                 return 0
             fi
             ;;
         *) println "WARNING: cannot inspect lepton-${LEPTON_CONTEXT}; temporary prefix retained: $DIR" >&2; return 0 ;;
     esac
-    remove_prefix_dir "$DIR"
+    if ! profile_has_no_mounts "$DIR"; then
+        println "WARNING: temporary prefix may be mounted; retained: $DIR" >&2
+        return 0
+    fi
+    rm -rf --one-file-system -- "$DIR" || println "WARNING: temporary prefix cleanup failed" >&2
+}
+
+# Shared by failed-start EXIT cleanup and normal teardown. Only directories
+# created in this process qualify; persistent profiles are handled separately.
+function remove_owned_prefix()
+{
+    [[ -z "${LEPTON_PREFIX_OWNED:-}" ]] || remove_prefix_dir "$LEPTON_PREFIX_OWNED"
+    LEPTON_PREFIX_OWNED=
 }
 
 function prefix()
@@ -330,23 +337,23 @@ function prefix()
 
 function data_mount_path()
 {
-    print "$(get_baked_app_data_dir $@)/data_overlay"
+    print "$(get_baked_app_data_dir "$@")/data_overlay"
 }
 
 # The workdir must be in the same filesystem as the upperdir
 function data_workdir()
 {
-    print "$(get_baked_app_data_dir $@)/data_workdir"
+    print "$(get_baked_app_data_dir "$@")/data_workdir"
 }
 
 function app_workdir()
 {
-    print "$(get_baked_app_data_dir $@)/app_workdir"
+    print "$(get_baked_app_data_dir "$@")/app_workdir"
 }
 
 function app_datadir()
 {
-    print "$(get_baked_app_data_dir $@)/app_overlay"
+    print "$(get_baked_app_data_dir "$@")/app_overlay"
 }
 
 function setup_container()

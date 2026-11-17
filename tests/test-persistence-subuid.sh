@@ -3,7 +3,7 @@ set -Eeuo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 work=$(mktemp -d /tmp/lepton-subuid.XXXXXXXX)
 trap 'podman unshare rm -rf -- "$work"' EXIT
-for fn in profile_has_no_mounts clear_baked_app_data remove_baked_workdirs remove_prefix remove_prefix_dir; do
+for fn in profile_has_no_mounts clear_baked_app_data remove_baked_workdirs remove_prefix remove_prefix_dir remove_owned_prefix; do
  eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/liblepton.sh")"
 done
 print() { printf '%s' "$*"; }
@@ -21,6 +21,7 @@ if rm -rf -- "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/user/0/game" 2> "$work/
 fi
 [[ "$(podman unshare sha256sum "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/user/0/game/save")" == "$before" ]]
 LEPTON_PREFIX=$(mktemp -d /tmp/lepton-context.XXXXXXXX)
+LEPTON_PREFIX_OWNED=$LEPTON_PREFIX
 remove_prefix
 [[ "$(podman unshare sha256sum "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/user/0/game/save")" == "$before" ]]
 [[ "$(podman unshare stat -c %u:%g "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/user/0/game/save")" == 10000:10000 ]]
