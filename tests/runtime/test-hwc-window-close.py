@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SUBMODULE = ROOT / 'image-14/android_hardware_waydroid'
@@ -40,29 +41,89 @@ def aidl_method_index(aidl_text):
     """Declaration order of IActivityTaskManager methods (AIDL's default codes)."""
     text = re.sub(r'/\*.*?\*/', '', aidl_text, flags=re.S)
     text = re.sub(r'//[^\n]*', '', text)
+    # Hide annotation strings before removing annotations, including nested
+    # Java annotation calls inside JavaPassthrough's quoted argument.
+    text = re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
+    text = re.sub(r'@\w+(?:\([^()]*\))?', '', text)
     body = text[text.index('interface IActivityTaskManager'):]
-    body = body[body.index('{') + 1:]
+    body = body[body.index('{') + 1:body.rindex('}')]
     names = []
     for decl in body.split(';'):
-        decl = re.sub(r'@\w+(\([^)]*\))?', '', decl).strip()
-        match = re.search(r'(\w+)\s*\(', decl)
-        if match and not decl.startswith('const') and '=' not in decl.split('(')[0]:
-            names.append(match.group(1))
+        decl = decl.strip()
+        if not decl or decl.startswith('const '):
+            continue
+        match = re.fullmatch(r'[\w.<>,\[\] ?]+\s+(\w+)\s*\([^;]*\)', decl)
+        if not match:
+            # Do not silently ignore a changed AIDL syntax (e.g. explicit IDs)
+            # and accidentally certify the wrong declaration order.
+            raise ValueError(f'Unsupported AIDL declaration: {decl}')
+        name = match.group(1)
+        if name in names:
+            raise ValueError(f'Duplicate AIDL method: {name}')
+        names.append(name)
     return {name: index for index, name in enumerate(names)}
 
 
 def prepared_aosp():
-    candidates = [os.environ.get('LEPTON_AOSP_DIR', '')]
+    relative = 'frameworks/base/core/java/android/app/IActivityTaskManager.aidl'
+    explicit = os.environ.get('LEPTON_AOSP_DIR')
+    if explicit:
+        aidl = Path(explicit) / relative
+        if not aidl.is_file():
+            raise FileNotFoundError(f'Explicit LEPTON_AOSP_DIR has no {relative}: {explicit}')
+        return aidl
+    candidates = []
     config = ROOT / '.build-env'
     if config.is_file():
-        match = re.search(r'^LEPTON_OUTPUT_DIR="?([^"\n]+)"?', config.read_text(), flags=re.M)
-        if match:
-            candidates.append(os.path.join(match.group(1), 'aosp'))
+        # Read literal paths only; never execute a developer's shell config.
+        values = dict(re.findall(r'^LEPTON_(AOSP|OUTPUT)_DIR=["\']?([^"\'\n]+)["\']?$',
+                                 config.read_text(), flags=re.M))
+        if 'AOSP' in values:
+            candidates.append(values['AOSP'])
+        if 'OUTPUT' in values:
+            candidates.append(os.path.join(values['OUTPUT'], 'aosp'))
     for candidate in candidates:
-        aidl = Path(candidate or '/nonexistent') / 'frameworks/base/core/java/android/app/IActivityTaskManager.aidl'
+        aidl = Path(candidate) / relative
         if aidl.is_file():
             return aidl
     return None
+
+
+class AidlOrderTests(unittest.TestCase):
+    """Offline parser checks: no submodule, AOSP checkout or downloads needed."""
+
+    def test_order_annotations_comments_and_constants(self):
+        source = '''
+        interface IActivityTaskManager {
+            const int UNUSED = 42;
+            // fakeMethod();
+            @JavaPassthrough(annotation="@annotation.Call(nested())")
+            void before(in List<String> values);
+            /* void alsoFake(); */
+            void setFocusedTask(int id);
+            boolean removeTask(int id);
+            oneway void removeAllVisibleRecentTasks();
+        }
+        '''
+        index = aidl_method_index(source)
+        self.assertEqual(index, dict(before=0, setFocusedTask=1, removeTask=2,
+                                     removeAllVisibleRecentTasks=3))
+        changed = aidl_method_index(source.replace('void before', 'void inserted(); void before'))
+        self.assertEqual(changed['removeTask'], index['removeTask'] + 1)
+
+    def test_no_checkout_is_optional_but_explicit_missing_checkout_fails(self):
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(Path, 'is_file', return_value=False):
+            self.assertIsNone(prepared_aosp())
+        with tempfile.TemporaryDirectory() as empty:
+            with mock.patch.dict(os.environ, {'LEPTON_AOSP_DIR': empty}):
+                with self.assertRaises(FileNotFoundError):
+                    prepared_aosp()
+
+    def test_explicit_transaction_ids_and_unknown_syntax_fail_closed(self):
+        for declaration in ('void removeTask(int id) = 42;', 'unrecognised;',
+                            'void same(); void same();'):
+            with self.subTest(declaration=declaration), self.assertRaises(ValueError):
+                aidl_method_index('interface IActivityTaskManager {' + declaration + '}')
 
 
 class WindowCloseTests(unittest.TestCase):
@@ -93,7 +154,7 @@ class WindowCloseTests(unittest.TestCase):
         index = aidl_method_index(aidl.read_text())
         patched = transaction_codes((self.tree / BINDER).read_text())
         for name in METHODS:
-            self.assertEqual(patched[name][0], index[name], f'{name} in {aidl}')
+            self.assertEqual(patched[name], [index[name]] * 2, f'{name} in {aidl}')
 
     def test_close_decision(self):
         cpp = self.tree / 'test.cpp'

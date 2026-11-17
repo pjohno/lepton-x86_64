@@ -328,7 +328,11 @@ user session (`systemctl --user is-system-running`) and `/run/user/UID`. On
 Fedora: `sudo dnf install podman fuse-overlayfs weston attr rsync util-linux
 procps-ng shadow-utils`. Software rendering is the default and needs no GPU;
 `--rendering amd` uses RADV and `--rendering intel` uses ANV (Intel Gen9 or
-newer). Hardware modes require the matching staged driver and host GPU.
+newer, experimental). Hardware modes require the matching staged driver and host
+GPU; Intel needs `vendor/lib64/hw/vulkan.intel.so` in the base image. Injection
+of NDK/GApps/Widevine does not add Intel graphics drivers or Android patches
+0012/0013. Repackaging keeps the original Android components, so a launcher-only
+update cannot supply their window-close or AMD allocator fixes.
 The helper checks staged rootfs ACLs read-only and removes inherited ACLs
 only from its newly created empty private storage directories.
 

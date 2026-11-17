@@ -1,6 +1,11 @@
 # Release integration validation
 
-Branch: `feature/release-integration`, based on `origin/main` at
+**Current status (17 November 2026):** integration is merged into `main` through
+PR #31, followed by the fixes in PR #32. Release hardware validation remains
+outstanding; the existing candidate bundle is the reference for those tests.
+The review and automated results below record the integration work historically.
+
+Historical branch: `feature/release-integration`, based on `origin/main` at
 `d4641cc`. The following branches were merged in order with separate,
 non-squashed merge commits:
 
@@ -105,10 +110,12 @@ The real Google-input injection test also requires `LEPTON_TEST_BASE_STAGE`
 and `LEPTON_TEST_GOOGLE_INPUTS` and was skipped. There was no full AOSP image
 build or real isolated Android sysbake execution.
 
-## Required hardware validation before main
+## Required hardware validation before release
 
-Ready to enter hardware validation: the automated suite is green. This is
-not release sign-off. Keep the PR in draft until these checks are recorded:
+The integration's recorded automated suite was green; this is not release
+sign-off. Integration is already on `main`. Record these hardware checks against
+the candidate before approving a release; the build/sysbake items describe
+validation of the candidate's existing artifacts, not a request to replace them:
 
 1. Build the combined Android image on the supported Ubuntu 26 builder. Verify
    Mesa host-tool bootstrap and both `vulkan.radeon.so` and `vulkan.intel.so`.
@@ -133,4 +140,5 @@ not release sign-off. Keep the PR in draft until these checks are recorded:
    private graphroot/runroot, ACL rejection and unchanged default Podman data.
    Validate hardware rendering with the headless Pixman compositor in practice.
 
-Do not merge into main or tag a release until the hardware results are reviewed.
+Integration has merged. Do not tag a release until the release hardware results
+are reviewed; automated fixtures do not establish live hardware compatibility.

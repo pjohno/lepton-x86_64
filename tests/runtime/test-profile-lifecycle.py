@@ -28,6 +28,7 @@ class ProfileTests(unittest.TestCase):
 case_root=$1
 LEPTON_CONTEXT=dev
 LEPTON_PREFIX=$(mktemp -d /tmp/lepton-context.XXXXXXXX)
+LEPTON_PREFIX_OWNED=$LEPTON_PREFIX
 printf '%s' "$LEPTON_PREFIX" > "$case_root/prefix-path"
 podman() {
     case "$1 ${2:-}" in

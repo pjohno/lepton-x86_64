@@ -43,6 +43,17 @@ for `local-desktop`. Headless/SSH installs without a usable Wayland socket get
 a warning: games still require Steam to run in a Wayland desktop session,
 and the existing direct launcher validates the socket at launch.
 
+AMD RADV is the established graphics path. Intel Gen9+ ANV/Iris requires an
+Intel-enabled image with `vendor/lib64/hw/vulkan.intel.so` and remains experimental.
+GPU detection prefers AMD, then Intel; `LEPTON_VULKAN_DRIVER=radeon|intel`
+overrides it. Unsupported hardware can try `LEPTON_FORCE_SOFTWARE=true`.
+
+With Android patch 0012, closing the direct Wayland window requests task removal
+and launcher teardown. Save in-game first; closing is no guarantee that progress
+was written. Patches 0012 and 0013 (AMD Codec2 allocator) require an Android image
+containing the fixes. Host-script replacement alone cannot add them. Media audio
+and remaining video limitations are described in [GAPPS.md](../GAPPS.md#media-decoder-selection).
+
 ### One-time SELinux setup (Fedora)
 
 Fedora and other systems with SELinux **enforcing** need Lepton's small policy

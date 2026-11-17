@@ -90,8 +90,10 @@ desktop icon); a replaced install holding saved Google profiles is kept as a
 Google games use the **normal Steam launch path**, like every other game. Their
 installed app, saved data and Google sign-in live in the shortcut's Steam
 compatdata, so in **Properties > Compatibility** they can be switched to another
-GApps install and keep the sign-in (a different Android build may make Lepton
-reinstall the app; see INSTALL-STEAM-DECK.md, "Game data between launches").
+GApps install and keep the sign-in when the runtime fingerprint matches. A
+different Android build stops with a profile-preservation message; select the
+original tool or explicitly reset after backup (see
+[Game data between launches](INSTALL-STEAM-DECK.md#game-data-between-launches)).
 Lepton refuses to start them on a tool without Google services and says so.
 Split bundles (`.apkm`) are unpacked once into compatdata; ARM64-only games
 need an install with ARM translation (NDK). During sign-in the Play Store may
@@ -106,8 +108,10 @@ its audio output does not reach the host. Start from the Deck's Wayland Desktop
 Mode, without sudo, for the steps below. Place the
 game/APKM outside the installation directory. For the tested native Play Games APKM:
 
-The runner uses the default (most recently installed) bundle, with AMD rendering
-on the desktop; pass `--stage-dir DIR` to select another installation.
+The runner uses the default (most recently installed) bundle and its saved
+rendering selection on the desktop (AMD if no selection is saved); pass
+`--stage-dir DIR` to select another installation, and `--rendering intel` for
+an Intel-enabled bundle on Gen9+ hardware (experimental).
 
 ```bash
 ~/.local/bin/lepton-run-apk --profile playgames-native --setup-only \
@@ -177,9 +181,37 @@ Play Games installed and ran on the Deck using the persistent desktop runner.
 The Deck Gaming Mode shortcut was prepared but has not been confirmed working.
 
 Kingdom and Crossy Road are still unresolved ARM64 cases. Google login alone is
-not evidence those games work. Codec2 experiments remain opt-in (`--codec2`):
-decoders enumerate, but AVC output hits a gralloc YCbCr layout failure; YouTube
-media playback is not fixed. The default codec setting has not been changed.
+not evidence those games work. AVC output still hits a gralloc YCbCr layout
+failure; YouTube video playback is not established.
+
+## Media decoder selection
+
+Ordinary game audio that mixes PCM is independent of Android's Codec2 media
+decoders (MediaPlayer, ExoPlayer and WebView audio). Since PR #32, Android 14
+x86_64 launcher selection is automatic:
+
+| Mode | Automatic selection | Effect |
+| --- | --- | --- |
+| `blob` | AMD allocator containing patch 0013's marker, or software rendering | Enables Codec2 using gralloc BLOB/BUFFERQUEUE pools (`0xfc0000`), without host DMA-BUF heap access |
+| `heap` | Older AMD images or Intel, when the user has read/write access to the host DMA-BUF system heap | Enables Codec2 and mounts the host heap device |
+| `off` | No safe BLOB path and no usable heap; also non-x86_64 or API below 34 | Disables media decoders; ordinary PCM game audio is unaffected |
+
+Patch 0013 stops the AMD gbm_mesa allocator mapping Codec2 buffers at allocation.
+It requires an updated Android image; a launcher-only update cannot add it.
+Intel BLOB mapping remains unsupported, so Intel uses the heap fallback. Host
+permissions vary (often root-only on SteamOS). Missing heap access leaves media
+apps silent rather than forcing an unsafe allocator.
+
+`LEPTON_CODEC2=false` forces `off`. `LEPTON_CODEC2=true` forces experimental
+`blob` on Android 14 x86_64, bypassing the safety probe, and can crash older AMD
+allocators or fail on Intel. The diagnostic runner's `--codec2` uses this override;
+it is no longer needed for automatic selection. `blob`, `heap` and `off` are
+selected modes, not accepted values for `LEPTON_CODEC2`.
+
+Audio decode success does not establish AVC/video output or YouTube playback.
+Widevine L3 provisioning/licence/decryption evidence above is separate from
+application playback compatibility; service restrictions and decoder/output
+failures can still prevent playback.
 
 Validate without Android boot or network:
 

@@ -29,11 +29,16 @@ touchscreen, and keeps its saves between launches.
 - The **Android games** you want to play, as `.apk` files or split-APK bundles
   (`.apkm`).
 
-**Desktop PCs** with an **AMD GPU** and a **Wayland** desktop can install
-Lepton too, but this is experimental. On Fedora GNOME and KDE Plasma, games
-run full screen with mouse and keyboard input. The Android image only contains
-AMD graphics drivers, so other GPUs need slow software rendering (install with
-`--allow-non-amd`, launch with `LEPTON_FORCE_SOFTWARE=true %command%`). **Fedora and other
+**Desktop PCs** with a **Wayland** desktop can install Lepton too. On Fedora
+GNOME and KDE Plasma, games run full screen with mouse and keyboard input.
+
+Steam Deck / AMD RADV is the established hardware-accelerated path. Intel Gen9
+(Skylake) and newer have experimental ANV/Iris support **only in bundles containing
+`vendor/lib64/hw/vulkan.intel.so`**; published bundles may omit it. The launcher
+selects AMD first, then Intel, with `LEPTON_VULKAN_DRIVER=radeon|intel` overrides.
+Unsupported GPUs can try slow software rendering: install with `--allow-non-amd`
+and launch with `LEPTON_FORCE_SOFTWARE=true %command%`. Hardware support outside
+validated configurations remains experimental. **Fedora and other
 SELinux-enforcing systems** need a small SELinux policy module installed once,
 or Android never finishes starting: see
 [desktop setup](compat_tool/LOCAL-DESKTOP.md#one-time-selinux-setup-fedora).
@@ -89,6 +94,10 @@ installed APK no longer matches the game's file, Lepton stops with a message
 and keeps the data. It never resets data on its own
 ([details](INSTALL-STEAM-DECK.md#game-data-between-launches)).
 
+With patch 0012 in the Android image, closing the game's direct Wayland desktop
+window requests Android task removal and launcher teardown. Save in the game
+first: window closing does not guarantee unsaved progress has been written.
+
 ## Launch options
 
 Games need no launch options. These optional ones go in the shortcut's
@@ -117,10 +126,18 @@ Properties > Launch Options, followed by `%command%`:
   controllers connected before the game starts, each as a separate Android
   controller.
 - Saves kept between launches.
-- Audio and video playback (for example YouTube up to 1080p).
+- Ordinary game audio (games that mix their own PCM). Android media-decoder
+  audio through Codec2 is selected automatically: AMD images with patch 0013
+  use gralloc BLOB buffers without host heap access; older images and Intel
+  require accessible host DMA-BUF heap access, otherwise Codec2 stays off.
+  Software rendering can use BLOB buffers. AVC/video output problems remain;
+  YouTube video playback is not established ([media details](GAPPS.md#media-decoder-selection)).
 - Optional, in bundles you build yourself: Google Play services, ARM64
-  translation for ARM-only games, and Widevine protected video
+  translation for ARM-only games, and Widevine L3 DRM support
   ([GAPPS.md](GAPPS.md)).
+
+Widevine provisioning and decryption support do not guarantee application playback
+compatibility; decoder, video output and service restrictions still apply.
 
 Compatibility varies from game to game: see the [tested games](GAMES.md).
 
@@ -150,6 +167,7 @@ Compatibility varies from game to game: see the [tested games](GAMES.md).
 | [GAMES.md](GAMES.md) | Games tested with Lepton, and how to report one |
 | [BUILDING.md](BUILDING.md) | Building Android and the Deck bundles from source |
 | [GAPPS.md](GAPPS.md) | Optional Google Play services, ARM64 translation and Widevine bundles |
+| [CUSTOMIZING.md](CUSTOMIZING.md) | Customizing and repackaging bundles without an AOSP build |
 | [RELEASING.md](RELEASING.md) | Maintainers: publishing a GitHub release |
 | [FEDORA-DEBUGGING.md](FEDORA-DEBUGGING.md) | Testing APKs and debugging crashes on a Fedora build computer |
 | [compat_tool/README.md](compat_tool/README.md) | Valve's Lepton runtime documentation |
@@ -180,10 +198,15 @@ and resets Podman.
 | `0004-minigbm-gbm-mesa-driver.patch` | Real three-plane layout for YV12 buffers, so decoders can write frames |
 | `0007-eventhub-preserve-evdev-axes.patch` | Keeps real controllers' axis ranges |
 | `0008-inputreader-separate-steam-input-pads.patch` | Steam Input controllers appear as separate Android controllers |
+| `0009-hwc-local-wayland-fullscreen.patch` | Native fullscreen and output selection for direct Wayland desktops |
 | `0010-egl-hide-untranslatable-gl-extensions.patch` | Arm64 games under NDK translation don't see ANGLE GL extensions the translator can't forward (fixes Flutter/Skia games stuck loading) |
 | `0011-hwc-present-framebuffer-after-color-layers.patch` | Desktop windows keep updating when the bottom layer is a color layer (letterboxed games such as Roblox stayed on their splash screen until Alt+Tab) |
 | `0012-hwc-window-close-android14-task-codes.patch` | Closing the game's desktop window ends the game: the Waydroid task service used Android 13 binder codes, so on Android 14 the close removed nothing (also fixes per-task close/focus) |
 | `0013-minigbm-gbm-mesa-no-allocator-map.patch` | Music and video apps decode audio without host DMA-BUF heap access: the AMD allocator no longer crashes on Codec2 buffers allocated through gralloc (Valve's upstream approach) |
+
+Patches 0012 (window close) and 0013 (AMD allocator) change Android components.
+They require images containing those fixes; updating only the launcher cannot
+add them to an older rootfs. Patch 0013 does not resolve AVC/video output.
 
 **Where things are:**
 

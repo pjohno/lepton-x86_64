@@ -72,6 +72,15 @@ previous release before publishing.
 
 ## Launcher-only releases using a validated stage
 
+Before publishing, record the bundle's actual GPU HALs and image fixes in the
+release notes. Intel Gen9+ ANV/Iris requires `vendor/lib64/hw/vulkan.intel.so`
+and remains experimental; do not assume older releases include it. Android
+patches 0012 (direct Wayland window-close task removal) and 0013 (AMD Codec2
+allocator) require an image containing them. A launcher-only release cannot
+add these fixes to an old rootfs. Automatic Codec2 audio selection is separate
+from ordinary game audio and does not establish AVC/video or application
+playback compatibility, including Widevine applications.
+
 There are two kinds of release:
 
 | | Standard release | Launcher-only release |

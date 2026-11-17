@@ -11,15 +11,26 @@ supported by Valve.
 
 ## Supported hardware
 
-**Steam Deck** is the main target. Desktop PCs with an AMD GPU and a Wayland
-desktop can install this release, but desktop use is experimental (tested on
+**Steam Deck** is the main target. Desktop PCs with a Wayland desktop can
+install this release; desktop use is experimental (earlier tests on
 Fedora GNOME and KDE Plasma, with mouse and keyboard input). **Fedora and other
 SELinux-enforcing systems** need a one-time SELinux policy module, or Android
 never finishes starting: see
 [one-time SELinux setup](https://github.com/pjohno/lepton-x86_64/blob/main/compat_tool/LOCAL-DESKTOP.md#one-time-selinux-setup-fedora).
-The Android image contains AMD graphics drivers only; other GPUs (for example
-Intel or NVIDIA) need slow software rendering: install with `--allow-non-amd`
-and launch with `LEPTON_FORCE_SOFTWARE=true %command%`.
+Steam Deck / AMD RADV is the established hardware-accelerated path. Intel Gen9
+(Skylake) and newer have experimental ANV/Iris support **only in bundles containing
+`vendor/lib64/hw/vulkan.intel.so`**; published bundles may omit it. The launcher
+selects AMD first, then Intel, with `LEPTON_VULKAN_DRIVER=radeon|intel` overrides.
+Unsupported GPUs can try slow software rendering: install with `--allow-non-amd`
+and launch with `LEPTON_FORCE_SOFTWARE=true %command%`. Hardware support outside
+validated configurations remains experimental.
+
+Direct Wayland window-close task removal requires Android patch 0012; AMD
+Codec2 BLOB allocation requires patch 0013. Launcher updates alone cannot add
+those image fixes. Ordinary game audio is separate from Codec2 media audio;
+automatic Codec2 selection depends on the image, GPU and host heap permissions.
+AVC/video output still has known problems, and Widevine L3 support does not
+guarantee application playback. Consult the release's recorded hardware results.
 
 ## Install
 

@@ -1,4 +1,4 @@
-# Steam Deck development staging (Ubuntu 26.04 AMD-only build)
+# Steam Deck development staging (Ubuntu 26.04 x86_64 build)
 
 > **Internal details.** For the normal build and install steps, follow [BUILDING.md](../../BUILDING.md); this page documents what the scripts do underneath.
 
@@ -56,7 +56,11 @@ The wrapper sets `LD_LIBRARY_PATH` to the adjacent `tools/lib` folder before run
 
 ## Fresh system data and a local bundle
 
-Generate fresh system data for the new stage using the isolated runner:
+Generate fresh system data for the new stage using the isolated runner.
+Software rendering is the default. For hardware diagnostics on a fresh stage,
+use `--rendering amd` or `--rendering intel` with a matching host GPU and staged
+`vulkan.radeon.so` or `vulkan.intel.so` HAL. Intel Gen9+ ANV/Iris is experimental;
+software sysbake does not establish hardware rendering compatibility:
 
 ```bash
 bash image-14/scripts/internal/sysbake-isolated-x86_64.sh --check --stage-dir "$stage"
