@@ -94,6 +94,31 @@ ARCHIVE="$BUNDLE_DIR/lepton-x86_64-$BUNDLE_ID.tar.gz"
 [[ ! -e "$STAGE" && ! -L "$STAGE" ]] || fail "Stage already exists (choose another --bundle-id or --stage-dir): $STAGE"
 [[ ! -e "$ARCHIVE" && ! -L "$ARCHIVE" ]] || fail "Bundle already exists: $ARCHIVE"
 [[ "$BUNDLE_DIR" != "$STAGE" && "$BUNDLE_DIR" != "$STAGE/"* ]] || fail 'Bundle directory must be outside the stage'
+
+# The stage is created inside its parent and filled by rsync, so every staged
+# file inherits that parent's default POSIX ACL (or, for parents mkdir -p will
+# create, the nearest existing ancestor's). Isolated sysbake then rejects the
+# rootfs; detect it now, read-only, before anything is created.
+PRIVATE_STORAGE="$SCRIPT_DIR/internal/private_storage.py"
+command -v python3 >/dev/null || fail 'Missing preflight executable: python3 (install python3)'
+ACL_RC=0
+ACL_SOURCE="$(python3 -I -B "$PRIVATE_STORAGE" inherited-acl "$(dirname -- "$STAGE")")" || ACL_RC=$?
+case "$ACL_RC" in
+    0) ;;
+    1) fail "The new stage would inherit the default POSIX ACL of $ACL_SOURCE (often a home or workspace folder shared with another user); isolated sysbake would later stop with \"Staged rootfs carries POSIX ACLs\" because rootless Android cannot boot from it. Choose a --stage-dir under a directory without default ACLs, or remove the default ACL from that directory yourself (setfacl -k \"$ACL_SOURCE\"). Nothing was changed." ;;
+    *) fail "Cannot check the stage location for inherited POSIX ACLs: $(dirname -- "$STAGE")" ;;
+esac
+# The archive is written by tar without --acls, so an ACL on the bundle
+# directory never reaches the bundle (and the installer drops inherited ACLs
+# on the Deck). Report it only.
+ACL_RC=0
+ACL_SOURCE="$(python3 -I -B "$PRIVATE_STORAGE" inherited-acl "$BUNDLE_DIR")" || ACL_RC=$?
+case "$ACL_RC" in
+    0) ;;
+    1) info "Bundle directory inherits the default ACL of $ACL_SOURCE; the archive does not record ACLs, so this is harmless." ;;
+    *) fail "Cannot check the bundle directory for inherited POSIX ACLs: $BUNDLE_DIR" ;;
+esac
+
 TRANSFER_ARGS=()
 [[ -z "$DECK_IP" ]] || TRANSFER_ARGS=(--deck-ip "$DECK_IP")
 
