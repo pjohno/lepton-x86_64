@@ -11,7 +11,8 @@ argument", "get xattr system.posix_acl_access ... Invalid argument").
 ``private DIR...`` makes freshly created, empty, user-owned directories private
 (mode 0700, no setgid, no access or default ACL). It never recurses and refuses
 any other directory. ``scan-acls DIR`` reports, read-only, entries below DIR
-that carry ACLs. Only the Python standard library is used: getfacl/setfacl
+that carry ACLs. ``inherited-acl DIR`` reports, read-only and before DIR need
+exist, whether entries created there would inherit a default ACL. Only the Python standard library is used: getfacl/setfacl
 need not be installed, and filesystems without ACL/xattr support are accepted.
 """
 import errno
@@ -98,6 +99,30 @@ def find_acls(root):
     return found
 
 
+def inheritance_source(path):
+    """Read-only: the directory whose default ACL new entries in PATH inherit.
+
+    PATH need not exist: ``mkdir -p`` would create it, and its missing parents,
+    below the nearest existing ancestor, and every one of them inherits that
+    ancestor's default ACL. Returns (directory, has_default_acl). Only the
+    default ACL is inherited; an access ACL alone is not passed on.
+    """
+    current = os.path.abspath(path)
+    while not os.path.lexists(current):
+        current = os.path.dirname(current)
+    # mkdir -p follows a symlinked ancestor; a dangling one or a file stops it.
+    if not os.path.isdir(current):
+        raise PrivateDirError(errno.ENOTDIR, f'Cannot create directories below {current}: not a directory')
+    source = os.path.realpath(current)
+    try:
+        os.getxattr(source, ACL_XATTRS[1])
+    except OSError as exc:
+        if exc.errno == errno.ENODATA or exc.errno in UNSUPPORTED:
+            return source, False
+        raise PrivateDirError(exc.errno, f'Cannot read the default ACL of {source}: {exc.strerror}') from exc
+    return source, True
+
+
 def main(argv):
     if len(argv) >= 2 and argv[0] == 'private':
         try:
@@ -118,7 +143,15 @@ def main(argv):
         if len(found) > 5:
             print(f'... and {len(found) - 5} more')
         return 1 if found else 0
-    print('Usage: private_storage.py private DIR... | scan-acls DIR', file=sys.stderr)
+    if len(argv) == 2 and argv[0] == 'inherited-acl':
+        try:
+            source, inherited = inheritance_source(argv[1])
+        except PrivateDirError as exc:
+            print(f'[FAIL] {exc.strerror}', file=sys.stderr)
+            return 2
+        print(source)
+        return 1 if inherited else 0
+    print('Usage: private_storage.py private DIR... | scan-acls DIR | inherited-acl DIR', file=sys.stderr)
     return 2
 
 

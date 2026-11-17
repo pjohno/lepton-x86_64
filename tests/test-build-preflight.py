@@ -5,16 +5,27 @@
 Only the Weston stand-in uses a real temporary Unix socket. Mounts, Binder
 namespaces, Podman stores, native compilers and kernel files are fixtures.
 """
+import errno
 import importlib.util
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def drop_inherited_default_acl(path):
+    """A TMPDIR below a folder with a default ACL must not change the results."""
+    try:
+        os.removexattr(path, 'system.posix_acl_default')
+    except OSError as exc:
+        if exc.errno not in (errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP):
+            raise
 
 
 def write(path, text, executable=False):
@@ -29,6 +40,7 @@ class PreflightTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.work = Path(self.temp.name)
+        drop_inherited_default_acl(self.work)
         self.repo = self.work / 'repo'
         self.workspace = self.work / 'workspace'
         self.bin = self.work / 'bin'
@@ -270,6 +282,64 @@ while True: time.sleep(1)
         self.assertIn('Generated stage assets and Android boot are validated', out)
         self.assertIn('--check', (self.work / 'expensive').read_text())
         self.assertFalse((self.workspace / 'stages').exists())
+
+    def default_acl(self, path):
+        """Give path a default ACL naming an unmapped UID (raw xattr, no setfacl)."""
+        undefined = 0xFFFFFFFF
+        entries = [(0x01, 7, undefined), (0x02, 5, os.getuid() + 4242), (0x04, 0, undefined),
+                   (0x10, 5, undefined), (0x20, 0, undefined)]
+        value = struct.pack('<I', 2) + b''.join(struct.pack('<HHI', *entry) for entry in entries)
+        try:
+            os.setxattr(path, 'system.posix_acl_default', value)
+        except OSError as exc:
+            if exc.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):
+                self.skipTest(f'{path} has no POSIX ACL support')
+            raise
+        return os.getxattr(path, 'system.posix_acl_default')
+
+    def test_bundle_check_detects_inherited_stage_acl_before_staging(self):
+        shared = self.work / 'shared'
+        shared.mkdir()
+        before = self.default_acl(shared)
+        stage = shared / 'not-yet' / 'stage'
+        out = self.run_check('make-deck-bundle-x86_64.sh',
+                             ('--check', '--bundle-id', 'test', '--stage-dir', str(stage)), ok=False)
+        self.assertIn(f'would inherit the default POSIX ACL of {shared}', out)
+        self.assertIn('Staged rootfs carries POSIX ACLs', out)
+        self.assertIn(f'setfacl -k "{shared}"', out)
+        self.assertNotIn('host capabilities', out)  # refused before any probe or staging check
+        self.assertFalse((self.work / 'expensive').exists())
+        self.assertEqual(list(shared.iterdir()), [], '--check created something')
+        self.assertEqual(os.getxattr(shared, 'system.posix_acl_default'), before, '--check changed the ACL')
+        # The default workspace stage location is checked the same way.
+        self.workspace.mkdir(exist_ok=True)
+        self.default_acl(self.workspace)
+        out = self.run_check('make-deck-bundle-x86_64.sh', ('--check', '--bundle-id', 'test'), ok=False)
+        self.assertIn(f'would inherit the default POSIX ACL of {self.workspace}', out)
+        self.assertFalse((self.workspace / 'stages').exists())
+
+    def test_bundle_check_reports_but_accepts_bundle_dir_acl(self):
+        shared = self.work / 'shared'
+        shared.mkdir()
+        self.default_acl(shared)
+        out = self.run_check('make-deck-bundle-x86_64.sh',
+                             ('--check', '--bundle-id', 'test', '--bundle-dir', str(shared / 'bundles')))
+        self.assertIn('the archive does not record ACLs, so this is harmless', out)
+        self.assertIn('Bundle pipeline preflight passed', out)
+        self.assertFalse((shared / 'bundles').exists())
+
+    def test_bundle_check_without_acls_passes(self):
+        out = self.run_check('make-deck-bundle-x86_64.sh',
+                             ('--check', '--bundle-id', 'test', '--stage-dir', str(self.work / 'a/b/stage')))
+        self.assertNotIn('POSIX ACL', out)
+        self.assertIn('Bundle pipeline preflight passed', out)
+        self.assertFalse((self.work / 'a').exists())
+
+    def test_bundle_check_rejects_a_stage_path_through_a_file(self):
+        write(self.work / 'afile', 'x\n')
+        out = self.run_check('make-deck-bundle-x86_64.sh',
+                             ('--check', '--bundle-id', 'test', '--stage-dir', str(self.work / 'afile/stage')), ok=False)
+        self.assertIn('Cannot check the stage location for inherited POSIX ACLs', out)
 
     def test_fresh_check_without_builder_still_checks_all_hosts(self):
         out = self.run_check('../do_build_x86_64.sh', ('--check', '--bundle-id', 'test'), BUILDER_MISSING='1')
