@@ -260,6 +260,26 @@ The artifact is
 `out/target/product/lepton_x86_64/vendor/lib64/hw/hwcomposer.waydroid.so`.
 No system/vendor image rebuild is required for this development test.
 
+### Window close (patch 0012)
+
+Closing the window must end the game. Patch 0012 changes `hwcomposer.waydroid`
+and the Waydroid task service, so a checkout prepared before it needs the patch
+applied the same way (`--check`, then without; skip if `--reverse --check`
+passes) and both modules built with the command above, replacing the last part
+with `m -j6 hwcomposer.waydroid vendor.waydroid.task@1.0-service`. Test them
+through the read-only overlay (mode 755), without replacing the rootfs:
+
+- `out/target/product/lepton_x86_64/vendor/lib64/hw/hwcomposer.waydroid.so` →
+  `compat_tool/images/rootfs_overlay/vendor/lib64/hw/hwcomposer.waydroid.so`
+- `out/target/product/lepton_x86_64/system/bin/hw/vendor.waydroid.task@1.0-service` →
+  `compat_tool/images/rootfs_overlay/system/bin/hw/vendor.waydroid.task@1.0-service`
+
+Each close logs `Lepton: xdg_toplevel.close task=... app=... action=...` in
+`logcat -b all`; `setprop lepton.hwc.trace 1` adds configure events. With the
+fix, closing the full-UI window logs `ActivityManager: Killing <pid>:<game>...:
+remove task` and `LeptonProcessObserver: Process died`, then the launcher's
+normal teardown runs.
+
 ## Launcher-only Fedora deployment
 
 For the existing test installation, verify the 2048 shortcut's selected tool
