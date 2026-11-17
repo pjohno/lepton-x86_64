@@ -3,7 +3,7 @@ set -Eeuo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 work=$(mktemp -d /tmp/lepton-subuid.XXXXXXXX)
 trap 'podman unshare rm -rf -- "$work"' EXIT
-for fn in profile_has_no_mounts clear_baked_app_data remove_baked_workdirs remove_prefix; do
+for fn in profile_has_no_mounts clear_baked_app_data remove_baked_workdirs remove_prefix remove_prefix_dir; do
  eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/liblepton.sh")"
 done
 print() { printf '%s' "$*"; }

@@ -191,6 +191,19 @@ case "${COMMAND}" in
         }
         trap "kill_descendants" INT TERM ERR
 
+        # Until teardown takes over below, any exit (die, set -e, a signal)
+        # must still remove the temporary prefix this launch creates.
+        function cleanup_failed_start()
+        {
+            local STATUS=$?
+            trap - EXIT ERR
+            trap "" INT TERM PIPE
+            set +e
+            remove_owned_prefix_after_failed_start
+            exit "${STATUS}"
+        }
+        trap "cleanup_failed_start" EXIT
+
         determine_app --start "${3:-}"
 
         log_to_file
@@ -361,6 +374,8 @@ case "${COMMAND}" in
         }
 
         app_start_time="$EPOCHSECONDS"
+        # The container is running: teardown now owns the prefix.
+        trap - EXIT
         trap "handle_signal SIGINT" INT
         trap "handle_signal SIGTERM" TERM
         trap "handle_signal ERR" ERR
