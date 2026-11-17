@@ -42,6 +42,9 @@ function create_prefix()
 {
     if [[ -z "${LEPTON_PREFIX:-}" ]]; then
         export LEPTON_PREFIX=$(mktemp -d -t lepton-context.XXXXXXXXXX)
+        # Deliberately not exported: only the invocation that made the folder
+        # owns it. An inherited LEPTON_PREFIX is never "ours".
+        LEPTON_PREFIX_OWNED="${LEPTON_PREFIX}"
     fi
 }
 
@@ -271,14 +274,45 @@ function remove_prefix()
 {
     if [[ -n "${LEPTON_PREFIX:-}" ]]; then
         remove_baked_workdirs
-        # Only delete launcher-created temporary directories, never an arbitrary
-        # inherited path or a symlink (including a parent symlink).
-        if [[ ! -L "$LEPTON_PREFIX" && "$(realpath -m -- "$LEPTON_PREFIX")" == "$LEPTON_PREFIX" && "$LEPTON_PREFIX" =~ ^/tmp/lepton-context\.[A-Za-z0-9]+$ ]]; then
-            rm -rf --one-file-system -- "$LEPTON_PREFIX" || println "WARNING: temporary prefix cleanup failed" >&2
-        else
-            println "WARNING: retaining unrecognised prefix: $LEPTON_PREFIX" >&2
-        fi
+        remove_prefix_dir "$LEPTON_PREFIX"
     fi
+}
+
+function remove_prefix_dir()
+{
+    local DIR="$1"
+    # Only delete launcher-created temporary directories, never an arbitrary
+    # inherited path or a symlink (including a parent symlink).
+    if [[ ! -L "$DIR" && "$(realpath -m -- "$DIR")" == "$DIR" && "$DIR" =~ ^/tmp/lepton-context\.[A-Za-z0-9]+$ ]]; then
+        rm -rf --one-file-system -- "$DIR" || println "WARNING: temporary prefix cleanup failed" >&2
+    else
+        println "WARNING: retaining unrecognised prefix: $DIR" >&2
+    fi
+}
+
+# For a start that ends before teardown is armed (die, set -e or a signal):
+# delete the temporary prefix this invocation created, unless a container
+# could be using it. Persistent profiles and compatdata are never touched.
+function remove_owned_prefix_after_failed_start()
+{
+    local DIR="${LEPTON_PREFIX_OWNED:-}" EXISTS_STATUS=0 LABEL
+    LEPTON_PREFIX_OWNED=
+    [[ -n "$DIR" ]] && [[ -e "$DIR" || -L "$DIR" ]] || return 0
+    podman container exists "lepton-${LEPTON_CONTEXT}" >/dev/null 2>&1 || EXISTS_STATUS=$?
+    case "$EXISTS_STATUS" in
+        1) ;;
+        0)
+            # A container from another launch may share the context name;
+            # only one that was given this prefix keeps it alive.
+            if ! LABEL="$(podman inspect -f '{{ index .Config.Labels "PREFIX" }}' "lepton-${LEPTON_CONTEXT}" 2>/dev/null)" ||
+               [[ "$LABEL" == "$DIR" ]]; then
+                println "Temporary prefix retained (container lepton-${LEPTON_CONTEXT} may use it): $DIR" >&2
+                return 0
+            fi
+            ;;
+        *) println "WARNING: cannot inspect lepton-${LEPTON_CONTEXT}; temporary prefix retained: $DIR" >&2; return 0 ;;
+    esac
+    remove_prefix_dir "$DIR"
 }
 
 function prefix()

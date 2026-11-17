@@ -5,7 +5,7 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"; [[ -z "${LEPTON_PREFIX:-}" ]] || rm -rf -- "$LEPTON_PREFIX"' EXIT
 for fn in profile_has_no_mounts should_keep_app_data remove_baked_workdirs lepton_runtime_fingerprint existing_app_profile check_kept_app_data \
-          remove_prefix clear_baked_app_data prepare_baked_data_for_removal data_mount_path data_workdir app_workdir app_datadir cleanup_container install_app \
+          remove_prefix remove_prefix_dir clear_baked_app_data prepare_baked_data_for_removal data_mount_path data_workdir app_workdir app_datadir cleanup_container install_app \
           lepton_tool_for_fingerprint lepton_profile_refused; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/liblepton.sh")"
 done
