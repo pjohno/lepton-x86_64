@@ -39,6 +39,7 @@ LEPTON_CUSTOM_PATCHES=(
     "hardware/waydroid|0009-hwc-local-wayland-fullscreen.patch"
     "frameworks/native|0010-egl-hide-untranslatable-gl-extensions.patch"
     "hardware/waydroid|0011-hwc-present-framebuffer-after-color-layers.patch"
+    "external/minigbm|0013-minigbm-gbm-mesa-no-allocator-map.patch"
 )
 
 # image_source_status REPO AOSP: verify copied source content and every patch.
