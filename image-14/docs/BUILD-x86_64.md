@@ -54,13 +54,16 @@ gralloc allocator. During software mode, Lepton masks the x86_64 GBM allocator
 and mapper HAL declarations to prevent Android from selecting GPU-dependent
 buffer allocation.
 
-This avoids requiring an AMD GPU or `/dev/dri` passthrough for sysbake.
-The resulting Android image retains its AMD RADV and GBM drivers for
-hardware-accelerated runtime use on Steam Deck and compatible AMD systems.
+This avoids requiring a GPU or `/dev/dri` passthrough for sysbake.
+The resulting image retains its built graphics drivers: AMD RADV and, when
+included, experimental Intel Gen9+ ANV/Iris. Intel-enabled bundles must contain
+`vendor/lib64/hw/vulkan.intel.so`; software sysbake does not validate it.
 
 For debugging, the standalone sysbake runner also supports
-`--rendering amd`. This requires a fresh stage without existing sysbake data.
-Select this through the main wrapper with `--sysbake-rendering amd`; software remains the default.
+`--rendering amd|intel`. These require a matching GPU/render node and staged
+Vulkan HAL, and a fresh stage without existing sysbake data. Select through the
+main wrapper with `--sysbake-rendering amd` or `--sysbake-rendering intel`;
+software remains the default.
 
 The software path has been verified on Fedora x86_64 using rootless Podman.
 Portability to other host GPU configurations has not yet been independently

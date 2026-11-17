@@ -17,8 +17,12 @@
 * ```ENABLE_VULKAN_VALIDATION_LAYER```, ```ENABLE_VULKAN_FDM_INJECTION_LAYER```, ```ENABLE_VULKAN_GFXRECONSTRUCT_LAYER```, ```ENABLE_VULKAN_RPO_LAYER```, ```ENABLE_VULKAN_RENDERDOC_CAPTURE``` can be used to enable the corresponding vulkan layers.  ```ENABLE_VULKAN_VALIDATION_LAYER_LATE``` will perform validation on the application and any other enabled layers, as opposed to only the output from the application itself.
 * ```LEPTON_GFXRECON_*``` envvars are translated to their corresponding ```debug.gfxrecon.*``` Android system properties when the gfxreconstruct layer is enabled. Unprefixed ```GFXRECON_*``` envvars are not considered.
 * ```VK_INSTANCE_LAYERS``` can be a colon separated list containing vulkan layer names which should be enabled.
-* ```LEPTON_FORCE_SOFTWARE``` mostly for gitlab since gpu rendering is not available there.
-* ```LEPTON_NO_CONTEXT``` avoid clearing "baked" app data even if it would otherwise be required or recommended. Use with caution and only during development.
+* `LEPTON_FORCE_SOFTWARE=true` selects slow software rendering (SwiftShader), including on unsupported GPUs; the default uses hardware graphics.
+* `LEPTON_VULKAN_DRIVER=radeon|intel` overrides AMD-first, then Intel selection. The matching render node and image Vulkan HAL must exist. Intel Gen9+ ANV/Iris is experimental; older bundles may contain only AMD.
+* `LEPTON_SKIP_GPU_CHECK=true` bypasses host GPU validation for diagnostics; it does not add a driver or make unsupported hardware compatible. Leave unset for safe validation.
+* `LEPTON_CODEC2` defaults to automatic selection on Android 14 x86_64: `blob` for software rendering or AMD images with patch 0013, otherwise `heap` when the host DMA-BUF system heap is readable/writable, otherwise `off`. `false` disables Codec2; `true` forces experimental BLOB allocation and can crash older AMD allocators or fail on Intel. Mode names are outputs, not values for this variable. Ordinary PCM game audio is independent; AVC/video output remains unresolved. See [media decoder selection](../GAPPS.md#media-decoder-selection).
+* `LEPTON_DMA_HEAP_DEVICE` overrides `/dev/dma_heap/system` for diagnostics/tests. Automatic heap selection requires a readable/writable character device; leave unset normally.
+* `LEPTON_PREFIX` supplies an external scratch directory. The launcher never owns or deletes a supplied prefix, including `/tmp/lepton-context.*`. Internally created prefixes always use `/tmp` regardless of `TMPDIR`; containers using the prefix or uncertain inspection/mount state prevent deletion. Persistent Android profiles are separate and retained by ordinary cleanup.
 * ```LEPTON_LOCK_TIMEOUT``` maximum time in seconds to wait for the per-user `lepton.lock` (default 10). Initial acquisition and later re-acquisitions stop the command on failure; a timeout of 0 makes acquisition nonblocking. See [lock paths and launcher-only deployment](../FEDORA-DEBUGGING.md#per-user-launcher-lock).
 * ```LEPTON_APP_LAUNCH_TIMEOUT``` maximum time to wait until an app is considered as failed to start.
 * ```LEPTON_APP_INSTALL_TIMEOUT``` maximum time in seconds to wait for app installation. Defaults to 600.
@@ -30,5 +34,5 @@
 # Marker files:
 * ```lepton-show-flatscreen``` inside the application depot can be used to configure an application for 2D launch mode.
 
-Enviroment variables of the form:
-```LEPTON_ENV_VARNAME=vale``` are passed through to the app as ```VARNAME=value```.
+Environment variables of the form:
+```LEPTON_ENV_VARNAME=value``` are passed through to the app as ```VARNAME=value```.

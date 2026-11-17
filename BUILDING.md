@@ -55,7 +55,7 @@ need them when debugging a failed step or
 
 ## Requirements
 
-- x86_64 Linux (tested on Fedora 44) with rootless Podman, and an AMD GPU if you also want to test locally.
+- x86_64 Linux (tested on Fedora 44) with rootless Podman, and AMD or Intel Gen9+ hardware with the matching image driver if you want hardware graphics tests locally (Intel remains experimental).
 - About **350 GB** free for the workspace (sources about 265 GB, build output
   about 70 GB) plus a few GB for each bundle. `LEPTON_MIN_FREE_GIB` (default 200)
   is checked before each step.
@@ -120,8 +120,9 @@ storage and subordinate-ID mappings, and mount/unmount temporary FUSE
 filesystems. They use no downloaded container image, do not touch the normal
 Podman store, do not start/stop user services, and do not modify existing build
 outputs. Rust toolchain auto-install is disabled during these probes.
-An AMD render node is required only when `--sysbake-rendering amd` is selected;
-the default software sysbake does not require a GPU.
+A matching render node and staged Vulkan HAL are required for
+`--sysbake-rendering amd` (RADV) or `--sysbake-rendering intel` (ANV, Gen9+,
+experimental); the default software sysbake does not require a GPU.
 
 ### BinderFS and WSL/systemd
 
@@ -743,6 +744,23 @@ for an existing game profile by fingerprint protection; keep the original tool
 for that game or add a separately named test shortcut with its own prefix.
 Never bypass that refusal by resetting valuable data. These commands do not
 publish a release, merge the branch or change GitHub issue state.
+
+## Check Binder transaction compatibility without building Android
+
+Patch 0012's raw Binder offsets must match the AOSP interface used for the image.
+Before changing Android versions, check an existing checkout (read-only):
+
+```bash
+LEPTON_AOSP_DIR=/path/to/aosp python3 -B tests/runtime/test-hwc-window-close.py
+```
+
+This applies the HWC patches only to temporary copies and compares both client
+and server offsets with `frameworks/base/core/java/android/app/IActivityTaskManager.aidl`.
+It downloads nothing. The offline workflow suite checks the Android 14 offsets
+and parser fixtures even without AOSP, and also uses a checkout found via
+`.build-env` when available. An explicitly supplied missing checkout fails;
+a missing automatically discovered checkout skips that comparison. This is a
+source compatibility check, not hardware validation.
 
 ## When something fails
 

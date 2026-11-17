@@ -12,7 +12,9 @@ creation, Deck utility provisioning, and isolated sysbake generation.
 
 Host tools include Podman, fuse-overlayfs, rsync, attr, unzip, Python 3, Weston,
 and a working systemd user session. Android also needs BinderFS. AMD graphics
-mode requires accessible AMD devices and the rootfs's RADV driver.
+mode requires accessible AMD devices and the rootfs's RADV driver. Experimental
+Intel mode (`--rendering intel`) requires Gen9+ hardware and an image containing
+`vendor/lib64/hw/vulkan.intel.so`; software remains available for other hosts.
 
 Store local test APKs in the Git-ignored `apks/` directory. No APKs, Google
 translator binaries, Android images or generated compatibility libraries are
@@ -632,7 +634,7 @@ ProtoLog's intentionally random generated class names prevent assuming rebuilt
 DEX is byte-identical. The source finder now skips disposable research mounts
 using their `.find-ignore` marker.
 
-## Separate media decoding findings
+## Separate media decoding findings (historical probes)
 
 The runtime's `debug.stagefright.ccodec=0` suppresses Codec2 even though the image
 has only the Codec2 software store, with no OMX service. Default decoder listings
@@ -649,7 +651,9 @@ C2AllocatorGralloc with `cstride=0` / `graphic view map failed 14`.
 Update (November 2026): the input-allocation crash on AMD was the gbm_mesa
 allocator mapping every new CPU-usage buffer (fixed by patch 0013). Images with
 it use Valve's gralloc pool mask by default and decode audio without host heap
-access; AVC output remains open. The two
+access; AVC output remains open. Older AMD images and Intel automatically use
+host DMA-BUF heap access when usable, otherwise Codec2 stays off. See
+[the current selection policy](GAPPS.md#media-decoder-selection). The two
 failed probes are retained under the Google v2 stage as
 `.jni-smoke-work.boSlnDmN` and `.jni-smoke-work.KtTNhnr1`. They expose a concrete
 media-buffer problem relevant to the reported YouTube failure, but do not prove
