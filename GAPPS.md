@@ -75,6 +75,178 @@ desktop icon); a replaced install holding saved Google profiles is kept as a
 `lepton_x86_64_<bundle-id>`, so neither reuses the legacy `lepton_x86_64_dev`. See
 [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md) for the full flow.
 
+## Google Play in Steam
+
+GApps installs can add one Steam shortcut, **Google Play (Lepton)**, that opens
+the Play Store in Android. Install games from the Play Store, play them, return
+to Android's home screen and start another one, all in the same Android
+session. Nothing else is installed: there is no Lepton game manager or
+launcher app, only Android's own Play Store and home screen.
+
+### Adding it
+
+- **While installing a GApps bundle:** when the installer runs in a window
+  opened for you (double-tapped installer, or **Lepton: Install / Update /
+  Repair**), it asks **Would you like to add Google Play to your Steam
+  library?** Declining changes nothing else; the bundle is installed either way.
+  It asks only if no Google Play shortcut exists yet, so updates don't ask again.
+- **Later:** double-tap **Lepton: Add Google Play to Steam (<bundle>)**, or in a
+  terminal, with Steam exited:
+
+  ```bash
+  ~/.local/bin/lepton-add-game --google-play --tool-id TOOL_ID
+  ```
+
+  Add `--dry-run` to check first (this works while Steam runs). With several
+  Steam accounts, add `--userdata ~/.steam/root/userdata/<number>`;
+  `lepton-add-game --list-users` lists them. The desktop tool asks which account
+  to use.
+
+Steam must be **fully closed** while its library is changed. Lepton asks you to
+exit Steam (Steam menu > Exit), refuses to change anything while Steam still
+runs, and never closes or starts Steam itself. Start Steam again when it says
+it is safe. A non-interactive install never waits for input: it prints the
+command above instead.
+
+The shortcut has a fixed identity. Its target is
+`~/.local/share/lepton-google-play/google-play.lepton-launch`, which is not
+inside any Lepton install. Its Steam AppID therefore stays the same across
+Lepton updates, and so does its Android data in
+`steamapps/compatdata/<AppID>`. If Google Play is already in Steam, nothing is
+added or changed: not its name, launch options or compatibility tool, even if
+you changed them in Steam. Deleting the launch file only breaks launching;
+adding Google Play again recreates it without touching the shortcut. The
+shortcut uses the GApps tool you add it with. To use a different GApps install,
+choose it in the shortcut's **Properties > Compatibility**. A tool without
+Google services refuses to start it and says so.
+
+### Playing
+
+1. Launch **Google Play (Lepton)** in Gaming Mode (or Desktop Mode). The first
+   launch creates its Android data; sign in to Google there.
+2. Install games from the Play Store and open them. Update them the same way,
+   from the Play Store (**Manage apps & device**).
+3. **Back/Home:** on a Steam Deck, **Steam + D-pad Left** sends **Esc**, which
+   Android treats as Back. Press it until Android's home screen shows, then
+   open another installed game (or open it from the Play Store's library).
+   Leaving a game or the Play Store never ends the session.
+4. **Stop:** Steam's **Stop** ends the Android session, as for any Lepton game.
+   It gives the open game a few seconds to save first. Save inside the game
+   before stopping.
+5. Launch it again later: installed games, the Google sign-in and their saves
+   are still there.
+
+Touch: enable **Touchscreen Native Support** in the shortcut's controller layout,
+as for every Lepton game. Controllers and touch pass through exactly as for
+other shortcuts. Lepton adds no controller mappings of its own: a game that
+uses Back/Esc for itself (for example, to open its pause menu) can make it hard
+to leave that game. Use the game's own menu to exit, or Steam's Stop.
+
+### Saved data and separate profiles
+
+All games installed through Google Play share **one** Android profile: the
+Google Play shortcut's `compatdata/<AppID>/baked`. Each Steam shortcut has its
+own Android profile. A game added with **Lepton: Add Android game** or **Add
+Google game** runs in its own separate Android, so it:
+- does not see games installed through Google Play, and Google Play does not
+  see it;
+- has its own Google sign-in.
+
+Reusing the Google Play profile from other shortcuts, such as a Steam shortcut
+for a single game installed from the Play Store, is not available yet.
+
+The profile is kept across Lepton updates **that use the same Android image**,
+and across other GApps installs with the same image. The usual runtime
+fingerprint check applies ([Game data between
+launches](INSTALL-STEAM-DECK.md#game-data-between-launches)). A Lepton build
+with a different Android image refuses to start Google Play: it keeps the data
+and shows which installed tool created it. Select that tool in **Properties >
+Compatibility** to continue. Lepton never resets, migrates or repairs the
+profile by itself. There is no migration between Android builds yet. The only
+way to change images is the explicit reset (`LEPTON_RESET_APP_DATA=true`, see
+the [launch options](README.md#launch-options)), which **deletes every game
+installed through Google Play, their saves and the sign-in**.
+
+### Artwork (optional)
+
+Lepton does not download or include artwork. You can download images yourself,
+for example from <https://www.steamgriddb.com/game/5451976> (respect each
+image's licence), then import them:
+
+- right after adding Google Play (the tool offers it), or later with
+  **Lepton: Google Play artwork (<bundle>)**, which does not recreate the
+  shortcut.
+
+One file is chosen per kind, and Cancel skips a kind:
+
+| Kind | Steam file (in `userdata/<id>/config/grid/`) | Formats |
+| --- | --- | --- |
+| Portrait library cover (600 x 900) | `<AppID>p.png` / `.jpg` | PNG, JPEG |
+| Horizontal library cover (920 x 430) | `<AppID>.png` / `.jpg` | PNG, JPEG |
+| Hero / background (1920 x 620) | `<AppID>_hero.png` / `.jpg` | PNG, JPEG |
+| Transparent logo | `<AppID>_logo.png` | PNG |
+| Shortcut icon (also set as the shortcut's icon) | `<AppID>_icon.png` / `.ico` | PNG, ICO |
+
+`<AppID>` is the Google Play shortcut's own Steam AppID, never SteamGridDB's
+game number. Lepton checks each file's actual contents (not just its
+extension) and size, and rejects anything else. Existing artwork, including
+an icon you set in Steam, is only replaced after you confirm. Lepton updates
+never touch artwork. Steam must be closed for the import.
+
+From a terminal, with Steam exited:
+
+```bash
+~/.local/bin/lepton-add-game --google-play --artwork-only \
+  --artwork portrait=~/Downloads/cover.png --artwork hero=~/Downloads/hero.png
+```
+
+Kinds are `portrait`, `horizontal`, `hero`, `logo` and `icon`. Add
+`--replace-artwork KIND` to replace existing artwork. `--google-play --status`
+shows the AppID and which artwork is present.
+
+### Limitations
+
+- That a game is in the Play Store, or installs, does **not** mean it runs.
+  ARM-only games need an install with ARM translation (`--with-ndk`), and some
+  still fail under translation.
+- Lepton is a debuggable build and cannot pass Google Play Integrity. Games or
+  services that require it refuse to run or to sign in, and Lepton does not
+  work around this.
+- If Google reports the device as uncertified, register its GSF ID (see
+  **Add Google game** below).
+- The game list is Android's home screen. There are no per-game Steam shortcuts
+  or per-game Steam playtime for games installed through Google Play.
+- Moving to a build with a different Android image needs that image's own data
+  (see above). There is no migration yet.
+
+### Steam Deck acceptance test
+
+Run for each GApps candidate bundle. Record the bundle ID, AppID and results.
+Automated tests cannot cover these steps; do not report them as passed unless
+they were performed on a Deck.
+
+1. Install the GApps bundle (desktop icon or Install / Update / Repair).
+2. Accept **Would you like to add Google Play to your Steam library?**, exit
+   Steam when asked, and check the success message.
+3. Import downloaded SteamGridDB artwork (some kinds, skip others).
+4. Start Steam again. **Google Play (Lepton)** is under Non-Steam games with the
+   artwork and the GApps tool selected.
+5. In Gaming Mode, launch it. The Android window gets focus, and the Play Store
+   opens.
+6. Sign in to Google.
+7. Install and launch Crossy Road.
+8. Return to Android's home screen with Steam + D-pad Left (Esc).
+   Steam still shows the game running.
+9. Install and launch another game.
+10. Switch between the two installed games.
+11. Press Stop in Steam. Steam notices that the session has ended, and
+    `podman ps` shows no `lepton-steamlaunch-<AppID>` container.
+12. Launch Google Play again.
+13. Both games, the sign-in and saved progress are still there.
+14. An existing individual Lepton game shortcut still launches and plays.
+15. Run the installer again (update/repair). It does not ask again, and the
+    shortcut, its settings and artwork are unchanged.
+
 ## Registration, install/play, then Gaming Mode
 
 **Tap-only (recommended).** GApps installs put two icons on the desktop:

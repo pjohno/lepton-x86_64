@@ -6,9 +6,17 @@
 #     adb install-multiple; Valve's post-install hook keeps all splits;
 #   - LEPTON_GOOGLE_SIGNIN=true: install the game but open the Play Store
 #     (sign-in is kept with the game's data);
-#   - games marked as needing Google services refuse non-GApps tools.
+#   - games marked as needing Google services refuse non-GApps tools;
+#   - Google Play launcher: a Steam shortcut whose target is a *.lepton-launch
+#     file starts Android without an APK and opens Google Play. Games installed
+#     from the Play Store live in that shortcut's Android data (compatdata),
+#     and Android keeps running, whatever app is open, until Steam's Stop.
 
 PLAY_STORE_PACKAGE="com.android.vending"
+
+# Set only by prepare_launch_file for this launch; never inherited.
+LEPTON_LAUNCH_PACKAGE=""
+export -n LEPTON_LAUNCH_PACKAGE
 
 function lepton_rootfs_dir() { print "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}"; }
 
@@ -26,17 +34,49 @@ function is_apkm_path() { [[ "${1,,}" == *.apkm ]]; }
 
 function google_signin_mode() { [[ "${LEPTON_GOOGLE_SIGNIN:-false}" == true ]]; }
 
+function is_launch_file_path() { [[ "${1,,}" == *.lepton-launch ]]; }
+
+# True for a Google Play launcher session (no APK; is_app is false).
+function google_play_mode() { [[ -n "${LEPTON_LAUNCH_PACKAGE:-}" ]]; }
+
+# Name used in messages when there is no game package.
+function lepton_session_name()
+{
+    if google_play_mode; then print "Google Play"; else print "$(get_app_id)"; fi
+}
+
+# Read a launch file (written by lepton-add-game --google-play): KEY=VALUE
+# lines, '#' comments. Only "package=com.android.vending" is supported. The
+# Android data belongs to the Steam shortcut (compatdata), not to the package.
+function prepare_launch_file()
+{
+    local FILE="$1" PACKAGE
+    [[ -n "${STEAM_COMPAT_DATA_PATH:-}" ]] ||
+        die "The Google Play launcher needs a Steam launch (STEAM_COMPAT_DATA_PATH)."
+    [[ -f "${FILE}" && -r "${FILE}" ]] ||
+        die "Cannot read the Google Play launch file: ${FILE}" \
+            "Add Google Play to Steam again with \"Lepton: Add Google Play to Steam\"."
+    PACKAGE="$(sed -n 's/^package=\([A-Za-z0-9_.]*\)[[:space:]]*$/\1/p' -- "${FILE}" | head -n 1)"
+    [[ "${PACKAGE}" == "${PLAY_STORE_PACKAGE}" ]] ||
+        die "Unsupported launch file (only Google Play can be opened this way): ${FILE}"
+    rootfs_has_google_services ||
+        die "Google Play needs a Lepton tool with Google services (a GApps bundle)." \
+            "Select a Lepton GApps tool in the shortcut's Properties > Compatibility. Nothing has been deleted."
+    LEPTON_LAUNCH_PACKAGE="${PACKAGE}"
+}
+
 # Package whose process decides when the session ends (process observer).
 function lepton_observed_app_id()
 {
     if google_signin_mode; then print "${PLAY_STORE_PACKAGE}"; else print "$(get_app_id)"; fi
 }
 
-# The command the app-launch rc runs once the app is installed.
+# The command the app-launch rc runs once the app is installed (or, for the
+# Google Play launcher, once Android is ready).
 function lepton_launch_commands()
 {
-    if google_signin_mode; then
-        print "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${PLAY_STORE_PACKAGE}"
+    if google_play_mode || google_signin_mode; then
+        print "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${LEPTON_LAUNCH_PACKAGE:-${PLAY_STORE_PACKAGE}}"
     else
         print "$(run_app_commands "$(get_app_id)" "$(get_app_activity)" no-force-stop)"
     fi

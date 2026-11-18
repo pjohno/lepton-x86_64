@@ -16,6 +16,9 @@ for fn in extract_app_mount_dir extract_app_hash; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/app_metadata.sh")"
 done
 eval "$(sed -n "/^function lepton_tell_player()/,/^}/p" "$repo/compat_tool/liblepton/utils.sh")"
+for fn in google_play_mode lepton_session_name; do
+    eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/google_games.sh")"
+done
 for fn in safe_storage_link continue_boot_after_bake; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/mounting.sh")"
 done

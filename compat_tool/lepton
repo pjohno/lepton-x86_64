@@ -208,6 +208,13 @@ case "${COMMAND}" in
 
         log_to_file
 
+        # x86_64 port: the Google Play launcher's shortcut points at a
+        # .lepton-launch file instead of an APK (no game is installed).
+        if [[ -z "${APP_PATH}" ]] && is_launch_file_path "${3:-}"; then
+            prepare_launch_file "$(realpath "${3:-}")"
+            println "Google Play launcher: opening ${LEPTON_LAUNCH_PACKAGE}; Android keeps running until Steam's Stop"
+        fi
+
         # If we haven't been able to determine the APP_PATH using the above
         # determine_app() it means we're being launched from steam instead of
         # from a shell.
@@ -231,7 +238,7 @@ case "${COMMAND}" in
         # extract_app_id multiple times later.
         export APP_PACKAGE_ID="$(get_app_id)"
 
-        if is_steamlaunch || [[ "${LEPTON_CONTEXT}" == *.apk ]]; then
+        if { is_steamlaunch || [[ "${LEPTON_CONTEXT}" == *.apk ]]; } && ! google_play_mode; then
             if [[ -z "${APP_PACKAGE_ID}" ]]; then
                 die "This file doesn't look like an Android app (no package name found):" \
                     "${APP_PATH:-${3:-unknown}}" \
@@ -381,7 +388,8 @@ case "${COMMAND}" in
         trap "handle_signal ERR" ERR
         logcat_debug "post-start-container"
 
-        if ! is_steamlaunch && ! is_app; then
+        # The Google Play launcher, like a dev container, installs no game.
+        if google_play_mode || { ! is_steamlaunch && ! is_app; }; then
             continue_boot_after_bake
         elif app_install_needed; then
             clear_app_install_complete

@@ -370,6 +370,36 @@ for kind in add sign-in; do
 done
 grep -q 'Name=Lepton: Google sign-in (gapps-fixture)' "$g_home/.local/share/applications/lepton-x86_64-google-sign-in-lepton_gapps_gapps_fixture.desktop"
 [[ -x "$g_dest/compat_tool/tools/lepton-google-game-gui" ]]
+# Google Play launcher: icons for adding it and for artwork, pointing at this
+# install; a non-interactive install never waits, it prints the command.
+[[ -x "$g_dest/compat_tool/tools/lepton-google-play-gui" ]]
+play_icon="$g_home/.local/share/applications/lepton-x86_64-google-play-lepton_gapps_gapps_fixture.desktop"
+art_icon="$g_home/.local/share/applications/lepton-x86_64-google-play-artwork-lepton_gapps_gapps_fixture.desktop"
+grep -Fqx "Exec=\"$g_dest/compat_tool/tools/lepton-google-play-gui\"" "$play_icon"
+grep -Fqx "Exec=\"$g_dest/compat_tool/tools/lepton-google-play-gui\" --artwork" "$art_icon"
+grep -q 'Name=Lepton: Add Google Play to Steam (gapps-fixture)' "$play_icon"
+[[ -x "$g_home/Desktop/${play_icon##*/}" && -x "$g_home/Desktop/${art_icon##*/}" ]]
+if command -v desktop-file-validate >/dev/null; then desktop-file-validate "$play_icon" "$art_icon"; fi
+grep -Fq 'lepton-add-game --google-play --tool-id lepton_gapps_gapps_fixture' "$work/gapps-install.log"
+not grep -q 'Google Play' "$work/install.log"
+not compgen -G "$deck_home/.local/share/applications/lepton-x86_64-google-*" > /dev/null
+# In a window opened for the user (also from Install / Update / Repair, which
+# sets LEPTON_NO_DIALOGS), a GApps update offers it; declining changes nothing.
+mkdir -p "$work/play-bin"
+cat > "$work/play-bin/zenity" <<'SH'
+#!/bin/bash
+echo "zenity $*" >> "$UI_LOG"
+[[ "$*" != *'Would you like to add Google Play to your Steam library?'* ]] || exit 1
+exit 0
+SH
+chmod +x "$work/play-bin/zenity"
+env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 LEPTON_DIALOG=zenity \
+    WAYLAND_DISPLAY=test-display UI_LOG="$work/play-offer.log" PATH="$work/play-bin:$PATH" HOME="$g_home" \
+    bash "$out/gapps-pinned.install.sh" --allow-non-amd --replace --pause < /dev/null > "$work/gapps-offer.out" 2>&1 ||
+    { cat "$work/gapps-offer.out"; echo 'FAIL: GApps update with Google Play offer'; exit 1; }
+[[ "$(grep -c 'Would you like to add Google Play' "$work/play-offer.log")" == 1 ]]
+grep -q '^\[DONE\] Finished successfully' "$work/gapps-offer.out"
+grep -Fq 'lepton-add-game --google-play' "$work/gapps-offer.out"
 "$g_dest/tools/platform-tools/adb" version | grep -x 'Version 37.0.1-15733141' > /dev/null
 tar -tzf "$out/lepton-x86_64-gapps-fixture.tar.gz" > "$work/gapps-contents"
 not grep -Eq '(^|/)adb$|platform-tools' "$work/gapps-contents"

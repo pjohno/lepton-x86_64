@@ -314,6 +314,8 @@ install -m 755 "$repo/compat_tool/tools/lepton-host-check" \
     "$tmp/payload/compat_tool/tools/lepton-host-check"
 install -m 755 "$repo/compat_tool/tools/lepton-google-game-gui" \
     "$tmp/payload/compat_tool/tools/lepton-google-game-gui"
+install -m 755 "$repo/compat_tool/tools/lepton-google-play-gui" \
+    "$tmp/payload/compat_tool/tools/lepton-google-play-gui"
 # Lepton: Install / Update / Repair and the release keys it trusts; the
 # installer copies both to ~/.local/share/lepton-release-manager.
 install -m 755 "$repo/compat_tool/tools/lepton-release-manager" \

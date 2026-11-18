@@ -250,8 +250,14 @@ The installer:
 6. links `lepton-add-game`, `lepton-add-game-gui` and `lepton-run-apk` into `~/.local/bin`;
 7. adds **Lepton: Add Android game**, **Lepton: Check graphics** and **Lepton:
    Remove installs** to the desktop and the application menu (Games); GApps
-   bundles also add **Lepton: Add Google game** and **Lepton: Google sign-in**
-   (see [GAPPS.md](GAPPS.md)).
+   bundles also add **Lepton: Add Google game**, **Lepton: Google sign-in**,
+   **Lepton: Add Google Play to Steam** and **Lepton: Google Play artwork**
+   (see [GAPPS.md](GAPPS.md));
+8. GApps bundles only: in a window opened for you, if Google Play is not yet in
+   Steam, asks **Would you like to add Google Play to your Steam library?**
+   ([Google Play in Steam](GAPPS.md#google-play-in-steam)). Declining changes
+   nothing else. Otherwise it prints the command to add it later
+   (`lepton-add-game --google-play`).
 
 When started from the desktop icon and other Lepton installs exist, the
 installer first asks whether to **install as a new tool** or **replace** one of
@@ -585,6 +591,13 @@ unless you intend to discard the Android profile. When Lepton refuses a profile,
 popup says why, in Gaming Mode and Desktop Mode. If the profile was created by
 another installed Lepton tool, the message names that tool. It also explains
 how to reset, and that resetting deletes the game's Android data.
+
+The **Google Play (Lepton)** shortcut (GApps installs) works the same way.
+Its profile holds every game installed through the Play Store, their saves and
+the Google sign-in. Its AppID stays the same across Lepton updates, so the
+profile is reused whenever the runtime fingerprint matches. Otherwise the
+profile is refused and preserved, never migrated or reset automatically
+([details](GAPPS.md#saved-data-and-separate-profiles)).
 
 To explicitly discard **only the selected game's `baked/` Android profile**,
 stop the game, back it up, then launch once with

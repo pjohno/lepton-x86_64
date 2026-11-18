@@ -176,6 +176,10 @@ and run `bash lepton-x86_64-v0.1.0-alpha.install.sh`. Then check:
 - a few APK and APKM games;
 - **Lepton: Install / Update / Repair** opens.
 
+For a GApps candidate bundle (built yourself, never published as an official
+release), also run the
+[Google Play acceptance test](GAPPS.md#steam-deck-acceptance-test).
+
 ### 6. Check provenance and licences
 
 Read the archive's `tools/PROVENANCE.txt` and `tools/BUNDLE-PROVENANCE.txt`.

@@ -30,14 +30,34 @@ game or of Lepton.
 | RetroArch | [F-Droid](https://f-droid.org/repo/com.retroarch_1597175267.apk) | Non-Steam game | Base | v0.2.0-alpha |
 | Roblox | [APKMirror](https://www.apkmirror.com/apk/roblox-corporation/roblox/) | Non-Steam game | Base | v0.2.0-alpha |
 | Sun Piano | [F-Droid](https://f-droid.org/repo/code.alimiracle.sunpiano_2.apk) | Non-Steam game | Base | v0.2.0-alpha |
+| --- | --- | --- | --- | --- |
+| Among us | Play Store | Play Store game | GApps + NDK | v0.3.0-alpha |
+| Genshin Impact | Play Store | Play Store game | GApps + NDK | v0.3.0-alpha |
+| Marvel SNAP | Play Store | Play Store game | Gapps + NDK | v0.3.0-alpha |
+
 
 Notes:
+- Crossy Roads -- gapps is required to run in the background but login not required
 - **Mind Gazing** is a Flutter game built for ARM64 only. It needs the GL
   extension filter added in v0.2.0-alpha to get past its splash screen.
+- Gneshin Impact starts and logs in, but I didn't want to download 50Gb of data so I didn't try gameplay
+- Marvel SNAP works -- but in portrait mode!!!
+
 
 ## Not working
 
-None recorded yet.
+| Game | Source | Bundle | Reason | Last tested |
+| --- | --- | --- | --- | --- |
+| Arena of Valor | Play Store | Gapps + NDK | Won't install | v0.3.0-alpha |
+| Clash of Clans | Play Store | Gapps + NDK | Hangs on load screen | v0.3.0-alpha |
+| Destiny: Rising | Play Store | Gapps + NDK | Won't install  | v0.3.0-alpha |
+| Disco Elysium | Play Store | Gapps + NDK | Won't install  | v0.3.0-alpha |
+| Downwell | Play Store | Gapps + NDK | Won't install  | v0.3.0-alpha |
+| Fortnite | Play Store | Gapps + NDK | Won't install  | v0.3.0-alpha |
+| Gwent: The Witcher Card Game | Play Store | GApps + NDK | Black screen at menu | v0.3.0-alpha |
+| Hearthstone | Play Store | Gapps + NDK | Loading screen stays in focus |v0.3.0-alpha |
+| Sonic Rumble | Play Store game | Gapps + NDK | Black screen | v0.3.0-alpha |
+
 
 ## Adding a game
 

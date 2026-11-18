@@ -13,6 +13,8 @@ function get_apk_path()
 
 function is_app()
 {
+    # x86_64 port: a Google Play launcher session has no APK of its own.
+    [[ -z "${LEPTON_LAUNCH_PACKAGE:-}" ]] || return 1
     [[ -n "$(get_apk_path)" ]]
 }
 
