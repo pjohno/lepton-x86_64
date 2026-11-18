@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Tap-only "Add Google Play to Steam" for GApps installs, and optional import
+# of Steam library artwork the user has downloaded (e.g. from SteamGridDB).
+#
+#   lepton-google-play-gui            add Google Play (Lepton), then artwork
+#   lepton-google-play-gui --offer    first ask whether to add it (installer)
+#   lepton-google-play-gui --artwork  import artwork for the existing shortcut
+#
+# All Steam changes go through lepton-add-game --google-play, which leaves an
+# existing shortcut unchanged. This tool NEVER closes or starts Steam: it asks
+# the user to exit Steam, and lepton-add-game refuses while Steam runs.
+set -Euo pipefail
+
+TOOLS="$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")"
+ADD_GAME="$TOOLS/lepton-add-game"
+TITLE='Lepton: Google Play'
+ARTWORK_PAGE='https://www.steamgriddb.com/game/5451976'
+MODE=add
+case "${1:-}" in
+    '') ;;
+    --offer) MODE=offer ;;
+    --artwork) MODE=artwork ;;
+    *) printf 'Usage: %s [--offer|--artwork]\n' "${0##*/}" >&2; exit 2 ;;
+esac
+
+if [[ -n "${LEPTON_DIALOG:-}" ]]; then
+    [[ "$LEPTON_DIALOG" == zenity || "$LEPTON_DIALOG" == kdialog ]] || { printf 'LEPTON_DIALOG must be zenity or kdialog\n' >&2; exit 1; }
+    UI="$LEPTON_DIALOG"
+elif command -v zenity >/dev/null 2>&1; then
+    UI=zenity
+elif command -v kdialog >/dev/null 2>&1; then
+    UI=kdialog
+else
+    printf 'Neither zenity nor kdialog is available; use lepton-add-game --google-play in a terminal.\n' >&2
+    exit 1
+fi
+
+show() {  # show info|error TEXT
+    if [[ "$UI" == zenity ]]; then
+        zenity "--$1" --title="$TITLE" --no-markup --width=520 --text="$2" 2>/dev/null
+    elif [[ "$1" == error ]]; then
+        kdialog --title "$TITLE" --error "$2"
+    else
+        kdialog --title "$TITLE" --msgbox "$2"
+    fi
+    return 0
+}
+ask() {  # ask TEXT OK_LABEL CANCEL_LABEL
+    if [[ "$UI" == zenity ]]; then
+        zenity --question --title="$TITLE" --no-markup --width=520 --text="$1" \
+            --ok-label="$2" --cancel-label="$3" 2>/dev/null
+    else
+        kdialog --title "$TITLE" --yes-label "$2" --no-label "$3" --yesno "$1"
+    fi
+}
+pick_image() {  # pick_image LABEL
+    if [[ "$UI" == zenity ]]; then
+        zenity --file-selection --title="$TITLE: $1 (Cancel skips it)" --filename="$HOME/Downloads/" \
+            --file-filter='Images (*.png *.jpg *.jpeg *.ico) | *.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.ico *.ICO' 2>/dev/null
+    else
+        kdialog --title "$TITLE: $1 (Cancel skips it)" --getopenfilename "$HOME/Downloads" \
+            '*.png *.PNG *.jpg *.JPG *.jpeg *.JPEG *.ico *.ICO|Images'
+    fi
+}
+fail_box() { show error "$1"; exit 1; }
+add_game() { python3 "$ADD_GAME" --google-play "${USER_ARGS[@]}" "$@"; }
+
+STEAM_CLOSED_TEXT='Steam must be fully closed before Lepton changes its library.
+
+Exit Steam yourself:
+  - Steam window: Steam menu (top left) > Exit, or
+  - taskbar: right-click the Steam icon > Exit.
+Wait until the Steam window and its taskbar icon have gone.
+
+Then tap "Steam is closed". The touchscreen keeps working without Steam.
+This tool never closes or starts Steam.'
+
+[[ -f "$ADD_GAME" ]] || fail_box "lepton-add-game not found next to this tool ($TOOLS)."
+
+if [[ "$MODE" == offer ]]; then
+    ask 'Would you like to add Google Play to your Steam library?
+
+"Google Play (Lepton)" opens the Play Store in Android. Install games there, then play and switch between them without leaving Android. Installed games, the Google sign-in and saves are kept between launches.
+
+You can do this later with "Lepton: Add Google Play to Steam".' 'Add to Steam' 'Not now' || exit 0
+    MODE=add
+fi
+
+# ---- Steam user (several accounts: the user picks; never guessed) ----
+USER_ARGS=()
+users="$(python3 "$ADD_GAME" --list-users 2>&1)" || fail_box "Cannot read Steam's users:
+
+$users"
+mapfile -t user_rows <<< "$users"
+[[ -n "${user_rows[0]:-}" ]] || fail_box 'No Steam user found. Start Steam once and sign in, exit it, then try again.'
+if ((${#user_rows[@]} > 1)); then
+    args=()
+    for row in "${user_rows[@]}"; do
+        if [[ "$UI" == zenity ]]; then args+=(FALSE "${row%%$'\t'*}" "${row#*$'\t'}")
+        else args+=("${row%%$'\t'*}" "${row#*$'\t'}" off); fi
+    done
+    if [[ "$UI" == zenity ]]; then
+        userdata="$(zenity --list --radiolist --title="$TITLE" --text='Add Google Play for which Steam account?' \
+            --column= --column=Folder --column=Account --hide-column=2 --print-column=2 \
+            --width=520 --height=320 "${args[@]}" 2>/dev/null)" || exit 0
+    else
+        userdata="$(kdialog --title "$TITLE" --radiolist 'Add Google Play for which Steam account?' "${args[@]}")" || exit 0
+    fi
+    [[ -n "$userdata" ]] || exit 0
+    USER_ARGS=(--userdata "$userdata")
+else
+    userdata="${user_rows[0]%%$'\t'*}"
+fi
+
+# This user's Google Play shortcut: AppID ("-" if none) and artwork present.
+shortcut_status() {
+    local out line
+    out="$(python3 "$ADD_GAME" --google-play --status 2>&1)" || fail_box "Cannot read Steam's shortcuts:
+
+$out"
+    APPID=- SHORTCUT_NAME='' PRESENT=''
+    while IFS=$'\t' read -r -a line; do
+        [[ "${line[0]:-}" == "$userdata" ]] || continue
+        APPID="${line[1]:--}" SHORTCUT_NAME="${line[2]:-}" PRESENT="${line[3]:-}"
+    done <<< "$out"
+}
+
+import_artwork() {
+    local kinds=(portrait horizontal hero logo icon) labels kind label file check out i
+    labels=('Portrait library cover (600 x 900)' 'Horizontal library cover (920 x 430)'
+            'Hero / background (1920 x 620)' 'Transparent logo (PNG)' 'Shortcut icon (PNG or ICO)')
+    ask "Optional: Steam library artwork for Google Play.
+
+Lepton does not download or include artwork. If you want it, download images yourself, for example from
+$ARTWORK_PAGE
+(Library tabs: Grids for the covers, Heroes, Logos, Icons; save them to Downloads).
+
+Then choose them here, one kind at a time; Cancel skips a kind.
+Existing artwork is only replaced if you confirm." 'Choose images' 'Skip artwork' || return 0
+    local chosen=() replace=()
+    for i in "${!kinds[@]}"; do
+        kind="${kinds[i]}" label="${labels[i]}"
+        local confirmed=false
+        if [[ ",$PRESENT," == *",$kind,"* ]]; then
+            ask "Google Play already has a $label in Steam.
+
+Replace it?" 'Replace' 'Keep it' || continue
+            confirmed=true
+        fi
+        while :; do
+            file="$(pick_image "$label")" || { file=''; break; }
+            [[ -n "$file" ]] || break
+            # Validate now (reads only), so one bad file never loses the others.
+            if check="$(add_game --dry-run --artwork "$kind=$file" 2>&1)"; then
+                chosen+=(--artwork "$kind=$file")
+                [[ "$confirmed" == false ]] || replace+=(--replace-artwork "$kind")
+                break
+            fi
+            ask "This file cannot be used as the $label:
+
+${check#ERROR: }" 'Choose another' 'Skip it' || break
+        done
+    done
+    ARTWORK_SAID=1
+    ((${#chosen[@]})) || { show info 'No artwork imported; you can import it later with "Lepton: Google Play artwork". It is now safe to start Steam again.'; return 0; }
+    if out="$(add_game --artwork-only "${chosen[@]}" "${replace[@]}" 2>&1)"; then
+        show info "Artwork imported. It is now safe to start Steam again.
+
+$out"
+    else
+        show error "Importing the artwork failed; the Google Play shortcut was not changed:
+
+$out"
+        return 1
+    fi
+}
+
+shortcut_status
+if [[ "$MODE" == artwork ]]; then
+    [[ "$APPID" != - ]] || fail_box 'Google Play is not in Steam yet. Use "Lepton: Add Google Play to Steam" first.'
+    ask "$STEAM_CLOSED_TEXT" 'Steam is closed' 'Cancel' || exit 0
+    import_artwork
+    exit $?
+fi
+
+if [[ "$APPID" != - ]]; then
+    show info "Google Play is already in your Steam library (\"$SHORTCUT_NAME\"). It was left unchanged."
+    ask 'Import Steam library artwork for it now?' 'Import artwork' 'Not now' || exit 0
+    ask "$STEAM_CLOSED_TEXT" 'Steam is closed' 'Cancel' || exit 0
+    import_artwork
+    exit $?
+fi
+
+# Validate before asking the user to close Steam (a dry run reads only).
+check="$(add_game --dry-run 2>&1)" || fail_box "Cannot add Google Play to Steam:
+
+$check"
+ask "Ready to add \"Google Play (Lepton)\" to Steam.
+
+$STEAM_CLOSED_TEXT" 'Steam is closed' 'Cancel' || { show info 'Google Play was not added. Add it later with "Lepton: Add Google Play to Steam".'; exit 0; }
+if ! out="$(add_game 2>&1)"; then
+    fail_box "Adding Google Play to Steam failed:
+
+$out
+
+Steam's shortcuts were not changed. You can start Steam again."
+fi
+show info "Google Play (Lepton) was added to Steam (Non-Steam games).
+
+In Steam: launch it, sign in to Google, install games and play. Steam's Stop ends Android; installed games, the sign-in and saves are kept.
+Steam Deck: Steam + D-pad Left sends Esc (Android's Back). For touch input enable Touchscreen Native Support in its controller layout.
+
+$out"
+shortcut_status
+ARTWORK_SAID=0
+import_artwork || true
+[[ "$ARTWORK_SAID" == 1 ]] || show info 'Done. It is now safe to start Steam again.'

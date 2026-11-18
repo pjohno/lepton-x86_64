@@ -94,6 +94,18 @@ installed APK no longer matches the game's file, Lepton stops with a message
 and keeps the data. It never resets data on its own
 ([details](INSTALL-STEAM-DECK.md#game-data-between-launches)).
 
+**Google Play (GApps bundles you build yourself).** A GApps install can add
+one Steam shortcut, **Google Play (Lepton)**. The installer offers it, and
+**Lepton: Add Google Play to Steam** adds it later. It opens the Play Store:
+install games there, play them, go back to Android's home screen with
+Steam + D-pad Left (Esc), and start another game. Steam's Stop ends the
+session. All games installed this way share that one shortcut's Android data,
+which keeps them, the Google sign-in and their saves between launches.
+Shortcuts added with **Lepton: Add Android game** keep their own separate
+Android. You can import Steam artwork you have downloaded. A game being in the
+Play Store doesn't mean it runs: ARM translation and Play Integrity limit many
+games ([details](GAPPS.md#google-play-in-steam)).
+
 With patch 0012 in the Android image, closing the game's direct Wayland desktop
 window requests Android task removal and launcher teardown. Save in the game
 first: window closing does not guarantee unsaved progress has been written.

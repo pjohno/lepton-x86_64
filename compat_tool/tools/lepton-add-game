@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Add an Android APK or saved runtime profile as a Steam non-Steam shortcut.
 
+--google-play adds "Google Play (Lepton)" instead: Android without an APK,
+opening the Play Store; games installed there keep their data in that one
+shortcut's compatdata. --artwork imports user-supplied Steam library images.
+
 Run with Steam fully exited. Uses Python's standard library only.
 Refuses unknown VDF formats rather than overwriting Steam configuration.
 """
@@ -25,6 +29,112 @@ LEGACY_INSTALL = Path.home() / ".local/share/lepton-x86_64-dev"
 STEAM = None
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "lepton-x86_64"
 GOOGLE_SERVICES_APK = "compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk"
+
+# Google Play launcher. The shortcut's target lives outside every Lepton
+# install, so its path, and with it the Steam AppID and compatdata (the
+# Android data: installed games, sign-in, saves), stay the same across
+# updates and when the shortcut's compatibility tool is changed.
+GOOGLE_PLAY_NAME = "Google Play (Lepton)"
+GOOGLE_PLAY_PACKAGE = "com.android.vending"
+GOOGLE_PLAY_LAUNCH = (
+    "# Lepton launch file (written by lepton-add-game --google-play).\n"
+    "# The Steam shortcut \"" + GOOGLE_PLAY_NAME + "\" points here: Lepton then opens\n"
+    "# this package in the shortcut's own Android data. Do not edit or move.\n"
+    "package=" + GOOGLE_PLAY_PACKAGE + "\n"
+)
+
+
+def google_play_target():
+    """The Google Play shortcut's target (fixed under HOME, not XDG_DATA_HOME,
+    so a changed environment never changes the AppID)."""
+    return Path.home() / ".local/share/lepton-google-play/google-play.lepton-launch"
+
+
+def write_launch_file(path):
+    """Create or repair the launch file (never anything else in its folder)."""
+    try:
+        if path.read_text(encoding="utf-8") == GOOGLE_PLAY_LAUNCH:
+            return
+    except (OSError, UnicodeError):
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if any(path.parent.glob("*.apk")) or any(path.parent.glob("*.APK")):
+        fail("%s contains APK files; Lepton would treat Google Play as that game. "
+             "Move them elsewhere and try again." % path.parent)
+    atomic_replace(path, GOOGLE_PLAY_LAUNCH.encode("utf-8"))
+
+
+# Steam library artwork for non-Steam shortcuts: <userdata>/config/grid/
+# <AppID><suffix>.<png|jpg>, named by the shortcut's own Steam AppID (never a
+# SteamGridDB ID). The icon is also recorded in the shortcut's "icon" field.
+ARTWORK = {
+    "portrait": ("p", "Portrait library cover (600 x 900)", ("png", "jpg")),
+    "horizontal": ("", "Horizontal library cover (920 x 430)", ("png", "jpg")),
+    "hero": ("_hero", "Hero / background (1920 x 620)", ("png", "jpg")),
+    "logo": ("_logo", "Transparent logo (PNG)", ("png",)),
+    "icon": ("_icon", "Shortcut icon (PNG or ICO)", ("png", "ico")),
+}
+ARTWORK_EXTENSIONS = ("png", "jpg", "jpeg", "ico")
+ARTWORK_MAX_BYTES = 50 * 1024 * 1024
+
+
+def image_info(path):
+    """(format, width, height) of a PNG, JPEG or ICO file; ValueError if it
+    is not one (the file extension is ignored)."""
+    path = Path(path)
+    if not path.is_file():
+        fail("Not a file: %s" % path)
+    size = path.stat().st_size
+    if size == 0 or size > ARTWORK_MAX_BYTES:
+        fail("%s is empty or larger than %d MB" % (path, ARTWORK_MAX_BYTES // (1024 * 1024)))
+    data = path.read_bytes()
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR":
+        width, height = struct.unpack(">II", data[16:24])
+        if width and height:
+            return "png", width, height
+    elif data[:3] == b"\xff\xd8\xff":
+        pos = 2
+        while pos + 9 < len(data):
+            if data[pos] != 0xFF:
+                break
+            marker = data[pos + 1]
+            if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                pos += 2
+                continue
+            length = struct.unpack(">H", data[pos + 2:pos + 4])[0]
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                height, width = struct.unpack(">HH", data[pos + 5:pos + 9])
+                if width and height:
+                    return "jpg", width, height
+                break
+            pos += 2 + length
+    elif data[:4] == b"\x00\x00\x01\x00" and len(data) >= 22 and struct.unpack("<H", data[4:6])[0] > 0:
+        return "ico", data[6] or 256, data[7] or 256
+    fail("%s is not a valid PNG, JPEG or ICO image" % path)
+
+
+def artwork_files(grid, appid, kind):
+    """Existing grid files for this shortcut and kind."""
+    base = str(appid) + ARTWORK[kind][0]
+    return [grid / (base + "." + ext) for ext in ARTWORK_EXTENSIONS if (grid / (base + "." + ext)).is_file()]
+
+
+def parse_artwork(values):
+    """{kind: (path, format)} from KIND=FILE arguments, all validated."""
+    chosen = {}
+    for value in values or ():
+        kind, sep, file = value.partition("=")
+        if not sep or kind not in ARTWORK or not file:
+            fail("--artwork expects KIND=FILE with KIND one of: " + ", ".join(ARTWORK))
+        if kind in chosen:
+            fail("--artwork %s given twice" % kind)
+        path = Path(file).expanduser().resolve()
+        kind_formats = ARTWORK[kind][2]
+        fmt = image_info(path)[0]
+        if fmt not in kind_formats:
+            fail("%s: %s needs %s, not %s" % (path, ARTWORK[kind][1], " or ".join(f.upper() for f in kind_formats), fmt.upper()))
+        chosen[kind] = (path, fmt)
+    return chosen
 
 
 def read_env(path):
@@ -157,13 +267,14 @@ def cstr(data, index):
     return data[index:end].decode("utf-8"), end + 1
 
 
-def read_binary(data):
-    """Return shortcuts data, existing entry names, and root closing offset."""
+def read_binary(data, spans=None):
+    """Return shortcuts data, existing entry names, and root closing offset.
+    If given, spans receives {(entry, key): (start, end)} of string values."""
     if not data:
         return {}, b"", 0
     if data[:11] != b"\x00shortcuts\x00":
         fail("Unrecognized shortcuts.vdf root; refusing to edit")
-    def node(pos):
+    def node(pos, path=()):
         fields = {}
         while pos < len(data):
             kind = data[pos]
@@ -172,9 +283,12 @@ def read_binary(data):
                 return fields, pos
             key, pos = cstr(data, pos)
             if kind == 0:
-                value, pos = node(pos)
+                value, pos = node(pos, path + (key,))
             elif kind == 1:
+                start = pos
                 value, pos = cstr(data, pos)
+                if spans is not None:
+                    spans[path + (key,)] = (start, pos - 1)
             elif kind == 2:
                 if pos + 4 > len(data): fail("Truncated VDF integer")
                 value = struct.unpack_from("<I", data, pos)[0]
@@ -329,11 +443,285 @@ def atomic_replace(path, payload):
             os.unlink(temp)
 
 
+def steam_users(steam):
+    """[(userdata directory, label)] of this Steam's numeric users; the label
+    is the account's name from config/loginusers.vdf when it is known."""
+    userdata = steam / "userdata"
+    users = sorted(p for p in userdata.iterdir() if p.is_dir() and p.name.isdigit()) if userdata.is_dir() else []
+    names = {}
+    try:
+        text = (steam / "config/loginusers.vdf").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    for match in re.finditer(r'"(\d{17})"\s*\{([^{}]*)\}', text):
+        persona = re.search(r'"PersonaName"\s*"([^"\n]*)"', match.group(2), re.I)
+        account = re.search(r'"AccountName"\s*"([^"\n]*)"', match.group(2), re.I)
+        label = (persona.group(1) if persona else "") or (account.group(1) if account else "")
+        if label:
+            names[str(int(match.group(1)) - 76561197960265728)] = label
+    return [(user, names.get(user.name, "Steam user " + user.name)) for user in users]
+
+
+def select_user(requested):
+    """The Steam userdata directory to change: --userdata, or the only user.
+    Several users and no choice: refuse (never guess an account)."""
+    users = [user for user, _ in steam_users(STEAM)]
+    if requested:
+        selected = requested.expanduser().resolve()
+        if selected not in [p.resolve() for p in users]:
+            fail("--userdata must point to an existing numeric Steam user directory")
+        return selected
+    if len(users) == 1:
+        return users[0]
+    if not users:
+        fail("No Steam user found in %s; start Steam once and sign in, exit it, then try again"
+             % (STEAM / "userdata"))
+    fail("Found %d Steam users; specify --userdata" % len(users))
+
+
+def legacy_launch_options(hotplug):
+    return (
+        "APP_WANTS_FLATSCREEN=true "
+        + ("LEPTON_GAMEPAD_HOTPLUG=true " if hotplug else "")
+        + "LEPTON_ADB=" + shlex.quote(str(INSTALL / "tools/platform-tools/adb")) + " "
+        + "PATH=" + shlex.quote(str(INSTALL / "tools/bin")) + ":$PATH "
+        + shlex.quote(str(INSTALL / "compat_tool/tools/lepton-gamescope-bridge")) + " %command%"
+    )
+
+
+def tool_launch_options(hotplug):
+    if self_contained(INSTALL):
+        # The tool supplies its bridge, ADB and flatscreen default itself, so
+        # switching the game's compatibility tool in Steam switches everything.
+        return "LEPTON_GAMEPAD_HOTPLUG=true %command%" if hotplug else ""
+    return legacy_launch_options(hotplug)  # older installs without lepton-x86_64-entry
+
+
+def mapped_config(config, appid, notes):
+    """config.vdf's bytes with this AppID mapped to TOOL."""
+    original_config = config.read_bytes()
+    decoded, created = with_mapping_block(original_config.decode("utf-8"))
+    if created:
+        notes.append("Added Steam's compatibility-tool list (first game with a compatibility tool).")
+    start, end = find_mapping_block(decoded)
+    if re.search(r'"\s*' + str(appid) + r'\s*"\s*\{', decoded[start:end]):
+        # No shortcut has this AppID (checked by the caller), so this mapping
+        # was left behind when the shortcut was deleted in Steam: replace it.
+        leftover = re.search(r'"\s*' + str(appid) + r'\s*"\s*\{[^{}]*\}', decoded[start:end])
+        if not leftover:
+            fail("Steam config has an unexpected mapping for this AppID; refusing to overwrite")
+        previous = re.search(r'"name"\s*"([^"]*)"', leftover.group(0))
+        notes.append("Replacing the compatibility tool left by a deleted shortcut ("
+                     + (previous.group(1) if previous and previous.group(1) else "none")
+                     + ") with " + TOOL + ".")
+        decoded = decoded[:start + leftover.start()] + decoded[start + leftover.end():]
+        start, end = find_mapping_block(decoded)
+    new_mapping = (
+        '\n\t\t\t\t\t\t"' + str(appid) + '"\n'
+        '\t\t\t\t\t\t{\n'
+        '\t\t\t\t\t\t\t"name"\t\t"' + TOOL + '"\n'
+        '\t\t\t\t\t\t\t"config"\t\t""\n'
+        '\t\t\t\t\t\t\t"priority"\t\t"250"\n'
+        '\t\t\t\t\t\t}\n'
+    )
+    return (decoded[:end] + new_mapping + decoded[end:]).encode("utf-8")
+
+
+def write_steam_files(shortcuts, original, new_shortcuts, config, new_config):
+    # Each replacement is atomic. If the second write fails, restore the
+    # first file, including the original absence of shortcuts.vdf.
+    atomic_replace(shortcuts, new_shortcuts)
+    try:
+        if new_config is not None:
+            atomic_replace(config, new_config)
+    except Exception:
+        if original:
+            atomic_replace(shortcuts, original)
+        else:
+            shortcuts.unlink(missing_ok=True)
+        raise
+
+
+def append_shortcut(data, insertion, entries, appid, name, target, options, start_dir=None):
+    """shortcuts.vdf bytes with one more entry."""
+    slot = 0
+    while str(slot) in entries:
+        slot += 1
+    new_shortcuts = data[:insertion] + shortcut_entry(
+        slot, appid, name, target, options, start_dir
+    ) + (data[insertion:] if data else b"\x08")
+    if not data:
+        # Include the conventional implicit outer map terminator as well.
+        new_shortcuts = b"\x00shortcuts\x00" + new_shortcuts + b"\x08"
+    return new_shortcuts
+
+
+def google_play_shortcut(entries):
+    """(entry key, entry) of the Google Play shortcut (found by its target,
+    so a shortcut renamed in Steam still counts), or (None, None)."""
+    exe = '"' + str(google_play_target()) + '"'
+    for key, value in entries.items():
+        if isinstance(value, dict) and value.get("Exe") == exe:
+            return key, value
+    return None, None
+
+
+def google_play_status(steam):
+    """Per Steam user: the Google Play shortcut's AppID and name, and its
+    artwork kinds already present. Reads only."""
+    for user, _ in steam_users(steam):
+        path = user / "config/shortcuts.vdf"
+        entries = read_binary(path.read_bytes())[0] if path.is_file() else {}
+        _, entry = google_play_shortcut(entries)
+        if entry is None or not isinstance(entry.get("appid"), int):
+            print("%s\t-\t" % user)
+            continue
+        appid = entry["appid"]
+        grid = user / "config/grid"
+        present = [kind for kind in ARTWORK if artwork_files(grid, appid, kind)]
+        if "icon" not in present and entry.get("icon"):
+            present.append("icon")
+        print("%s\t%d\t%s\t%s" % (user, appid, entry.get("AppName", ""), ",".join(present)))
+
+
+def import_artwork(user, shortcuts, appid, chosen, replace):
+    """Copy validated images into <user>/config/grid, named by the shortcut's
+    AppID. Existing artwork of a kind is kept unless that kind is in replace.
+    The icon is also set in the shortcut entry. Returns report lines."""
+    grid = user / "config/grid"
+    report = []
+    data = shortcuts.read_bytes()
+    spans = {}
+    entries = read_binary(data, spans)[0]
+    key, entry = google_play_shortcut(entries)
+    if entry is None or entry.get("appid") != appid:
+        fail("The Google Play shortcut changed while importing artwork; nothing was imported")
+    icon_span = next((span for (slot, field), span in spans.items()
+                      if slot == key and field.lower() == "icon"), None)
+    for kind in ARTWORK:
+        if kind not in chosen:
+            continue
+        source, fmt = chosen[kind]
+        existing = artwork_files(grid, appid, kind)
+        if kind == "icon" and entry.get("icon") and not existing:
+            existing = [Path(entry["icon"])]
+        if existing and kind not in replace:
+            report.append("Kept existing %s: %s" % (ARTWORK[kind][1], existing[0]))
+            continue
+        target = grid / ("%d%s.%s" % (appid, ARTWORK[kind][0], fmt))
+        atomic_replace(target, source.read_bytes())
+        for old in artwork_files(grid, appid, kind):
+            if old != target:
+                old.unlink()  # Steam would otherwise keep showing an older .png
+        if kind == "icon":
+            if icon_span is None:
+                report.append("Icon copied to %s, but this shortcut has no icon field: set it in "
+                              "Steam (Properties > Shortcut)" % target)
+                continue
+            start, end = icon_span
+            data = data[:start] + str(target).encode("utf-8") + data[end:]
+            read_binary(data)  # still a valid shortcuts.vdf
+            atomic_replace(shortcuts, data)
+        report.append("Imported %s: %s" % (ARTWORK[kind][1], target))
+    return report
+
+
+def add_google_play(args, registered):
+    """Create the Google Play shortcut if missing (an existing one, possibly
+    customised in Steam, is left unchanged), then import any --artwork."""
+    target = google_play_target()
+    name = GOOGLE_PLAY_NAME
+    exe = '"' + str(target) + '"'
+    appid = zlib.crc32((exe + name).encode("utf-8")) | 0x80000000
+    if not (INSTALL / GOOGLE_SERVICES_APK).is_file():
+        fail(TOOL + " has no Google services (not a GApps bundle); Google Play needs a Lepton GApps tool")
+    if args.print_appid:
+        print(appid)
+        return
+    chosen = parse_artwork(args.artwork)
+    if args.artwork_only and not chosen:
+        fail("--artwork-only needs at least one --artwork KIND=FILE")
+    if not args.dry_run and steam_running():
+        fail("Steam is still running. Exit Steam completely (Steam menu > Exit), "
+             "then try again. Nothing was changed.")
+    if not (INSTALL / "compat_tool/tools/lepton-gamescope-bridge").is_file():
+        fail("Lepton installation not found at " + str(INSTALL))
+    if registered is None:
+        fail("Lepton is not registered with Steam (no %s.vdf or self-contained %s in %s); "
+             "reinstall the tool and restart Steam" % (TOOL, TOOL, STEAM / "compatibilitytools.d"))
+    selected = select_user(args.userdata)
+    shortcuts = selected / "config/shortcuts.vdf"
+    config = STEAM / "config/config.vdf"
+    if not config.is_file():
+        fail("Steam config.vdf not found")
+    original = shortcuts.read_bytes() if shortcuts.exists() else b""
+    entries, data, insertion = read_binary(original)
+    _, existing = google_play_shortcut(entries)
+    notes = []
+    if existing is not None:
+        if not isinstance(existing.get("appid"), int):
+            fail("The existing Google Play shortcut has no Steam AppID; refusing to change it")
+        appid = existing["appid"]
+        new_shortcuts = new_config = None
+        notes.append("Google Play is already in Steam as \"%s\"; the shortcut and its settings "
+                     "were left unchanged." % existing.get("AppName", name))
+    elif args.artwork_only:
+        fail("Google Play is not in Steam yet for this user; add it first (lepton-add-game --google-play)")
+    else:
+        for value in entries.values():
+            if isinstance(value, dict) and value.get("appid") == appid:
+                fail("Shortcut AppID collision with \"%s\"; nothing was changed" % value.get("AppName", "?"))
+        if (STEAM / "steamapps/compatdata" / str(appid)).is_dir():
+            notes.append("Reusing the saved Android data of an earlier Google Play shortcut ("
+                         + str(STEAM / "steamapps/compatdata" / str(appid)) + ").")
+        new_shortcuts = append_shortcut(data, insertion, entries, appid, name, target,
+                                        tool_launch_options(args.hotplug), target.parent)
+        new_config = mapped_config(config, appid, notes)
+    if args.dry_run:
+        print("PASS: Google Play shortcut is valid; no Steam files modified")
+        print("Proposed shortcut:", name, "| Steam AppID:", appid)
+        for kind, (path, _) in chosen.items():
+            print("Artwork %s: %s" % (kind, path))
+        for note in notes:
+            print("Note:", note)
+        return
+    if new_shortcuts is not None:
+        write_launch_file(target)
+        write_steam_files(shortcuts, original, new_shortcuts, config, new_config)
+        print("Added Steam shortcut:", name)
+        print("Compatibility tool:", TOOL)
+    else:
+        write_launch_file(target)  # repair a deleted launch file; never the shortcut
+    print("Steam AppID:", appid)
+    print("Android data:", STEAM / "steamapps/compatdata" / str(appid))
+    for note in notes:
+        print("Note:", note)
+    if chosen:
+        for line in import_artwork(selected, shortcuts, appid, chosen, set(args.replace_artwork)):
+            print(line)
+    print("It is now safe to start Steam again; Google Play is under Non-Steam games.")
+
+
 def main():
     global TOOL, INSTALL, STEAM
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("apk", type=Path, help="APK file to add")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("apk", type=Path, nargs="?", help="APK file to add (not with --google-play)")
     parser.add_argument("--name", help="Name displayed in Steam (default: APK stem)")
+    parser.add_argument("--google-play", action="store_true",
+                        help='Add "' + GOOGLE_PLAY_NAME + '" (needs a GApps tool). An existing one is '
+                        "left unchanged; --artwork then imports images for it")
+    parser.add_argument("--artwork", action="append", metavar="KIND=FILE",
+                        help="With --google-play: import a Steam library image; KIND is one of "
+                        + ", ".join(ARTWORK) + " (repeatable)")
+    parser.add_argument("--replace-artwork", action="append", default=[], metavar="KIND",
+                        help="Replace this kind's existing artwork (otherwise it is kept)")
+    parser.add_argument("--artwork-only", action="store_true",
+                        help="With --google-play: only import --artwork for the existing shortcut")
+    parser.add_argument("--status", action="store_true",
+                        help="With --google-play: print each Steam user's Google Play shortcut "
+                        "(USERDATA<TAB>APPID<TAB>NAME, APPID '-' if none) and its artwork; changes nothing")
+    parser.add_argument("--list-users", action="store_true",
+                        help="Print the Steam users (USERDATA<TAB>NAME), then exit")
     parser.add_argument("--hotplug", action="store_true",
                         help="Enable experimental /dev/input mount and live gamepad hotplug")
     parser.add_argument("--print-appid", action="store_true",
@@ -350,6 +738,25 @@ def main():
     parser.add_argument("--expect-abi", choices=("x86_64", "arm64-v8a"), default="x86_64",
                         help="ABI for --runtime-profile (default: x86_64)")
     args = parser.parse_args()
+    if args.list_users:
+        STEAM = manage_module().steam_root()
+        for user, label in steam_users(STEAM):
+            print("%s\t%s" % (user, label))
+        return
+    if args.google_play:
+        if args.apk is not None or args.name or args.runtime_profile:
+            fail("--google-play takes no APK, --name or --runtime-profile")
+    elif args.apk is None:
+        fail("An APK file is required (or use --google-play)")
+    elif args.artwork or args.artwork_only or args.status or args.replace_artwork:
+        fail("--artwork, --artwork-only, --replace-artwork and --status need --google-play")
+    for kind in args.replace_artwork:
+        if kind not in ARTWORK:
+            fail("--replace-artwork expects one of: " + ", ".join(ARTWORK))
+    if args.google_play and args.status:
+        STEAM = manage_module().steam_root()
+        google_play_status(STEAM)
+        return
     if args.runtime_profile:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", args.runtime_profile):
             fail("Invalid runtime profile name")
@@ -377,6 +784,8 @@ def main():
         if registered[1].resolve() != INSTALL.resolve():
             fail("Tool registration install_path does not match --install-dir")
 
+    if args.google_play:
+        return add_google_play(args, registered)
     apk = args.apk.expanduser().resolve(strict=True)
     # Lepton installs split-APK bundles (.apkm) on the normal launch path too.
     if not apk.is_file() or apk.suffix.lower() not in {".apk", ".apkm"}:
@@ -405,17 +814,7 @@ def main():
     name = args.name or apk.stem
     if not name or any(x in name for x in "\x00\r\n"):
         fail("Invalid shortcut name")
-    userdata = STEAM / "userdata"
-    users = sorted(p for p in userdata.iterdir()
-                   if p.is_dir() and p.name.isdigit())
-    if args.userdata:
-        selected = args.userdata.expanduser().resolve()
-        if selected not in [p.resolve() for p in users]:
-            fail("--userdata must point to an existing numeric Steam user directory")
-    elif len(users) == 1:
-        selected = users[0]
-    else:
-        fail("Found %d Steam users; specify --userdata" % len(users))
+    selected = select_user(args.userdata)
     shortcuts = selected / "config/shortcuts.vdf"
     config = STEAM / "config/config.vdf"
     if not config.is_file():
@@ -444,13 +843,7 @@ def main():
         if isinstance(value, dict) and value.get("appid") == appid:
             fail("Shortcut AppID collision; try a different --name")
 
-    legacy_options = (
-        "APP_WANTS_FLATSCREEN=true "
-        + ("LEPTON_GAMEPAD_HOTPLUG=true " if args.hotplug else "")
-        + "LEPTON_ADB=" + shlex.quote(str(INSTALL / "tools/platform-tools/adb")) + " "
-        + "PATH=" + shlex.quote(str(INSTALL / "tools/bin")) + ":$PATH "
-        + shlex.quote(str(INSTALL / "compat_tool/tools/lepton-gamescope-bridge")) + " %command%"
-    )
+    legacy_options = legacy_launch_options(args.hotplug)
     if args.runtime_profile:
         # Saved profiles run a specific install's runner (no compatibility tool).
         options = legacy_options + " " + shlex.join([
@@ -459,12 +852,8 @@ def main():
             "--rendering", installed_rendering(TOOL, INSTALL), "--display", "desktop", "--network-sysctls",
             "--until-exit", "--execute",
         ])
-    elif self_contained(INSTALL):
-        # The tool supplies its bridge, ADB and flatscreen default itself, so
-        # switching the game's compatibility tool in Steam switches everything.
-        options = "LEPTON_GAMEPAD_HOTPLUG=true %command%" if args.hotplug else ""
     else:
-        options = legacy_options  # older installs without lepton-x86_64-entry
+        options = tool_launch_options(args.hotplug)
     new_shortcuts = data[:insertion] + shortcut_entry(
         slot, appid, name, executable, options, INSTALL if args.runtime_profile else None
     ) + (data[insertion:] if data else b"\x08")
@@ -487,32 +876,7 @@ def main():
                      "tool, or use a different name to start with fresh game data.")
             notes.append("Reusing the saved game data of an earlier shortcut with this name "
                          "(" + str(data_dir) + "); use a different name to start fresh.")
-        original_config = config.read_bytes()
-        decoded, created = with_mapping_block(original_config.decode("utf-8"))
-        if created:
-            notes.append("Added Steam's compatibility-tool list (first game with a compatibility tool).")
-        start, end = find_mapping_block(decoded)
-        if re.search(r'"\s*' + str(appid) + r'\s*"\s*\{', decoded[start:end]):
-            # No shortcut has this AppID (checked above), so this mapping was
-            # left behind when the shortcut was deleted in Steam: replace it.
-            leftover = re.search(r'"\s*' + str(appid) + r'\s*"\s*\{[^{}]*\}', decoded[start:end])
-            if not leftover:
-                fail("Steam config has an unexpected mapping for this AppID; refusing to overwrite")
-            previous = re.search(r'"name"\s*"([^"]*)"', leftover.group(0))
-            notes.append("Replacing the compatibility tool left by a deleted shortcut ("
-                         + (previous.group(1) if previous and previous.group(1) else "none")
-                         + ") with " + TOOL + ".")
-            decoded = decoded[:start + leftover.start()] + decoded[start + leftover.end():]
-            start, end = find_mapping_block(decoded)
-        new_mapping = (
-            '\n\t\t\t\t\t\t"' + str(appid) + '"\n'
-            '\t\t\t\t\t\t{\n'
-            '\t\t\t\t\t\t\t"name"\t\t"' + TOOL + '"\n'
-            '\t\t\t\t\t\t\t"config"\t\t""\n'
-            '\t\t\t\t\t\t\t"priority"\t\t"250"\n'
-            '\t\t\t\t\t\t}\n'
-        )
-        new_config = (decoded[:end] + new_mapping + decoded[end:]).encode("utf-8")
+        new_config = mapped_config(config, appid, notes)
     if args.dry_run:
         print("PASS: shortcut is valid; no Steam files modified" if args.runtime_profile else "PASS: shortcut and compatibility mapping are valid; no Steam files modified")
         print("Proposed shortcut:", name, "| Steam AppID:", appid)
@@ -520,18 +884,7 @@ def main():
         for note in notes:
             print("Note:", note)
         return
-    # Each replacement is atomic. If the second write fails, restore the
-    # first file, including the original absence of shortcuts.vdf.
-    atomic_replace(shortcuts, new_shortcuts)
-    try:
-        if new_config is not None:
-            atomic_replace(config, new_config)
-    except Exception:
-        if original:
-            atomic_replace(shortcuts, original)
-        else:
-            shortcuts.unlink(missing_ok=True)
-        raise
+    write_steam_files(shortcuts, original, new_shortcuts, config, new_config)
     print("Added Steam shortcut:", name)
     print("APK:", apk)
     print("Steam AppID:", appid)

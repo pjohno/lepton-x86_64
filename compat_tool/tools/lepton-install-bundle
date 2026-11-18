@@ -752,6 +752,34 @@ DESKTOP
         [[ ! -d "$desktop_dir" ]] || install -m 755 "$apps/$entry" "$desktop_dir/$entry"
     done
     pass "Google game icons: Lepton: Add Google game, Lepton: Google sign-in ($BUNDLE_ID)"
+    # Google Play launcher: one Steam shortcut for the Play Store (and
+    # optional artwork). Also follows THIS install, like the icons above.
+    play_gui="$DEST/compat_tool/tools/lepton-google-play-gui"
+    if [[ -f "$play_gui" ]]; then
+        for kind in add artwork; do
+            if [[ "$kind" == add ]]; then
+                entry="lepton-x86_64-google-play-$TOOL_ID.desktop"
+                label="Lepton: Add Google Play to Steam ($BUNDLE_ID)"; args=''; icon=list-add
+                comment='Add Google Play (Lepton) to the Steam library: install and play Android games from the Play Store'
+            else
+                entry="lepton-x86_64-google-play-artwork-$TOOL_ID.desktop"
+                label="Lepton: Google Play artwork ($BUNDLE_ID)"; args=' --artwork'; icon=image-x-generic
+                comment='Import downloaded Steam library artwork for Google Play (Lepton)'
+            fi
+            cat > "$apps/$entry" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=$label
+Comment=$comment
+Exec="$play_gui"$args
+Icon=$icon
+Terminal=false
+Categories=Game;
+DESKTOP
+            [[ ! -d "$desktop_dir" ]] || install -m 755 "$apps/$entry" "$desktop_dir/$entry"
+        done
+        pass "Google Play icons: Lepton: Add Google Play to Steam, Lepton: Google Play artwork ($BUNDLE_ID)"
+    fi
 fi
 
 installed_manage="$DEST/compat_tool/tools/lepton-manage-installs"
@@ -806,6 +834,31 @@ elif [[ "$INTERACTIVE" == true ]]; then
     python3 "$installed_manage" --gui --quiet-if-empty --exclude "$TOOL_ID" \
         --prompt "Installed $TOOL_NAME. Optionally remove older Lepton installs:" || true
 fi
+# GApps installs: offer the Google Play shortcut. Only in a window opened for
+# the user (desktop icon or Install / Update / Repair) with dialogs available;
+# otherwise never wait for input, just print the command (below). An existing
+# Google Play shortcut is never changed, so upgrades do not ask again.
+GOOGLE_PLAY_HINT=false
+if [[ "$HAS_GAPPS" == true && -f "$DEST/compat_tool/tools/lepton-google-play-gui" ]]; then
+    GOOGLE_PLAY_HINT=true
+    play_status="$(python3 "$DEST/compat_tool/tools/lepton-add-game" --google-play --status 2>/dev/null)" || play_status=''
+    if grep -Eq $'^[^\t]+\t[0-9]+\t' <<< "$play_status"; then
+        GOOGLE_PLAY_HINT=false
+        info 'Google Play (Lepton) is already in Steam; its shortcut, settings and artwork were left unchanged'
+    elif [[ "$PAUSE" == true && "$MODE" == execute && -z "${LEPTON_NO_GOOGLE_PLAY_OFFER:-}" &&
+            ( -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ) ]] &&
+         { command -v zenity >/dev/null 2>&1 || command -v kdialog >/dev/null 2>&1; }; then
+        if "$DEST/compat_tool/tools/lepton-google-play-gui" --offer; then
+            play_status="$(python3 "$DEST/compat_tool/tools/lepton-add-game" --google-play --status 2>/dev/null)" || play_status=''
+            if grep -Eq $'^[^\t]+\t[0-9]+\t' <<< "$play_status"; then
+                GOOGLE_PLAY_HINT=false
+                pass 'Google Play (Lepton) added to Steam'
+            fi
+        else
+            info 'Google Play was not added to Steam (see the message shown); the installation itself is complete'
+        fi
+    fi
+fi
 expected_driver='SwiftShader: software rendering'
 [[ "$amd" != true ]] || expected_driver=RADV
 [[ "$amd" == true || "$bundle_has_intel" != true ]] || expected_driver='Intel (ANV)'
@@ -822,6 +875,15 @@ Terminal equivalents: lepton-run-apk --gpu-check --execute,
                       lepton-add-game GAME.apk (with Steam exited; in ~/.local/bin)
 Installed in: $DEST ($DEST_LAYOUT layout)
 EOF
+if [[ "$GOOGLE_PLAY_HINT" == true ]]; then
+    cat <<EOF
+
+Google Play in Steam (optional; this is a GApps install):
+  "Lepton: Add Google Play to Steam ($BUNDLE_ID)" (desktop icon or menu), or,
+  with Steam exited: lepton-add-game --google-play --tool-id $TOOL_ID
+  (several Steam accounts: add --userdata ~/.steam/root/userdata/<number>)
+EOF
+fi
 if [[ -n "$BACKUP" && "$KEEP_PREVIOUS" == true ]]; then
     printf '\nPrevious install kept at %s (remove it with "Lepton: Remove installs").\n' "$BACKUP"
 fi

@@ -340,6 +340,14 @@ function generate_app_launch_rc()
             fi
     fi
         chmod 0644 "${APP_LAUNCH_RC}"
+    elif google_play_mode; then
+        # x86_64 port: Google Play launcher: no game to install or watch; open
+        # the store once Android and its storage are ready. Leaving it (Home,
+        # another game) does not end the session; Steam's Stop does.
+        println "on property:sys.boot_completed=1 && property:ro.lepton.app_baked=1" >>"${APP_LAUNCH_RC}"
+        println "    exec -- /system/bin/timeout 10 /system/bin/logcat -e \"End Intent.*android.intent.action.MEDIA_MOUNTED\" -m 1" >>"${APP_LAUNCH_RC}"
+        println "    exec -- /system/bin/sh -c \"$(lepton_launch_commands)\"" >>"${APP_LAUNCH_RC}"
+        chmod 0644 "${APP_LAUNCH_RC}"
     fi
     podman_mount_entry "${APP_LAUNCH_RC}" "/vendor/etc/init/$(lepton_basename "${APP_LAUNCH_RC}")" ro,U
 }

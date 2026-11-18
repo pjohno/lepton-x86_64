@@ -84,10 +84,24 @@ fi
 grep -q 'needs Google services' "$work/google.err"
 grep -q -- '--error --title=Lepton' "$work/dialog.log" && grep -q 'needs Google services' "$work/dialog.log"
 [[ ! -e "$work/log" ]]
+# The Google Play launcher (a .lepton-launch target) is refused the same way,
+# whatever its compatdata holds.
+mkdir -p "$work/compat/2"; : > "$work/dialog.log"
+if run env STEAM_COMPAT_DATA_PATH="$work/compat/2" LEPTON_NO_BRIDGE=true WAYLAND_DISPLAY=test-display \
+        "$entry" waitforexitandrun -- "$work/google-play.lepton-launch" 2> "$work/play.err"; then
+    echo 'FAIL: Google Play started without Google services'; exit 1
+fi
+grep -q 'Google Play needs Google services' "$work/play.err" && grep -q 'Google Play needs Google services' "$work/dialog.log"
+[[ ! -e "$work/log" ]]
 gms="$root/compat_tool/images/rootfs/system/product/priv-app/PrebuiltGmsCore"
 mkdir -p "$gms" && touch "$gms/PrebuiltGmsCore.apk"
 run env STEAM_COMPAT_DATA_PATH="$work/compat/1" LEPTON_NO_BRIDGE=true "$entry" waitforexitandrun -- a.apk
 grep -qx 'lepton waitforexitandrun -- a.apk' "$work/log"
+run env STEAM_COMPAT_DATA_PATH="$work/compat/2" "$entry" waitforexitandrun -- "$work/google-play.lepton-launch"
+[[ "$(head -1 "$work/log")" == bridge ]]
+grep -qx "lepton waitforexitandrun -- $work/google-play.lepton-launch" "$work/log"
+# No arguments at all must not trip the check (set -u).
+run "$entry"
 
 # A profile belongs to this tool, never a caller's global environment.
 run env LEPTON_INSTALL_PROFILE=local-desktop "$entry" waitforexitandrun -- a.apk

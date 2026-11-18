@@ -191,12 +191,20 @@ function lepton_tool_for_fingerprint()
 function lepton_profile_refused()
 {
     local REASON="$1" STORED="${2:-}" GAME TOOL MESSAGE
-    GAME="$(get_app_id)"
+    GAME="$(lepton_session_name)"
     local RESET="To use this tool instead, reset the game's data: add
 LEPTON_RESET_APP_DATA=true %command%
 to its launch options (Properties > General), launch it once, then remove
 the option. This permanently deletes the game's Android data (saves, logins,
 settings) and installs the game again. Shared storage is kept."
+    if google_play_mode; then
+        RESET="To use this tool instead, reset Google Play's data: add
+LEPTON_RESET_APP_DATA=true %command%
+to its launch options (Properties > General), launch it once, then remove
+the option. This permanently deletes ALL of its Android data: every game
+installed from Google Play, their saves and the Google sign-in. Shared storage
+is kept."
+    fi
     case "$REASON" in
         fingerprint)
             if TOOL="$(lepton_tool_for_fingerprint "$STORED")"; then
@@ -246,7 +254,7 @@ function check_kept_app_data()
         lepton_profile_refused layout
         return 1
     fi
-    println "Profile: Steam AppID=${SteamAppId:-unknown}; package=$(get_app_id); tool=${LEPTON_ENTRYPOINT:-$LEPTON_DIR}; data=$DIR"
+    println "Profile: Steam AppID=${SteamAppId:-unknown}; package=$(get_app_id)${LEPTON_LAUNCH_PACKAGE:+(launcher: ${LEPTON_LAUNCH_PACKAGE})}; tool=${LEPTON_ENTRYPOINT:-$LEPTON_DIR}; data=$DIR"
     [[ "${LEPTON_KEEP_APP_DATA:-true}" != false ]] || println "WARNING: LEPTON_KEEP_APP_DATA=false ignored; use an explicit per-game reset"
     if [[ "${LEPTON_RESET_APP_DATA:-false}" == true ]]; then
         clear_baked_app_data "LEPTON_RESET_APP_DATA=true" || return 1
@@ -701,7 +709,7 @@ function run_in_container()
 function auto_install_apps()
 {
     # Only auto-install apps if this is a dev context
-    if is_app; then
+    if is_app || google_play_mode; then
         return;
     fi
 
