@@ -188,6 +188,9 @@ the launcher log also says when media decoders are off):
 | `LEPTON_MEDIA_WAV_PLAYBACK_FAIL` | Even PCM WAV through MediaPlayer fails: it needs Codec2's raw decoder |
 | `CodecException` / `NO_MEMORY` with `DMABUFHEAPS: Unable to allocate` | Codec2 is on but tried the DMA-BUF heap (heap mode, or no BLOB pool) |
 | `allocatorID 19` in `CCodecBufferChannel` | Buffers from gralloc BLOB (patch 0013 mode); no host heap involved |
+| `LEPTON_MEDIA_DECODERS count=N hardware=M` | Decoders Android lists, and how many it reports as hardware-accelerated (0 on current images) |
+| `LEPTON_MEDIA_AVC_CANDIDATE rank=R name=...` | H.264 decoders in the order `createDecoderByType` tries them, with `hw`, `sw_only`, `vendor` and canonical name |
+| `LEPTON_MEDIA_AVC_DECODE mode=buffer\|surface decoder=... fps=...` | 5 s 720p H.264 High decoded by the selected decoder to CPU buffers or to an ImageReader Surface; diagnostic only, never fails the probe |
 | `C2AllocatorGralloc: failed transaction: lock(BLOB)` after `GBM-MESA-WRAPPER: Failed to map the buffer` | Intel image without patch 0014: gralloc imports BLOB buffers with a row wider than their stride, which iris rejects |
 
 `gbm-blob-probe.c` checks the host's Mesa driver directly, without Android: it
@@ -233,3 +236,16 @@ cc -O1 -o /tmp/gbm-blob-coherence tests/runtime/gbm-blob-coherence.c /usr/lib64/
 /tmp/gbm-blob-coherence            # gbm_bo_map: stale reads expected (20/20)
 DIRECT=1 /tmp/gbm-blob-coherence   # dma-buf mmap, as 0016 maps BLOBs: 0/20
 ```
+
+### Proving hardware video decoding
+
+A decoder's name, Android's `hw` flag or a playback that works prove nothing
+about the GPU being used: software fallbacks succeed silently (Fedora's
+`ffmpeg -hwaccel vaapi` decodes H.264 in software, for example). Measure the
+video engine instead. The kernel reports per-process engine time in DRM
+fdinfo (`drm-engine-video` on i915); sum it over a process's DRM fds while it
+decodes. On the Intel test host, GStreamer `vah264dec` kept the video engine
+46% busy while `openh264dec` left it at 0. Android's codec processes are host
+processes in Lepton, so the same counters apply to `media.swcodec` or a vendor
+Codec2 service. Current images: 0 ns for every media process during the
+720p probe on Intel.
