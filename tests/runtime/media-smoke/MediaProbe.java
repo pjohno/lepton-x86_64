@@ -158,10 +158,11 @@ public final class MediaProbe {
         android.media.ImageReader reader = null;
         android.os.HandlerThread thread = null;
         final int[] images = { 0 };
-        // Buffer mode: CRC32 of every frame's luma plane (visible area, row by
-        // row, so strides do not matter). H.264 decoding is bit-exact, so every
-        // correct decoder gives the same value.
+        // Buffer mode: CRC32 of each frame's luma plane (visible area, row by
+        // row, so strides do not matter), logged per frame and combined. H.264
+        // decoding is bit-exact, so every correct decoder gives the same values.
         java.util.zip.CRC32 luma = new java.util.zip.CRC32();
+        StringBuilder frameCrcs = new StringBuilder();
         int hashed = 0;
         try (AssetFileDescriptor fd = activity.getAssets().openFd(asset)) {
             extractor.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
@@ -213,7 +214,15 @@ public final class MediaProbe {
                 int output = codec.dequeueOutputBuffer(info, 10000);
                 if (output >= 0) {
                     if (info.size > 0 || toSurface) frames++;
-                    if (!toSurface && info.size > 0 && hashLuma(codec.getOutputImage(output), luma)) hashed++;
+                    if (!toSurface && info.size > 0) {
+                        java.util.zip.CRC32 frame = new java.util.zip.CRC32();
+                        if (hashLuma(codec.getOutputImage(output), frame)) {
+                            hashed++;
+                            long value = frame.getValue();
+                            for (int b = 0; b < 4; b++) luma.update((int) (value >>> (8 * b)) & 0xff);
+                            if (frameCrcs.length() < 2000) frameCrcs.append(Long.toHexString(value)).append(',');
+                        }
+                    }
                     outputEnd = (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
                     codec.releaseOutputBuffer(output, toSurface && !outputEnd);
                 }
@@ -233,6 +242,7 @@ public final class MediaProbe {
                 (toSurface ? " surface_images=" + images[0] :
                     " luma_crc=" + Long.toHexString(luma.getValue()) + " luma_frames=" + hashed) + " ms=" + ms +
                 " fps=" + (frames * 1000L / ms) + color);
+            if (!toSurface) Log.i(TAG, "LEPTON_MEDIA_AVC_FRAME_CRCS " + frameCrcs);
         } catch (Throwable error) {
             Log.w(TAG, "LEPTON_MEDIA_AVC_DECODE_FAIL mode=" + mode + " " + error);
         } finally {
