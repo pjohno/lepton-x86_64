@@ -93,7 +93,11 @@ class DecodeTests(unittest.TestCase):
         for mode in ('fixed', 'float'):
             out = subprocess.run([str(work / mode), 'dec', str(work / 'in.pkt'), os.devnull],
                                  check=True, capture_output=True, text=True).stdout
-            cls.result[mode] = {k: int(v) for k, v in re.findall(r'(\w[\w>=]*)=(\d+)', out)}
+            # e.g. "samples=... at_full_scale=N (...) flat_runs>=3=N longest=N"
+            cls.result[mode] = {
+                'at_full_scale': int(re.search(r'at_full_scale=(\d+)', out).group(1)),
+                'flat_runs': int(re.search(r'flat_runs>=3=(\d+)', out).group(1)),
+            }
 
     @classmethod
     def tearDownClass(cls):
