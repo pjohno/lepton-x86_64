@@ -8,13 +8,15 @@ Lepton's video decoding uses VA-API, and the ARM configurations already
 build without Vulkan.
 
 Turn off every Vulkan CONFIG_ switch in the x86_64 configuration (make
-fragment, C header and assembler header). config_components.h already has
-the Vulkan components off.
+fragment, C header and assembler header), the Vulkan hwaccels and encoders
+in the x86_64 section of config_components.h, and drop the two Vulkan
+encoders from the x86_64 codec list; otherwise libavcodec.so fails to link
+(undefined ff_*_vulkan_hwaccel and ff_*_vulkan_encoder).
 
 diff --git a/android/config-x86_64-x86_64.mak b/android/config-x86_64-x86_64.mak
 --- a/android/config-x86_64-x86_64.mak
 +++ b/android/config-x86_64-x86_64.mak
-@@ -626,7 +626,7 @@
+@@ -626,7 +626,7 @@ CONFIG_LIBDRM=yes
  CONFIG_VAAPI=yes
  !CONFIG_VDPAU=yes
  !CONFIG_VIDEOTOOLBOX=yes
@@ -23,7 +25,7 @@ diff --git a/android/config-x86_64-x86_64.mak b/android/config-x86_64-x86_64.mak
  CONFIG_V4L2_M2M=yes
  !CONFIG_FTRAPV=yes
  !CONFIG_GRAY=yes
-@@ -789,7 +789,7 @@
+@@ -789,7 +789,7 @@ CONFIG_VIDEODSP=yes
  CONFIG_VP3DSP=yes
  CONFIG_VP56DSP=yes
  CONFIG_VP8DSP=yes
@@ -32,7 +34,7 @@ diff --git a/android/config-x86_64-x86_64.mak b/android/config-x86_64-x86_64.mak
  CONFIG_WMA_FREQS=yes
  CONFIG_WMV2DSP=yes
  CONFIG_AAC_ADTSTOASC_BSF=yes
-@@ -1653,7 +1653,7 @@
+@@ -1653,7 +1653,7 @@ CONFIG_H263_V4L2M2M_ENCODER=yes
  CONFIG_H264_V4L2M2M_ENCODER=yes
  CONFIG_H264_VAAPI_ENCODER=yes
  !CONFIG_H264_VIDEOTOOLBOX_ENCODER=yes
@@ -41,7 +43,7 @@ diff --git a/android/config-x86_64-x86_64.mak b/android/config-x86_64-x86_64.mak
  !CONFIG_HEVC_AMF_ENCODER=yes
  !CONFIG_HEVC_D3D12VA_ENCODER=yes
  !CONFIG_HEVC_MEDIACODEC_ENCODER=yes
-@@ -1663,7 +1663,7 @@
+@@ -1663,7 +1663,7 @@ CONFIG_H264_VULKAN_ENCODER=yes
  CONFIG_HEVC_V4L2M2M_ENCODER=yes
  !CONFIG_HEVC_VAAPI_ENCODER=yes
  !CONFIG_HEVC_VIDEOTOOLBOX_ENCODER=yes
@@ -50,7 +52,7 @@ diff --git a/android/config-x86_64-x86_64.mak b/android/config-x86_64-x86_64.mak
  !CONFIG_LIBKVAZAAR_ENCODER=yes
  !CONFIG_MJPEG_QSV_ENCODER=yes
  !CONFIG_MJPEG_VAAPI_ENCODER=yes
-@@ -1689,7 +1689,7 @@
+@@ -1689,7 +1689,7 @@ CONFIG_ANULL_ENCODER=yes
  !CONFIG_AV1_NVDEC_HWACCEL=yes
  CONFIG_AV1_VAAPI_HWACCEL=yes
  !CONFIG_AV1_VDPAU_HWACCEL=yes
@@ -59,7 +61,7 @@ diff --git a/android/config-x86_64-x86_64.mak b/android/config-x86_64-x86_64.mak
  CONFIG_H263_VAAPI_HWACCEL=yes
  !CONFIG_H263_VIDEOTOOLBOX_HWACCEL=yes
  !CONFIG_H264_D3D11VA_HWACCEL=yes
-@@ -1700,7 +1700,7 @@
+@@ -1700,7 +1700,7 @@ CONFIG_H263_VAAPI_HWACCEL=yes
  CONFIG_H264_VAAPI_HWACCEL=yes
  !CONFIG_H264_VDPAU_HWACCEL=yes
  !CONFIG_H264_VIDEOTOOLBOX_HWACCEL=yes
@@ -68,7 +70,7 @@ diff --git a/android/config-x86_64-x86_64.mak b/android/config-x86_64-x86_64.mak
  !CONFIG_HEVC_D3D11VA_HWACCEL=yes
  !CONFIG_HEVC_D3D11VA2_HWACCEL=yes
  !CONFIG_HEVC_D3D12VA_HWACCEL=yes
-@@ -1709,7 +1709,7 @@
+@@ -1709,7 +1709,7 @@ CONFIG_H264_VULKAN_HWACCEL=yes
  CONFIG_HEVC_VAAPI_HWACCEL=yes
  !CONFIG_HEVC_VDPAU_HWACCEL=yes
  !CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL=yes
@@ -118,3 +120,64 @@ diff --git a/android/include/config-x86_64.asm b/android/include/config-x86_64.a
 +%define CONFIG_VULKAN_ENCODE 0
  %define CONFIG_WMA_FREQS 1
  %define CONFIG_WMV2DSP 1
+diff --git a/android/include/config_components.h b/android/include/config_components.h
+--- a/android/include/config_components.h
++++ b/android/include/config_components.h
+@@ -7565,7 +7565,7 @@
+ #define CONFIG_H264_V4L2M2M_ENCODER 1
+ #define CONFIG_H264_VAAPI_ENCODER 1
+ #define CONFIG_H264_VIDEOTOOLBOX_ENCODER 0
+-#define CONFIG_H264_VULKAN_ENCODER 1
++#define CONFIG_H264_VULKAN_ENCODER 0
+ #define CONFIG_HEVC_AMF_ENCODER 0
+ #define CONFIG_HEVC_D3D12VA_ENCODER 0
+ #define CONFIG_HEVC_MEDIACODEC_ENCODER 0
+@@ -7575,7 +7575,7 @@
+ #define CONFIG_HEVC_V4L2M2M_ENCODER 1
+ #define CONFIG_HEVC_VAAPI_ENCODER 0
+ #define CONFIG_HEVC_VIDEOTOOLBOX_ENCODER 0
+-#define CONFIG_HEVC_VULKAN_ENCODER 1
++#define CONFIG_HEVC_VULKAN_ENCODER 0
+ #define CONFIG_LIBKVAZAAR_ENCODER 0
+ #define CONFIG_MJPEG_QSV_ENCODER 0
+ #define CONFIG_MJPEG_VAAPI_ENCODER 0
+@@ -7601,7 +7601,7 @@
+ #define CONFIG_AV1_NVDEC_HWACCEL 0
+ #define CONFIG_AV1_VAAPI_HWACCEL 1
+ #define CONFIG_AV1_VDPAU_HWACCEL 0
+-#define CONFIG_AV1_VULKAN_HWACCEL 1
++#define CONFIG_AV1_VULKAN_HWACCEL 0
+ #define CONFIG_H263_VAAPI_HWACCEL 1
+ #define CONFIG_H263_VIDEOTOOLBOX_HWACCEL 0
+ #define CONFIG_H264_D3D11VA_HWACCEL 0
+@@ -7612,7 +7612,7 @@
+ #define CONFIG_H264_VAAPI_HWACCEL 1
+ #define CONFIG_H264_VDPAU_HWACCEL 0
+ #define CONFIG_H264_VIDEOTOOLBOX_HWACCEL 0
+-#define CONFIG_H264_VULKAN_HWACCEL 1
++#define CONFIG_H264_VULKAN_HWACCEL 0
+ #define CONFIG_HEVC_D3D11VA_HWACCEL 0
+ #define CONFIG_HEVC_D3D11VA2_HWACCEL 0
+ #define CONFIG_HEVC_D3D12VA_HWACCEL 0
+@@ -7621,7 +7621,7 @@
+ #define CONFIG_HEVC_VAAPI_HWACCEL 1
+ #define CONFIG_HEVC_VDPAU_HWACCEL 0
+ #define CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL 0
+-#define CONFIG_HEVC_VULKAN_HWACCEL 1
++#define CONFIG_HEVC_VULKAN_HWACCEL 0
+ #define CONFIG_MJPEG_NVDEC_HWACCEL 0
+ #define CONFIG_MJPEG_VAAPI_HWACCEL 1
+ #define CONFIG_MPEG1_NVDEC_HWACCEL 0
+diff --git a/android/include/libavcodec/codec_list.c b/android/include/libavcodec/codec_list.c
+--- a/android/include/libavcodec/codec_list.c
++++ b/android/include/libavcodec/codec_list.c
+@@ -2224,9 +2224,7 @@ static const FFCodec * const codec_list[] = {
+     &ff_h263_v4l2m2m_encoder,
+     &ff_h264_v4l2m2m_encoder,
+     &ff_h264_vaapi_encoder,
+-    &ff_h264_vulkan_encoder,
+     &ff_hevc_v4l2m2m_encoder,
+-    &ff_hevc_vulkan_encoder,
+     &ff_mpeg2_vaapi_encoder,
+     &ff_mpeg4_v4l2m2m_encoder,
+     &ff_vp8_v4l2m2m_encoder,
