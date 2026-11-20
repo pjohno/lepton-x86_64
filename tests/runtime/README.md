@@ -183,8 +183,22 @@ the launcher log also says when media decoders are off):
 
 | Marker | Meaning |
 | --- | --- |
-| `LEPTON_MEDIA_DECODERS count=0` | Codec2 is off (`debug.stagefright.ccodec=0`): an image without patch 0013 and a user who cannot open `/dev/dma_heap/system` |
+| `LEPTON_MEDIA_DECODERS count=0` | Codec2 is off (`debug.stagefright.ccodec=0`): an image without patch 0013 (Intel: 0013 and 0014) and a user who cannot open `/dev/dma_heap/system` |
 | `LEPTON_MEDIA_PCM_TRACK_PASS ... played_frames>0` | Android's audio output reaches the host; no codec involved (games' own PCM) |
 | `LEPTON_MEDIA_WAV_PLAYBACK_FAIL` | Even PCM WAV through MediaPlayer fails: it needs Codec2's raw decoder |
 | `CodecException` / `NO_MEMORY` with `DMABUFHEAPS: Unable to allocate` | Codec2 is on but tried the DMA-BUF heap (heap mode, or no BLOB pool) |
 | `allocatorID 19` in `CCodecBufferChannel` | Buffers from gralloc BLOB (patch 0013 mode); no host heap involved |
+| `C2AllocatorGralloc: failed transaction: lock(BLOB)` after `GBM-MESA-WRAPPER: Failed to map the buffer` | Intel image without patch 0014: gralloc imports BLOB buffers with a row wider than their stride, which iris rejects |
+
+`gbm-blob-probe.c` checks the host's Mesa driver directly, without Android: it
+allocates BLOB-sized buffers the way gralloc does, then imports and maps them
+with the pre-0014 and the 0014 geometry. It needs only a C compiler and
+`libgbm.so.1` (no headers):
+
+```bash
+cc -O1 -o /tmp/gbm-blob-probe tests/runtime/gbm-blob-probe.c /usr/lib64/libgbm.so.1
+/tmp/gbm-blob-probe /dev/dri/renderD128
+```
+
+On Intel (iris) the `current` rows report `IMPORT FAILED` above 4 KiB; on AMD
+(radeonsi) both geometries map. `fixed` rows must map on every driver.

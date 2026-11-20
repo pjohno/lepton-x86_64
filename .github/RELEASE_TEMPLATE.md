@@ -26,7 +26,7 @@ and launch with `LEPTON_FORCE_SOFTWARE=true %command%`. Hardware support outside
 validated configurations remains experimental.
 
 Direct Wayland window-close task removal requires Android patch 0012; AMD
-Codec2 BLOB allocation requires patch 0013. Launcher updates alone cannot add
+Codec2 BLOB allocation requires patch 0013, and Intel requires 0013 and 0014. Launcher updates alone cannot add
 those image fixes. Ordinary game audio is separate from Codec2 media audio;
 automatic Codec2 selection depends on the image, GPU and host heap permissions.
 AVC/video output still has known problems, and Widevine L3 support does not

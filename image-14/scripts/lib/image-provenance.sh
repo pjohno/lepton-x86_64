@@ -41,6 +41,7 @@ LEPTON_CUSTOM_PATCHES=(
     "hardware/waydroid|0011-hwc-present-framebuffer-after-color-layers.patch"
     "hardware/waydroid|0012-hwc-window-close-android14-task-codes.patch"
     "external/minigbm|0013-minigbm-gbm-mesa-no-allocator-map.patch"
+    "external/minigbm|0014-minigbm-gbm-mesa-blob-cpu-surface.patch"
 )
 
 # image_source_status REPO AOSP: verify copied source content and every patch.

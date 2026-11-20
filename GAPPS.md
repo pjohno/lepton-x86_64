@@ -364,13 +364,17 @@ x86_64 launcher selection is automatic:
 
 | Mode | Automatic selection | Effect |
 | --- | --- | --- |
-| `blob` | AMD allocator containing patch 0013's marker, or software rendering | Enables Codec2 using gralloc BLOB/BUFFERQUEUE pools (`0xfc0000`), without host DMA-BUF heap access |
-| `heap` | Older AMD images or Intel, when the user has read/write access to the host DMA-BUF system heap | Enables Codec2 and mounts the host heap device |
+| `blob` | AMD image with patch 0013's marker, Intel image with the markers of patches 0013 and 0014, or software rendering | Enables Codec2 using gralloc BLOB/BUFFERQUEUE pools (`0xfc0000`), without host DMA-BUF heap access |
+| `heap` | Older images (AMD without 0013, Intel without 0013/0014), when the user has read/write access to the host DMA-BUF system heap | Enables Codec2 and mounts the host heap device |
 | `off` | No safe BLOB path and no usable heap; also non-x86_64 or API below 34 | Disables media decoders; ordinary PCM game audio is unaffected |
 
 Patch 0013 stops the AMD gbm_mesa allocator mapping Codec2 buffers at allocation.
 It requires an updated Android image; a launcher-only update cannot add it.
-Intel BLOB mapping remains unsupported, so Intel uses the heap fallback. Host
+Patch 0014 makes gralloc import and map BLOB buffers with the surface they were
+allocated as (4096 bytes wide). Older images imported them as one row wider than
+its stride, which Intel's iris driver rejects (`lock(BLOB)` failed for every
+Codec2 buffer, issue #30); AMD's radeonsi tolerated it. Intel therefore needs
+both 0013 and 0014, and older Intel images keep the heap fallback. Host
 permissions vary (often root-only on SteamOS). Missing heap access leaves media
 apps silent rather than forcing an unsafe allocator.
 
