@@ -36,6 +36,8 @@ public final class MediaProbe {
                         if (info.isHardwareAccelerated()) hardware++;
                         Log.i(TAG, "decoder=" + info.getName() + " " + describe(info) +
                             " types=" + String.join(",", info.getSupportedTypes()));
+                        // Android's logging drops bursts from one app; pace the list.
+                        android.os.SystemClock.sleep(20);
                     }
                 }
                 Log.i(TAG, "LEPTON_MEDIA_DECODERS count=" + count + " hardware=" + hardware);
@@ -117,6 +119,7 @@ public final class MediaProbe {
                 if (type.equalsIgnoreCase("video/avc")) {
                     Log.i(TAG, "LEPTON_MEDIA_AVC_CANDIDATE rank=" + rank++ + " name=" + info.getName() +
                         " " + describe(info));
+                    android.os.SystemClock.sleep(20);
                 }
             }
         }
