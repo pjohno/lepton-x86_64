@@ -8,6 +8,10 @@ libgallium_dri.so (__vaDriverInit_1_23), which is where WayDroid's libva
 looks for non-Intel GPUs. Which codecs it decodes is set by -Dvideo-codecs
 in BOARD_MESA3D_MESON_ARGS.
 
+Mesa's VA frontend refuses VA_DISPLAY_ANDROID (VA_STATUS_ERROR_UNIMPLEMENTED).
+libva-android opens the render node into drm_state like the DRM display
+types do, so handle it the same way.
+
 diff --git a/android/Android.mk b/android/Android.mk
 --- a/android/Android.mk
 +++ b/android/Android.mk
@@ -39,3 +43,25 @@ diff --git a/android/mesa3d_cross.mk b/android/mesa3d_cross.mk
  	$(BOARD_MESA3D_MESON_ARGS)                                                   \
  
  MESON_BUILD := PATH=/usr/bin:/bin:/sbin:$$PATH ninja -C $(MESON_OUT_DIR)/build
+diff --git a/src/gallium/frontends/va/context.c b/src/gallium/frontends/va/context.c
+--- a/src/gallium/frontends/va/context.c
++++ b/src/gallium/frontends/va/context.c
+@@ -148,9 +148,6 @@
+       break;
+    }
+ #else
+-   case VA_DISPLAY_ANDROID:
+-      FREE(drv);
+-      return VA_STATUS_ERROR_UNIMPLEMENTED;
+    case VA_DISPLAY_GLX:
+    case VA_DISPLAY_X11:
+ #ifdef GALLIUM_ZINK
+@@ -163,6 +160,8 @@
+          drv->vscreen = vl_xlib_swrast_screen_create(ctx->native_dpy, ctx->x11_screen);
+       break;
+    case VA_DISPLAY_WAYLAND:
++   /* Lepton: libva-android opens the render node into drm_state, as DRM does. */
++   case VA_DISPLAY_ANDROID:
+    case VA_DISPLAY_DRM:
+    case VA_DISPLAY_DRM_RENDERNODES: {
+       const struct drm_state *drm_info = (struct drm_state *) ctx->drm_state;
