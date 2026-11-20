@@ -1,0 +1,119 @@
+Lepton: build the Codec2 FFmpeg service without the raw codec data parameter
+
+The service's audio and video interfaces declare C2StreamRawCodecDataInfo
+(C2_PARAMKEY_RAW_CODEC_DATA). That parameter is not in AOSP's Codec2
+headers: it comes from WayDroid's frameworks/av, where their FFmpeg
+extractor uses it to pass an FFmpeg codec id to the decoders. Lepton
+carries neither, so the service failed to compile (undeclared
+C2StreamRawCodecDataInfo).
+
+Remove the parameter and make getCodecInfo() return null. Both decoders
+already handle null by taking the codec from the component's media type,
+which is what happens on stock Android's extractors.
+
+diff --git a/codec2/C2FFMPEGAudioDecodeInterface.cpp b/codec2/C2FFMPEGAudioDecodeInterface.cpp
+--- a/codec2/C2FFMPEGAudioDecodeInterface.cpp
++++ b/codec2/C2FFMPEGAudioDecodeInterface.cpp
+@@ -93,24 +93,12 @@
+                 .withConstValue(new C2StreamMaxBufferSizeInfo::input(0u, 32768))
+                 .build());
+     }
+-
+-    addParameter(
+-            DefineParam(mRawCodecData, C2_PARAMKEY_RAW_CODEC_DATA)
+-            .withDefault(C2StreamRawCodecDataInfo::input::AllocShared(0, 0u))
+-            .withFields({C2F(mRawCodecData, m.value)})
+-            .withSetter(CodecSetter)
+-            .build());
+-}
+-
+-C2R C2FFMPEGAudioDecodeInterface::CodecSetter(
+-        bool mayBlock __unused, C2P<C2StreamRawCodecDataInfo::input>& me __unused) {
+-    return C2R::Ok();
+ }
+ 
+ const C2FFMPEGAudioCodecInfo* C2FFMPEGAudioDecodeInterface::getCodecInfo() const {
+-    if (mRawCodecData->flexCount() == sizeof(C2FFMPEGAudioCodecInfo)) {
+-        return (const C2FFMPEGAudioCodecInfo*)mRawCodecData->m.value;
+-    }
++    // Lepton: the raw codec data parameter comes from WayDroid's frameworks/av
++    // (FFmpeg extractor), which Lepton does not carry. Stock extractors give
++    // the codec through the media type, so there is no extractor info.
+     return nullptr;
+ }
+ 
+diff --git a/codec2/C2FFMPEGAudioDecodeInterface.h b/codec2/C2FFMPEGAudioDecodeInterface.h
+--- a/codec2/C2FFMPEGAudioDecodeInterface.h
++++ b/codec2/C2FFMPEGAudioDecodeInterface.h
+@@ -35,8 +35,6 @@
+     const C2FFMPEGAudioCodecInfo* getCodecInfo() const;
+ 
+ private:
+-    static C2R CodecSetter(
+-        bool mayBlock, C2P<C2StreamRawCodecDataInfo::input>& me);
+ 
+ private:
+     std::shared_ptr<C2StreamSampleRateInfo::output> mSampleRate;
+@@ -44,7 +42,6 @@
+     std::shared_ptr<C2StreamBitrateInfo::input> mBitrate;
+     std::shared_ptr<C2StreamPcmEncodingInfo::output> mPcmEncodingInfo;
+     std::shared_ptr<C2StreamMaxBufferSizeInfo::input> mInputMaxBufSize;
+-    std::shared_ptr<C2StreamRawCodecDataInfo::input> mRawCodecData;
+ };
+ 
+ } // namespace android
+diff --git a/codec2/C2FFMPEGVideoDecodeInterface.cpp b/codec2/C2FFMPEGVideoDecodeInterface.cpp
+--- a/codec2/C2FFMPEGVideoDecodeInterface.cpp
++++ b/codec2/C2FFMPEGVideoDecodeInterface.cpp
+@@ -250,13 +250,6 @@
+             .build());
+ 
+     addParameter(
+-            DefineParam(mRawCodecData, C2_PARAMKEY_RAW_CODEC_DATA)
+-            .withDefault(C2StreamRawCodecDataInfo::input::AllocShared(0, 0u))
+-            .withFields({C2F(mRawCodecData, m.value)})
+-            .withSetter(CodecSetter)
+-            .build());
+-
+-    addParameter(
+             DefineParam(mConsumerUsage, C2_PARAMKEY_OUTPUT_STREAM_USAGE)
+             .withDefault(new C2StreamUsageTuning::output(
+                                 0u, GRALLOC_USAGE_HW_TEXTURE | GRALLOC_USAGE_HW_COMPOSER))
+@@ -290,15 +283,10 @@
+     return C2R::Ok();
+ }
+ 
+-C2R C2FFMPEGVideoDecodeInterface::CodecSetter(
+-        bool mayBlock __unused, C2P<C2StreamRawCodecDataInfo::input>& me __unused) {
+-    return C2R::Ok();
+-}
+-
+ const C2FFMPEGVideoCodecInfo* C2FFMPEGVideoDecodeInterface::getCodecInfo() const {
+-    if (mRawCodecData->flexCount() == sizeof(C2FFMPEGVideoCodecInfo)) {
+-        return (const C2FFMPEGVideoCodecInfo*)mRawCodecData->m.value;
+-    }
++    // Lepton: the raw codec data parameter comes from WayDroid's frameworks/av
++    // (FFmpeg extractor), which Lepton does not carry. Stock extractors give
++    // the codec through the media type, so there is no extractor info.
+     return nullptr;
+ }
+ 
+diff --git a/codec2/C2FFMPEGVideoDecodeInterface.h b/codec2/C2FFMPEGVideoDecodeInterface.h
+--- a/codec2/C2FFMPEGVideoDecodeInterface.h
++++ b/codec2/C2FFMPEGVideoDecodeInterface.h
+@@ -48,15 +48,12 @@
+         bool mayBlock,
+         C2P<C2StreamProfileLevelInfo::input> &me,
+         const C2P<C2StreamPictureSizeInfo::output> &size);
+-    static C2R CodecSetter(
+-        bool mayBlock, C2P<C2StreamRawCodecDataInfo::input>& me);
+ 
+ private:
+     std::shared_ptr<C2StreamPictureSizeInfo::output> mSize;
+     std::shared_ptr<C2StreamProfileLevelInfo::input> mProfileLevel;
+     std::shared_ptr<C2StreamColorInfo::output> mColorInfo;
+     std::shared_ptr<C2StreamPixelFormatInfo::output> mPixelFormat;
+-    std::shared_ptr<C2StreamRawCodecDataInfo::input> mRawCodecData;
+     std::shared_ptr<C2StreamUsageTuning::output> mConsumerUsage;
+     std::unique_ptr<C2FFMPEGVideoUtils> mUtils;
+ };

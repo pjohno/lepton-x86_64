@@ -40,6 +40,11 @@ The manifest removes the unused Android 11 libva at `hardware/intel/common/libva
 `libdrm`. Distributing an image that contains FFmpeg needs the LGPL notices
 and source availability for these libraries.
 
+Lepton patches: `0017` builds FFmpeg for x86_64 without Vulkan (Android 14's
+Vulkan headers are too old for it), and `0018` removes the service's "raw codec
+data" parameter, which needs WayDroid's `frameworks/av` changes; without it the
+decoders take the codec from the media type.
+
 Not yet included: Intel's iHD driver (newer Intel GPUs) and Mesa's VA driver
 for AMD (`radeonsi`).
 
