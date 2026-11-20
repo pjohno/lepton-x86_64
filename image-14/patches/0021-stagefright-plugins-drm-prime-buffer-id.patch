@@ -1,0 +1,39 @@
+Lepton: zero-copy (DRM PRIME) output to plain buffers
+
+In DRM PRIME mode the service keys VA surfaces by the output block's
+BufferQueue slot. Only Surface output has one: blocks for ByteBuffer
+output all report slot 0, so every block looked like the same busy
+surface and getBufferVAAPI looped forever (the app's decode stalled; seen
+with iHD). Use minigbm's per-allocation buffer id for blocks without a
+BufferQueue.
+
+diff --git a/codec2/C2FFMPEGVideoDecodeComponent.cpp b/codec2/C2FFMPEGVideoDecodeComponent.cpp
+--- a/codec2/C2FFMPEGVideoDecodeComponent.cpp
++++ b/codec2/C2FFMPEGVideoDecodeComponent.cpp
+@@ -1402,6 +1402,10 @@
+ void C2FFMPEGVideoDecodeComponent::SurfaceDescriptor::set(const std::shared_ptr<C2GraphicBlock>& block) {
+     android::_UnwrapNativeCodec2GrallocMetadata(block->handle(),
+             &width, &height, &format, &usage, &stride, &generation, &igbpId, &igbpSlot);
++    // minigbm's handle (cros_gralloc_handle) carries a per-allocation id.
++    constexpr uint32_t kCrosGrallocMagic = 0xABCDDCBA;
++    cros_gralloc_handle_t crosHandle = reinterpret_cast<cros_gralloc_handle_t>(block->handle());
++    bufferId = crosHandle->magic == kCrosGrallocMagic ? crosHandle->id : 0;
+ }
+ 
+ int C2FFMPEGVideoDecodeComponent::getBufferVAAPI(AVHWFramesContext* hwfc, AVFrame* frame, bool forceAllocator) {
+diff --git a/codec2/C2FFMPEGVideoDecodeComponent.h b/codec2/C2FFMPEGVideoDecodeComponent.h
+--- a/codec2/C2FFMPEGVideoDecodeComponent.h
++++ b/codec2/C2FFMPEGVideoDecodeComponent.h
+@@ -130,8 +130,11 @@
+         uint32_t igbpSlot;
+         uint64_t igbpId;
+         VASurfaceID surfaceId;
++        uint32_t bufferId;
+ 
+-        int getId() const { return igbpSlot; }
++        // Lepton: igbpSlot only identifies BufferQueue (Surface) buffers; other
++        // output blocks all have slot 0 and use the gralloc buffer id.
++        int getId() const { return igbpId ? static_cast<int>(igbpSlot) : static_cast<int>(bufferId); }
+         void set(const std::shared_ptr<C2GraphicBlock>& block);
+     };
+ 

@@ -48,6 +48,7 @@ LEPTON_CUSTOM_PATCHES=(
     "external/stagefright-plugins|0018-stagefright-plugins-without-raw-codec-data.patch"
     "external/mesa|0019-mesa-android-gallium-va.patch"
     "external/intel-media-driver|0020-intel-media-driver-android14-clang.patch"
+    "external/stagefright-plugins|0021-stagefright-plugins-drm-prime-buffer-id.patch"
 )
 
 # image_source_status REPO AOSP: verify copied source content and every patch.
