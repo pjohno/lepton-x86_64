@@ -129,7 +129,8 @@ for name in \
   "$IMAGE/patches/0019-mesa-android-gallium-va.patch" \
   "$IMAGE/patches/0020-intel-media-driver-android14-clang.patch" \
   "$IMAGE/patches/0021-stagefright-plugins-drm-prime-buffer-id.patch" \
-  "$IMAGE/patches/0022-minigbm-gbm-mesa-nv12-video-layout.patch"; do
+  "$IMAGE/patches/0022-minigbm-gbm-mesa-nv12-video-layout.patch" \
+  "$IMAGE/patches/0023-stagefright-plugins-hw-download-native-format.patch"; do
   [[ -f "$name" ]] || err "Missing required file: $name"
 done
 podman image exists "$BUILDER" || err "Missing builder image: $BUILDER"
@@ -450,6 +451,7 @@ apply_custom /workspace/output/external/mesa /workspace/patches/0019-mesa-androi
 apply_custom /workspace/output/external/intel-media-driver /workspace/patches/0020-intel-media-driver-android14-clang.patch IntelMediaDriverClang
 apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0021-stagefright-plugins-drm-prime-buffer-id.patch StagefrightPrimeBufferId
 apply_custom /workspace/output/external/minigbm /workspace/patches/0022-minigbm-gbm-mesa-nv12-video-layout.patch MinigbmNv12VideoLayout
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0023-stagefright-plugins-hw-download-native-format.patch StagefrightNativeDownload
 INNER
   touch "$STATE/patches.done"
   rm -- "$STATE/patches.started"

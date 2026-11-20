@@ -50,6 +50,7 @@ LEPTON_CUSTOM_PATCHES=(
     "external/intel-media-driver|0020-intel-media-driver-android14-clang.patch"
     "external/stagefright-plugins|0021-stagefright-plugins-drm-prime-buffer-id.patch"
     "external/minigbm|0022-minigbm-gbm-mesa-nv12-video-layout.patch"
+    "external/stagefright-plugins|0023-stagefright-plugins-hw-download-native-format.patch"
 )
 
 # image_source_status REPO AOSP: verify copied source content and every patch.
