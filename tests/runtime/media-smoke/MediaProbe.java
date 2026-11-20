@@ -131,6 +131,26 @@ public final class MediaProbe {
     // path players use). Reports decoder, Android's hardware flag, frames and
     // throughput. Throughput alone does not prove hardware decoding; compare
     // with host evidence (e.g. DRM fdinfo video-engine time). Never throws.
+    // Adds the visible luma rows of a decoded frame to the CRC; false without an image.
+    private static boolean hashLuma(android.media.Image image, java.util.zip.CRC32 crc) {
+        if (image == null) return false;
+        try {
+            android.graphics.Rect crop = image.getCropRect();
+            android.media.Image.Plane y = image.getPlanes()[0];
+            ByteBuffer data = y.getBuffer();
+            int stride = y.getRowStride(), pixel = y.getPixelStride();
+            byte[] row = new byte[crop.width()];
+            for (int line = crop.top; line < crop.bottom; line++) {
+                int base = line * stride + crop.left * pixel;
+                for (int x = 0; x < row.length; x++) row[x] = data.get(base + x * pixel);
+                crc.update(row);
+            }
+            return true;
+        } finally {
+            image.close();
+        }
+    }
+
     private static void timedDecode(Activity activity, String asset, String mime, boolean toSurface) {
         String mode = toSurface ? "surface" : "buffer";
         MediaExtractor extractor = new MediaExtractor();
@@ -138,6 +158,11 @@ public final class MediaProbe {
         android.media.ImageReader reader = null;
         android.os.HandlerThread thread = null;
         final int[] images = { 0 };
+        // Buffer mode: CRC32 of every frame's luma plane (visible area, row by
+        // row, so strides do not matter). H.264 decoding is bit-exact, so every
+        // correct decoder gives the same value.
+        java.util.zip.CRC32 luma = new java.util.zip.CRC32();
+        int hashed = 0;
         try (AssetFileDescriptor fd = activity.getAssets().openFd(asset)) {
             extractor.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
             MediaFormat format = null;
@@ -188,6 +213,7 @@ public final class MediaProbe {
                 int output = codec.dequeueOutputBuffer(info, 10000);
                 if (output >= 0) {
                     if (info.size > 0 || toSurface) frames++;
+                    if (!toSurface && info.size > 0 && hashLuma(codec.getOutputImage(output), luma)) hashed++;
                     outputEnd = (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
                     codec.releaseOutputBuffer(output, toSurface && !outputEnd);
                 }
@@ -204,7 +230,8 @@ public final class MediaProbe {
             Log.i(TAG, (outputEnd ? "LEPTON_MEDIA_AVC_DECODE" : "LEPTON_MEDIA_AVC_DECODE_INCOMPLETE") +
                 " mode=" + mode + " decoder=" + selected.getName() + " " + describe(selected) +
                 " size=" + width + "x" + height + " frames=" + frames +
-                (toSurface ? " surface_images=" + images[0] : "") + " ms=" + ms +
+                (toSurface ? " surface_images=" + images[0] :
+                    " luma_crc=" + Long.toHexString(luma.getValue()) + " luma_frames=" + hashed) + " ms=" + ms +
                 " fps=" + (frames * 1000L / ms) + color);
         } catch (Throwable error) {
             Log.w(TAG, "LEPTON_MEDIA_AVC_DECODE_FAIL mode=" + mode + " " + error);
