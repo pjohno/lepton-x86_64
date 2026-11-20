@@ -115,7 +115,8 @@ for name in \
   "$IMAGE/patches/0011-hwc-present-framebuffer-after-color-layers.patch" \
   "$IMAGE/patches/0012-hwc-window-close-android14-task-codes.patch" \
   "$IMAGE/patches/0013-minigbm-gbm-mesa-no-allocator-map.patch" \
-  "$IMAGE/patches/0014-minigbm-gbm-mesa-blob-cpu-surface.patch"; do
+  "$IMAGE/patches/0014-minigbm-gbm-mesa-blob-cpu-surface.patch" \
+  "$IMAGE/patches/0015-libopus-float-decode-x86_64.patch"; do
   [[ -f "$name" ]] || err "Missing required file: $name"
 done
 podman image exists "$BUILDER" || err "Missing builder image: $BUILDER"
@@ -372,6 +373,7 @@ apply_custom /workspace/output/hardware/waydroid /workspace/patches/0011-hwc-pre
 apply_custom /workspace/output/hardware/waydroid /workspace/patches/0012-hwc-window-close-android14-task-codes.patch HwcWindowCloseTaskCodes
 apply_custom /workspace/output/external/minigbm /workspace/patches/0013-minigbm-gbm-mesa-no-allocator-map.patch MinigbmNoAllocatorMap
 apply_custom /workspace/output/external/minigbm /workspace/patches/0014-minigbm-gbm-mesa-blob-cpu-surface.patch MinigbmBlobCpuSurface
+apply_custom /workspace/output/external/libopus /workspace/patches/0015-libopus-float-decode-x86_64.patch LibopusFloatX86_64
 INNER
   touch "$STATE/patches.done"
   rm -- "$STATE/patches.started"

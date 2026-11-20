@@ -1,0 +1,116 @@
+Lepton: x86_64 devices decode Opus in floating point (no flat-top clipping)
+
+Android builds libopus fixed-point for every architecture, and Codec2's
+c2.android.opus.decoder decodes with opus_multistream_decode to int16. In the
+fixed-point build, decoded peaks above full scale (normal for loud, limited
+masters after lossy coding) are saturated to flat tops at +/-32767, which is
+heard as crackle on loud music. Apps that cannot load their own Opus decoder
+on x86_64 (Metrolist ships libopusV2JNI.so for ARM only) use this decoder.
+
+The float build's int16 decode soft-clips instead. Decoding the same 160 kb/s
+packets of a -0.1 dBFS limited signal with this libopus: fixed-point gives
+906 flat-topped runs (3542 full-scale samples per million), float gives none.
+
+Build libopus as float for android_x86_64 only (SILK float sources instead of
+fixed, without the fixed-only SSE4.1 files); host builds and other
+architectures are unchanged. Android's integer overflow check in analysis.c
+applies to fixed point only; float uses upstream's plain addition.
+
+diff --git a/Android.bp b/Android.bp
+--- a/Android.bp
++++ b/Android.bp
+@@ -379,6 +379,75 @@
+         darwin: {
+             enabled: false,
+         },
++        // Lepton: x86_64 devices decode Opus in floating point. The fixed-point
++        // build saturates decoded peaks above full scale to flat tops, which
++        // crackle on loud music; the float build soft-clips them instead
++        // (opus_decode/opus_multistream_decode with soft_clip). Host builds
++        // and other architectures are unchanged.
++        android_x86_64: {
++            cflags: ["-UFIXED_POINT"],
++            local_include_dirs: ["silk/float"],
++            exclude_srcs: [
++                // SILK_SOURCES_FIXED
++                "silk/fixed/LTP_analysis_filter_FIX.c",
++                "silk/fixed/LTP_scale_ctrl_FIX.c",
++                "silk/fixed/corrMatrix_FIX.c",
++                "silk/fixed/encode_frame_FIX.c",
++                "silk/fixed/find_LPC_FIX.c",
++                "silk/fixed/find_LTP_FIX.c",
++                "silk/fixed/find_pitch_lags_FIX.c",
++                "silk/fixed/find_pred_coefs_FIX.c",
++                "silk/fixed/noise_shape_analysis_FIX.c",
++                "silk/fixed/process_gains_FIX.c",
++                "silk/fixed/regularize_correlations_FIX.c",
++                "silk/fixed/residual_energy16_FIX.c",
++                "silk/fixed/residual_energy_FIX.c",
++                "silk/fixed/warped_autocorrelation_FIX.c",
++                "silk/fixed/apply_sine_window_FIX.c",
++                "silk/fixed/autocorr_FIX.c",
++                "silk/fixed/burg_modified_FIX.c",
++                "silk/fixed/k2a_FIX.c",
++                "silk/fixed/k2a_Q16_FIX.c",
++                "silk/fixed/pitch_analysis_core_FIX.c",
++                "silk/fixed/vector_ops_FIX.c",
++                "silk/fixed/schur64_FIX.c",
++                "silk/fixed/schur_FIX.c",
++                // SILK_SOURCES_FIXED_SSE4_1
++                "silk/fixed/x86/vector_ops_FIX_sse4_1.c",
++                "silk/fixed/x86/burg_modified_FIX_sse4_1.c",
++            ],
++            srcs: [
++                // SILK_SOURCES_FLOAT
++                "silk/float/apply_sine_window_FLP.c",
++                "silk/float/corrMatrix_FLP.c",
++                "silk/float/encode_frame_FLP.c",
++                "silk/float/find_LPC_FLP.c",
++                "silk/float/find_LTP_FLP.c",
++                "silk/float/find_pitch_lags_FLP.c",
++                "silk/float/find_pred_coefs_FLP.c",
++                "silk/float/LPC_analysis_filter_FLP.c",
++                "silk/float/LTP_analysis_filter_FLP.c",
++                "silk/float/LTP_scale_ctrl_FLP.c",
++                "silk/float/noise_shape_analysis_FLP.c",
++                "silk/float/process_gains_FLP.c",
++                "silk/float/regularize_correlations_FLP.c",
++                "silk/float/residual_energy_FLP.c",
++                "silk/float/warped_autocorrelation_FLP.c",
++                "silk/float/wrappers_FLP.c",
++                "silk/float/autocorrelation_FLP.c",
++                "silk/float/burg_modified_FLP.c",
++                "silk/float/bwexpander_FLP.c",
++                "silk/float/energy_FLP.c",
++                "silk/float/inner_product_FLP.c",
++                "silk/float/k2a_FLP.c",
++                "silk/float/LPC_inv_pred_gain_FLP.c",
++                "silk/float/pitch_analysis_core_FLP.c",
++                "silk/float/scale_copy_vector_FLP.c",
++                "silk/float/scale_vector_FLP.c",
++                "silk/float/schur_FLP.c",
++                "silk/float/sort_FLP.c",
++            ],
++        },
+     },
+     apex_available: [
+         "//apex_available:platform", // used by libstagefright_soft_opusdec
+diff --git a/src/analysis.c b/src/analysis.c
+--- a/src/analysis.c
++++ b/src/analysis.c
+@@ -149,10 +149,15 @@
+         out32_hp  = ADD32( out32_hp, X );
+         S[ 2 ] = ADD32( -in32, X );
+ 
++#ifdef FIXED_POINT
+         if(__builtin_add_overflow(hp_ener, out32_hp*(opus_val64)out32_hp, &hp_ener))
+         {
+            hp_ener = UINT64_MAX;
+         }
++#else
++        /* Lepton: opus_val64 is a float here; no integer overflow check. */
++        hp_ener += out32_hp*(opus_val64)out32_hp;
++#endif
+         /* Add, convert back to int16 and store to output */
+         out[ k ] = HALF32(out32);
+     }

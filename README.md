@@ -217,8 +217,9 @@ and resets Podman.
 | `0012-hwc-window-close-android14-task-codes.patch` | Closing the game's desktop window ends the game: the Waydroid task service used Android 13 binder codes, so on Android 14 the close removed nothing (also fixes per-task close/focus) |
 | `0013-minigbm-gbm-mesa-no-allocator-map.patch` | Music and video apps decode audio without host DMA-BUF heap access: the AMD allocator no longer crashes on Codec2 buffers allocated through gralloc (Valve's upstream approach) |
 | `0014-minigbm-gbm-mesa-blob-cpu-surface.patch` | The same on Intel: gralloc imports and maps Codec2 BLOB buffers as the 4096-wide surface they were allocated as, which iris accepts (issue #30) |
+| `0015-libopus-float-decode-x86_64.patch` | Loud music decoded by Android's Opus decoder no longer crackles: libopus is built floating-point on x86_64, so peaks above full scale are soft-clipped instead of flattened (apps such as Metrolist fall back to this decoder when their own is ARM-only) |
 
-Patches 0012 (window close), 0013 (AMD allocator) and 0014 (Intel BLOB mapping) change Android components.
+Patches 0012 (window close), 0013 (AMD allocator), 0014 (Intel BLOB mapping) and 0015 (float Opus decoding) change Android components.
 They require images containing those fixes; updating only the launcher cannot
 add them to an older rootfs. Patch 0013 does not resolve AVC/video output.
 
