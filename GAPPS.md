@@ -378,6 +378,13 @@ both 0013 and 0014, and older Intel images keep the heap fallback. Host
 permissions vary (often root-only on SteamOS). Missing heap access leaves media
 apps silent rather than forcing an unsafe allocator.
 
+Patch 0015 builds Android's libopus in floating point on x86_64. The fixed-point
+build that Android uses elsewhere saturates decoded peaks above full scale into
+flat tops, heard as crackle on loud music; the float build soft-clips them.
+Apps that bundle their own Opus decoder only for ARM (Metrolist ships
+`libopusV2JNI.so` for arm64/armv7 only) use Android's decoder on x86_64 unless
+the bundle includes NDK translation.
+
 `LEPTON_CODEC2=false` forces `off`. `LEPTON_CODEC2=true` forces experimental
 `blob` on Android 14 x86_64, bypassing the safety probe, and can crash older AMD
 allocators or fail on Intel. The diagnostic runner's `--codec2` uses this override;

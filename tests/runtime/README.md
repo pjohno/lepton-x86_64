@@ -202,3 +202,34 @@ cc -O1 -o /tmp/gbm-blob-probe tests/runtime/gbm-blob-probe.c /usr/lib64/libgbm.s
 
 On Intel (iris) the `current` rows report `IMPORT FAILED` above 4 KiB; on AMD
 (radeonsi) both geometries map. `fixed` rows must map on every driver.
+
+### Opus clipping (patch 0015)
+
+Crackle on loud music with no lost time, from apps that decode Opus through
+Android (`c2.android.opus.decoder` in logcat), is the fixed-point libopus
+flattening peaks above full scale. Record the sink monitor and count runs of
+identical samples at the recording's maximum: flat tops mean saturation.
+`test-libopus-float-x86_64.py` checks the mechanism without booting Android:
+with `LEPTON_LIBOPUS_TEST_AOSP` set to a prepared checkout, it builds that libopus
+fixed and float (with 0015) around `opus-clip/opusclip.c`, decodes the same
+loud packets with `opus_multistream_decode` and requires no flat tops from
+the float build.
+
+### Media dropouts (patch 0016)
+
+Short dropouts (audio collapses within 5 ms and recovers over ~100 ms, a few
+times per 10 s) are corrupt frames reaching the decoder: Codec2 keeps the
+writer's mapping of a BLOB block open while the codec process reads it, and a
+Mesa map (gbm_bo_map) only writes back at unmap. To confirm on a capture,
+find the stream the app played (Metrolist keeps it in
+`cache/playback-tee/*.part` under the profile's data), decode it on the host,
+align it with the sink-monitor recording and fit a gain per 5 ms block:
+dropouts show as gains near 0 recovering towards 1.
+
+`gbm-blob-coherence.c` checks a host driver directly (no Android):
+
+```bash
+cc -O1 -o /tmp/gbm-blob-coherence tests/runtime/gbm-blob-coherence.c /usr/lib64/libgbm.so.1
+/tmp/gbm-blob-coherence            # gbm_bo_map: stale reads expected (20/20)
+DIRECT=1 /tmp/gbm-blob-coherence   # dma-buf mmap, as 0016 maps BLOBs: 0/20
+```

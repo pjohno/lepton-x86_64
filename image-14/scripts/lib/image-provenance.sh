@@ -42,6 +42,8 @@ LEPTON_CUSTOM_PATCHES=(
     "hardware/waydroid|0012-hwc-window-close-android14-task-codes.patch"
     "external/minigbm|0013-minigbm-gbm-mesa-no-allocator-map.patch"
     "external/minigbm|0014-minigbm-gbm-mesa-blob-cpu-surface.patch"
+    "external/libopus|0015-libopus-float-decode-x86_64.patch"
+    "external/minigbm|0016-minigbm-gbm-mesa-blob-direct-map.patch"
 )
 
 # image_source_status REPO AOSP: verify copied source content and every patch.

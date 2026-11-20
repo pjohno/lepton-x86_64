@@ -1,0 +1,101 @@
+Lepton: gbm_mesa maps 1D (BLOB) buffers with a direct dma-buf mmap
+
+Codec2 shares its linear input/output blocks between processes through
+gralloc BLOB buffers. gbm_mesa mapped them for the CPU with gbm_bo_map, and
+both iris and radeonsi return a private staging copy that is written back to
+the buffer only at unmap. Codec2 keeps the writer's mapping open while it
+queues the block (LinearBlockBuffer holds its C2WriteView; asC2Buffer shares
+the block), so the decoder in the codec process could read the buffer before
+the app's bytes arrived and decoded stale data from the buffer's previous
+use. On Intel this was heard as 20-100 ms dropouts every few seconds: a null
+test of a Metrolist capture against the exact Opus stream found 8 in 10 s.
+
+A host test shows it directly: with gbm_bo_map, a second process sees none
+of 20 writes until the writer unmaps (iris and radeonsi alike); with a dma-buf
+mmap it sees every write at once.
+
+Map 1D buffers (R8 x 1, and formats gbm cannot describe, which are allocated
+as R8 x 1) with mmap of the dma-buf, bracketed by DMA_BUF_IOCTL_SYNC, and
+fall back to the Mesa map if mmap fails. Other buffers are unchanged.
+
+diff --git a/gbm_mesa_driver/gbm_mesa_internals.cpp b/gbm_mesa_driver/gbm_mesa_internals.cpp
+--- a/gbm_mesa_driver/gbm_mesa_internals.cpp
++++ b/gbm_mesa_driver/gbm_mesa_internals.cpp
+@@ -36,6 +36,7 @@
+ #include <glob.h>
+ #include <iterator>
+ #include <linux/dma-buf.h>
++#include <sys/ioctl.h>
+ #include <log/log.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -341,6 +342,36 @@
+ 	*s_height = (int)height;
+ }
+ 
++/* Lepton: 1D buffers (Android BLOB, and formats gbm cannot describe) are plain
++ * bytes, so the CPU maps the dma-buf itself instead of a Mesa transfer map.
++ * Mesa maps them through a private staging copy that reaches the buffer only
++ * at unmap, while Codec2 keeps the writer's mapping open as it queues the
++ * buffer to the decoder in another process: the decoder then read stale
++ * bytes from the buffer's previous use, i.e. corrupt Opus frames, heard as
++ * ~20-100 ms dropouts every few seconds. A dma-buf mmap is the same memory in
++ * every process. */
++static bool gbm_mesa_is_1d(bool gbm_format_supported, uint32_t format, uint32_t height)
++{
++	return !gbm_format_supported || (format == DRM_FORMAT_R8 && height == 1);
++}
++
++static char gbm_mesa_direct_map_tag;
++
++static void gbm_mesa_dma_buf_sync(int fd, uint64_t flags)
++{
++	struct dma_buf_sync sync = {};
++	sync.flags = flags;
++	int ret;
++	do {
++		ret = ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
++	} while (ret && (errno == EINTR || errno == EAGAIN));
++}
++
++static uint64_t gbm_mesa_sync_access(uint32_t map_flags)
++{
++	return (map_flags & BO_MAP_WRITE) ? DMA_BUF_SYNC_RW : DMA_BUF_SYNC_READ;
++}
++
+ int gbm_mesa_bo_create(struct bo *bo, uint32_t width, uint32_t height, uint32_t format,
+ 		       uint64_t use_flags)
+ {
+@@ -507,6 +538,18 @@
+ 
+ 	auto priv = (GbmMesaBoPriv *)bo->priv;
+ 	void *buf = MAP_FAILED;
++	if (gbm_mesa_is_1d(wr->get_gbm_format(bo->meta.format) != 0, bo->meta.format,
++			   bo->meta.height)) {
++		int fd = priv->fds[0].Get();
++		buf = mmap(nullptr, vma->length, drv_get_prot(map_flags), MAP_SHARED, fd, 0);
++		if (buf != MAP_FAILED) {
++			gbm_mesa_dma_buf_sync(fd, DMA_BUF_SYNC_START | gbm_mesa_sync_access(map_flags));
++			vma->priv = &gbm_mesa_direct_map_tag;
++			return buf;
++		}
++		drv_loge("dma-buf mmap of %zu bytes failed (%s); using a Mesa map", vma->length,
++			 strerror(errno));
++	}
+ 	if (priv->gbm_bo == nullptr) {
+ 		/* The CPU-access import failed (logged there); never map a null bo. */
+ 		drv_loge("No CPU-access surface to map");
+@@ -530,6 +573,13 @@
+ 	auto wr = drv->wrapper;
+ 
+ 	auto priv = (GbmMesaBoPriv *)bo->priv;
++	if (vma->priv == &gbm_mesa_direct_map_tag) {
++		gbm_mesa_dma_buf_sync(priv->fds[0].Get(),
++				      DMA_BUF_SYNC_END | gbm_mesa_sync_access(vma->map_flags));
++		munmap(vma->addr, vma->length);
++		vma->priv = nullptr;
++		return 0;
++	}
+ 	assert(priv->gbm_bo != nullptr);
+ 	assert(vma->priv != nullptr);
+ 	if (priv->gbm_bo && vma->priv)
