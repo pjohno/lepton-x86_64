@@ -89,22 +89,26 @@ function lepton_dma_heap_problem()
 # decoders (256) ahead of Android's software ones (512); FFmpeg's audio
 # decoders stay off. Needs hardware rendering and Codec2 (not mode off).
 LEPTON_FFMPEG_RANK_DISABLED=4294967295
-# lepton_video_va_driver: the image's VA-API driver for the selected GPU
-# (vendor/lib64, overlay first), or nothing. Intel: i965 (Gen 4 to 9.5);
-# AMD: Mesa's radeonsi, which images do not include yet.
+# lepton_video_va_driver: the image's VA-API drivers for the selected GPU, in
+# the order libva tries them (vendor/lib64, overlay first), or nothing.
+# Intel: iHD (Gen 8 and newer), then i965 (Gen 4 to 9.5); AMD: Mesa's radeonsi.
 function lepton_video_va_driver()
 {
-    local LIB FILE
+    local LIB FILE FOUND=()
+    local -a LIBS
     case "$(lepton_vulkan_hal)" in
-        intel) LIB=vendor/lib64/i965_drv_video.so ;;
-        radeon) LIB=vendor/lib64/radeonsi_drv_video.so ;;
+        intel) LIBS=(iHD_drv_video.so i965_drv_video.so) ;;
+        radeon) LIBS=(radeonsi_drv_video.so) ;;
         *) return 1 ;;
     esac
-    for FILE in "${LEPTON_DIR}/../images/rootfs_overlay/${LIB}" \
-                "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/${LIB}"; do
-        [[ -f "${FILE}" ]] && { print "${LIB##*/}"; return 0; }
+    for LIB in "${LIBS[@]}"; do
+        for FILE in "${LEPTON_DIR}/../images/rootfs_overlay/vendor/lib64/${LIB}" \
+                    "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/vendor/lib64/${LIB}"; do
+            [[ -f "${FILE}" ]] && { FOUND+=("${LIB}"); break; }
+        done
     done
-    return 1
+    ((${#FOUND[@]})) || return 1
+    print "${FOUND[*]}"
 }
 function lepton_video_hwaccel_mode()
 {

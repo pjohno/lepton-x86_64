@@ -147,6 +147,12 @@ grep -qx 'debug.ffmpeg-codec2.rank.audio=4294967295' "$work/lepton.prop"   # aud
 grep -qx 'media.sf.hwaccel=1' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"   # copy-back, not DRM PRIME
 grep -q 'Hardware video decoding (VA-API, experimental): on, i965_drv_video.so using /dev/dri/renderD129' "$work/log" || { echo 'FAIL: video decoding on message'; exit 1; }
+: > "$work/rootfs-intel/vendor/lib64/iHD_drv_video.so"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -q 'on, iHD_drv_video.so i965_drv_video.so using' "$work/log" || { echo 'FAIL: iHD listed before i965'; exit 1; }
+rm -- "$work/rootfs-intel/vendor/lib64/i965_drv_video.so"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'media.sf.hwaccel=1' "$work/lepton.prop"   # iHD alone is enough
 LEPTON_VIDEO_HWACCEL=true LEPTON_FORCE_SOFTWARE=true setup_props > "$work/log"
 grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"
 grep -q 'off with software rendering' "$work/log"

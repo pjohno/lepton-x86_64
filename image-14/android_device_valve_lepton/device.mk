@@ -151,7 +151,8 @@ PRODUCT_PACKAGES += \
     android.hardware.media.c2-ffmpeg-service \
     libva \
     libva-android \
-    i965_drv_video
+    i965_drv_video \
+    iHD_drv_video
 endif
 
 # Memtrack

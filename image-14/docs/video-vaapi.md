@@ -45,6 +45,8 @@ branches and pinned to commits:
 | `external/ffmpeg` | FFmpeg 7.1, Android build | LGPL-2.1-or-later as configured (`CONFIG_GPL`, `CONFIG_NONFREE` and `CONFIG_VERSION3` are 0); shared libraries |
 | `external/libva` | libva 2.23 (VA-API 1.23) for Android, vendor partition | MIT |
 | `external/intel-vaapi-driver` | Intel i965 VA driver (Gen 4 to Gen 9.5, e.g. UHD 630) | MIT |
+| `external/intel-media-driver` | Intel iHD VA driver 24.3.4 (Gen 8 Broadwell and newer), free kernels only; from Intel's Celadon project (`21-video-intel-ihd.xml`) | MIT |
+| `external/gmmlib` | Intel graphics memory library for iHD (Celadon) | MIT |
 
 The manifest removes the unused Android 11 libva at `hardware/intel/common/libva`
 (system partition; same module names). FFmpeg uses AOSP's `libdav1d` and
@@ -56,7 +58,7 @@ Vulkan headers are too old for it), and `0018` removes the service's "raw codec
 data" parameter, which needs WayDroid's `frameworks/av` changes; without it the
 decoders take the codec from the media type.
 
-Not yet included: Intel's iHD driver (newer Intel GPUs) and Mesa's VA driver
+libva tries iHD before i965 on Intel GPUs. Not yet included: Mesa's VA driver
 for AMD (`radeonsi`).
 
 ## Verifying
