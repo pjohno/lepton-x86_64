@@ -89,6 +89,23 @@ function lepton_dma_heap_problem()
 # decoders (256) ahead of Android's software ones (512); FFmpeg's audio
 # decoders stay off. Needs hardware rendering and Codec2 (not mode off).
 LEPTON_FFMPEG_RANK_DISABLED=4294967295
+# lepton_video_va_driver: the image's VA-API driver for the selected GPU
+# (vendor/lib64, overlay first), or nothing. Intel: i965 (Gen 4 to 9.5);
+# AMD: Mesa's radeonsi, which images do not include yet.
+function lepton_video_va_driver()
+{
+    local LIB FILE
+    case "$(lepton_vulkan_hal)" in
+        intel) LIB=vendor/lib64/i965_drv_video.so ;;
+        radeon) LIB=vendor/lib64/radeonsi_drv_video.so ;;
+        *) return 1 ;;
+    esac
+    for FILE in "${LEPTON_DIR}/../images/rootfs_overlay/${LIB}" \
+                "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/${LIB}"; do
+        [[ -f "${FILE}" ]] && { print "${LIB##*/}"; return 0; }
+    done
+    return 1
+}
 function lepton_video_hwaccel_mode()
 {
     if [[ "${LEPTON_VIDEO_HWACCEL:-false}" != true ]]; then
@@ -99,6 +116,9 @@ function lepton_video_hwaccel_mode()
         print no-gpu
     elif [[ "$(lepton_codec2_mode)" == off ]]; then
         print no-codec2
+    elif ! lepton_video_va_driver >/dev/null; then
+        # FFmpeg would decode in software instead of Android's decoders.
+        print no-driver
     else
         print vaapi
     fi
@@ -116,7 +136,7 @@ function lepton_video_hwaccel_props()
         # are copied into Android's buffers. The service's DRM PRIME mode
         # (zero-copy, its default) fails to create VA surfaces on i965.
         props_echo "debug.ffmpeg-codec2.hwaccel.drm=false"
-        println "Hardware video decoding (VA-API, experimental): on, using $(lepton_gpu_render_node 2>/dev/null || print 'the default render node')"
+        println "Hardware video decoding (VA-API, experimental): on, $(lepton_video_va_driver) using $(lepton_gpu_render_node 2>/dev/null || print 'the default render node')"
     else
         props_echo "debug.ffmpeg-codec2.rank=${LEPTON_FFMPEG_RANK_DISABLED}"
         props_echo "media.sf.hwaccel=0"
@@ -124,6 +144,7 @@ function lepton_video_hwaccel_props()
             unsupported) println "Hardware video decoding: LEPTON_VIDEO_HWACCEL needs Android 14 x86_64; off" ;;
             no-gpu) println "Hardware video decoding: off with software rendering (LEPTON_FORCE_SOFTWARE)" ;;
             no-codec2) println "Hardware video decoding: off because Android's media decoders (Codec2) are off" ;;
+            no-driver) println "Hardware video decoding: off; this image has no VA-API driver for the $(lepton_vulkan_hal) GPU" ;;
         esac
     fi
 }

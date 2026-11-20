@@ -20,7 +20,10 @@ Set `LEPTON_VIDEO_HWACCEL=true` (Steam launch options, or
   never come.
 
 It is refused, with a log line, under software rendering, when Android's media
-decoders (Codec2) are off, and on images other than Android 14 x86_64. Off,
+decoders (Codec2) are off, when the image has no VA-API driver for the GPU
+Lepton selected (AMD until Mesa's `radeonsi_drv_video.so` is added), and on
+images other than Android 14 x86_64. Without a usable driver the service
+still works, but FFmpeg decodes in software instead of Android's decoders. Off,
 `debug.ffmpeg-codec2.rank` is `4294967295`: the service lists no components and
 Android's codec list is unchanged. These off defaults are in the system
 `build.prop` (`lepton_x86_64/video-defaults.prop`, ahead of the launcher's

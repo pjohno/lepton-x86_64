@@ -131,13 +131,22 @@ LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup
 grep -qx 'debug.ffmpeg-codec2.rank=4294967295' "$work/lepton.prop"
 grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"
 if grep -q 'Hardware video decoding' "$work/log"; then echo 'FAIL: video decoding reported when not requested'; exit 1; fi
+# Without a VA driver for the GPU in the image, FFmpeg would decode in software.
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'debug.ffmpeg-codec2.rank=4294967295' "$work/lepton.prop"
+grep -q 'off; this image has no VA-API driver for the intel GPU' "$work/log" || { echo 'FAIL: no-driver message'; exit 1; }
+: > "$work/rootfs-intel/vendor/lib64/i965_drv_video.so"
+mkdir -p "$work/drm-amd/renderD128/device"; echo 0x1002 > "$work/drm-amd/renderD128/device/vendor"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-amd" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"
+grep -q 'no VA-API driver for the radeon GPU' "$work/log" || { echo 'FAIL: AMD without radeonsi VA driver'; exit 1; }
 LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
 grep -qx 'debug.ffmpeg-codec2.rank=256' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.rank.video=256' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.rank.audio=4294967295' "$work/lepton.prop"   # audio stays on Android's decoders
 grep -qx 'media.sf.hwaccel=1' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"   # copy-back, not DRM PRIME
-grep -q 'Hardware video decoding (VA-API, experimental): on, using /dev/dri/renderD129' "$work/log" || { echo 'FAIL: video decoding on message'; exit 1; }
+grep -q 'Hardware video decoding (VA-API, experimental): on, i965_drv_video.so using /dev/dri/renderD129' "$work/log" || { echo 'FAIL: video decoding on message'; exit 1; }
 LEPTON_VIDEO_HWACCEL=true LEPTON_FORCE_SOFTWARE=true setup_props > "$work/log"
 grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"
 grep -q 'off with software rendering' "$work/log"
@@ -148,7 +157,7 @@ probe_sdk=30
 LEPTON_VIDEO_HWACCEL=true setup_props > "$work/log"
 grep -q 'needs Android 14 x86_64' "$work/log"
 probe_sdk=34
-echo 'PASS: hardware video decoding off by default; opt-in ranks FFmpeg video only; refused without GPU rendering, Codec2 or Android 14'
+echo 'PASS: hardware video decoding off by default; opt-in ranks FFmpeg video only; refused without GPU rendering, Codec2, a VA driver for the GPU or Android 14'
 
 # Local window policy crosses Podman via the generated property file, not env.
 LEPTON_LOCAL_DISPLAY_ACTIVE=1 setup_props
