@@ -5,7 +5,7 @@ set -Eeuo pipefail
 
 usage() {
   cat <<'HELP'
-Usage: prepare-x86_64.sh --check | --sync-only | --resume-sync | --vendor-only | --patch-only | --execute | --resume | --reset
+Usage: prepare-x86_64.sh --check | --sync-only | --resume-sync | --vendor-only | --patch-only | --execute | --resume | --reset | --add-projects
   --check    Read-only inspection; no downloads or filesystem changes.
   --sync-only    Create fresh checkout and sync Android sources only.
   --resume-sync  Resume source synchronization, without copying or patching.
@@ -20,12 +20,18 @@ Usage: prepare-x86_64.sh --check | --sync-only | --resume-sync | --vendor-only |
                  Recovers old, verified-idle Git index locks automatically;
                  active/ambiguous locks stop with manual recovery guidance.
                  Keep other Git/repo operations stopped during reset.
+  --add-projects Fully prepared checkout: install NEW local manifest files and
+                 sync only the projects they add (no reset, no rebuild of
+                 existing outputs). Installed manifests must be unchanged. A
+                 <remove-project> is retired by moving its clean, unpatched
+                 worktree to <workspace>/aosp-retired/<UTC time>/ (never
+                 deleted); replacements must use a new path.
 Configuration: repository-root .build-env (copy .build-env.example and customize).
 HELP
 }
 [[ $# == 1 ]] || { usage >&2; exit 2; }
 ACTION=$1
-case "$ACTION" in --check|--sync-only|--resume-sync|--vendor-only|--patch-only|--execute|--resume|--reset) ;; *) usage >&2; exit 2;; esac
+case "$ACTION" in --check|--sync-only|--resume-sync|--vendor-only|--patch-only|--execute|--resume|--reset|--add-projects) ;; *) usage >&2; exit 2;; esac
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 IMAGE="$ROOT/image-14"
@@ -156,6 +162,16 @@ if [[ "$ACTION" == --execute || "$ACTION" == --sync-only ]]; then
 elif [[ "$ACTION" == --reset ]]; then
   [[ -f "$MARKER" && -d "$STATE" ]] || err 'No checkout prepared by this workflow to reset'
   [[ -f "$STATE/sync.done" ]] || err 'Source synchronization incomplete: use --resume first'
+elif [[ "$ACTION" == --add-projects ]]; then
+  # The owner marker may name an older repository commit: adding projects is
+  # how a prepared checkout follows new manifests without a reset.
+  [[ -f "$MARKER" && -d "$STATE" ]] || err 'No checkout prepared by this workflow'
+  for marker in sync.done vendor.done patches.done; do
+    [[ -f "$STATE/$marker" ]] || err "Checkout is not fully prepared (missing $marker)"
+  done
+  [[ ! -e "$STATE/reset.started" ]] || err 'Reset was interrupted: rerun --reset first'
+  [[ ! -e "$STATE/patches.started" ]] || err 'Patching was interrupted: inspect manually'
+  [[ ! -e "$STATE/build.running" ]] || err 'An image build is running or was interrupted; resolve it first'
 elif [[ "$ACTION" == --resume || "$ACTION" == --resume-sync || "$ACTION" == --vendor-only || "$ACTION" == --patch-only ]]; then
   [[ -f "$MARKER" && -d "$STATE" ]] || err 'No owned checkout state to resume'
   [[ "$(cat "$MARKER")" == "$owner_content" ]] || err 'Checkout belongs to a different repository commit'
@@ -254,6 +270,46 @@ run_in_builder() {
   fi
   return "$result"
 }
+
+if [[ "$ACTION" == --add-projects ]]; then
+  info "[$(date -u +%H:%M:%SZ)] [START] Add projects from new local manifests"
+  PLAN="$STATE/add-projects.plan"
+  RETIRE_ROOT="$LEPTON_WORKSPACE/aosp-retired"
+  ! under "$RETIRE_ROOT" "$TARGET" || err 'Retired projects would stay inside the checkout'
+  # Rerunning after an interruption is safe: retired worktrees and installed
+  # manifests are recognised. Image builds refuse to start meanwhile.
+  touch "$STATE/add-projects.started"
+  python3 -B "$IMAGE/scripts/internal/add-projects.py" --manifests "$MANIFESTS" \
+    --checkout "$TARGET" --provenance "$IMAGE/scripts/lib/image-provenance.sh" \
+    --retire-root "$RETIRE_ROOT" --plan "$PLAN" --execute
+  if [[ ! -s "$PLAN" ]]; then
+    rm -- "$STATE/add-projects.started"
+    info '[PASS] No new manifests; checkout unchanged'
+    exit 0
+  fi
+  run_in_builder <<'INNER'
+set -Eeuo pipefail
+cd /workspace/output
+plan=.lepton-clean14-state/add-projects.plan
+mapfile -t manifests < <(awk '$1 == "manifest" {print $2}' "$plan")
+mapfile -t projects < <(awk '$1 == "project" {print $2}' "$plan")
+for name in "${manifests[@]}"; do
+  [[ ! -e ".repo/local_manifests/$name" ]] || { echo "Manifest appeared meanwhile: $name"; exit 1; }
+  cp "/workspace/android_vendor_valve/manifest_scripts/manifests-34/$name" ".repo/local_manifests/$name"
+  echo "[INFO] Installed local manifest $name"
+done
+if (( ${#projects[@]} )); then
+  echo "[$(date -u +%H:%M:%SZ)] [START] Synchronizing ${#projects[@]} new project(s)"
+  .repo/repo/repo sync -j4 "${projects[@]}"
+fi
+.repo/repo/repo manifest -r -o .lepton-resolved-manifest.xml
+echo "[$(date -u +%H:%M:%SZ)] [PASS] New projects synchronized; resolved manifest updated"
+INNER
+  mv -- "$PLAN" "$STATE/add-projects-$(date -u +%Y%m%dT%H%M%SZ).done"
+  rm -- "$STATE/add-projects.started"
+  info "[$(date -u +%H:%M:%SZ)] [PASS] Projects added; existing sources and build outputs untouched"
+  exit 0
+fi
 
 if [[ "$ACTION" == --reset ]]; then
   info "[$(date -u +%H:%M:%SZ)] [START] Reset: Android sources back to the pinned manifest"
