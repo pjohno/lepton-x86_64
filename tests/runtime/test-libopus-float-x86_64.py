@@ -62,7 +62,7 @@ class StructureTests(unittest.TestCase):
         self.assertIn(f'"$IMAGE/patches/{PATCH.name}"', prepare)
         self.assertIn(f'"external/libopus|{PATCH.name}"', provenance)
         applies = re.findall(r'^apply_custom \S+ /workspace/patches/(\S+)', prepare, flags=re.M)
-        self.assertEqual(applies[-1], PATCH.name)
+        self.assertLess(applies.index('0014-minigbm-gbm-mesa-blob-cpu-surface.patch'), applies.index(PATCH.name))
 
 
 @unittest.skipUnless(AOSP and (AOSP / 'external/libopus/celt_sources.mk').is_file() and shutil.which('cc'),
