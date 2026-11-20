@@ -151,6 +151,35 @@ public final class MediaProbe {
         }
     }
 
+    // First frame only: CRC32 of each visible luma row, 64 rows per log line,
+    // to tell a row shift from changed pixel values when decoders disagree.
+    private static void logLumaRows(android.media.Image image) {
+        if (image == null) return;
+        try {
+            android.graphics.Rect crop = image.getCropRect();
+            android.media.Image.Plane y = image.getPlanes()[0];
+            ByteBuffer data = y.getBuffer();
+            int stride = y.getRowStride(), pixel = y.getPixelStride();
+            byte[] row = new byte[crop.width()];
+            StringBuilder line = new StringBuilder();
+            java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+            Log.i(TAG, "LEPTON_MEDIA_AVC_ROWS crop=" + crop.flattenToString() + " stride=" + stride);
+            for (int r = crop.top; r < crop.bottom; r++) {
+                int base = r * stride + crop.left * pixel;
+                for (int x = 0; x < row.length; x++) row[x] = data.get(base + x * pixel);
+                crc.reset();
+                crc.update(row);
+                line.append(Long.toHexString(crc.getValue())).append(',');
+                if ((r - crop.top) % 64 == 63 || r == crop.bottom - 1) {
+                    Log.i(TAG, "LEPTON_MEDIA_AVC_ROWS " + (r - crop.top) / 64 + " " + line);
+                    line.setLength(0);
+                }
+            }
+        } finally {
+            image.close();
+        }
+    }
+
     private static void timedDecode(Activity activity, String asset, String mime, boolean toSurface) {
         String mode = toSurface ? "surface" : "buffer";
         MediaExtractor extractor = new MediaExtractor();
@@ -216,6 +245,7 @@ public final class MediaProbe {
                     if (info.size > 0 || toSurface) frames++;
                     if (!toSurface && info.size > 0) {
                         java.util.zip.CRC32 frame = new java.util.zip.CRC32();
+                        if (hashed == 0) logLumaRows(codec.getOutputImage(output));
                         if (hashLuma(codec.getOutputImage(output), frame)) {
                             hashed++;
                             long value = frame.getValue();
