@@ -1,0 +1,20 @@
+Lepton: build iHD with Android 14's clang
+
+AOSP 14 turns clang's pragma-pack warnings into errors
+(-Werror=pragma-pack-suspicious-include); gmmlib's headers deliberately
+include others under #pragma pack, so every iHD file using them failed.
+Turn the two warnings off for the driver.
+
+diff --git a/Android.bp b/Android.bp
+--- a/Android.bp
++++ b/Android.bp
+@@ -40,6 +40,9 @@
+     "-fcheck-new",
+     "-Werror",
+     "-Wno-unknown-pragmas",
++    // Lepton: AOSP 14 makes these errors; gmmlib packs its structs on purpose.
++    "-Wno-pragma-pack",
++    "-Wno-pragma-pack-suspicious-include",
+     "-Wno-comments",
+     "-Wno-attributes",
+     "-Wno-narrowing",
