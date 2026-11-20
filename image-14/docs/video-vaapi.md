@@ -58,8 +58,13 @@ Vulkan headers are too old for it), and `0018` removes the service's "raw codec
 data" parameter, which needs WayDroid's `frameworks/av` changes; without it the
 decoders take the codec from the media type.
 
-libva tries iHD before i965 on Intel GPUs. Not yet included: Mesa's VA driver
-for AMD (`radeonsi`).
+libva tries iHD before i965 on Intel GPUs.
+
+AMD uses Mesa's VA-API driver, built by Lepton's Mesa (patch `0019`,
+`BOARD_MESA3D_GALLIUM_VA`) and installed as `radeonsi_drv_video.so`, with
+`-Dvideo-codecs=all`: this includes the patent-encumbered H.264 and H.265
+(H.265 also applies to Mesa's Vulkan video). Patch `0020` makes libva load
+it by that name; WayDroid's libva otherwise looks in `libgallium_dri.so`.
 
 ## Verifying
 

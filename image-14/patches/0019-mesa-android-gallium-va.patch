@@ -1,0 +1,71 @@
+Lepton: build Mesa's VA-API driver for Android (radeonsi_drv_video)
+
+Mesa's Android make build has no VA-API support. With
+BOARD_MESA3D_GALLIUM_VA := true it now adds libva (headers and a stub
+pkg-config with the VA-API version from external/libva), configures
+-Dgallium-va=enabled, and installs Mesa's VA driver
+(libgallium_drv_video.so) as /vendor/lib{64}/radeonsi_drv_video.so when
+radeonsi is built. Which codecs it decodes is set by -Dvideo-codecs in
+BOARD_MESA3D_MESON_ARGS.
+
+diff --git a/android/Android.mk b/android/Android.mk
+--- a/android/Android.mk
++++ b/android/Android.mk
+@@ -104,6 +104,15 @@
+ MESON_GEN_PKGCONFIGS += DirectX-Headers
+ endif
+ 
++# Lepton: gallium VA-API frontend (BOARD_MESA3D_GALLIUM_VA := true). The VA
++# driver only needs libva's headers; the stub pkg-config gives the VA-API
++# version from external/libva.
++ifneq ($(filter true,$(BOARD_MESA3D_GALLIUM_VA)),)
++LIBVA_API_VERSION = $(shell sed -n "s/^va_api_major_version = \([0-9]*\)/\1/p" external/libva/meson.build).$(shell sed -n "s/^va_api_minor_version = \([0-9]*\)/\1/p" external/libva/meson.build).0
++LOCAL_SHARED_LIBRARIES += libva
++MESON_GEN_PKGCONFIGS += libva:$(LIBVA_API_VERSION)
++endif
++
+ ifneq ($(MESON_GEN_LLVM_STUB),)
+ MESON_LLVM_VERSION := $(LLVM_VERSION_MAJOR).0.0
+ 
+@@ -203,6 +212,14 @@
+ $(foreach driver,$(BOARD_MESA3D_VULKAN_DRIVERS), \
+     $(eval $(call mesa3d-lib,vulkan.$(MESA_VK_LIB_SUFFIX_$(driver)),hw,MESA3D_VULKAN_$(driver)_BIN)))
+ 
++ifneq ($(filter true,$(BOARD_MESA3D_GALLIUM_VA)),)
++# Module 'radeonsi_drv_video', produces '/vendor/lib{64}/radeonsi_drv_video.so',
++# Mesa's VA-API driver (libgallium_drv_video.so) under the name libva loads.
++ifneq ($(filter radeonsi,$(BOARD_MESA3D_GALLIUM_DRIVERS)),)
++$(eval $(call mesa3d-lib,radeonsi_drv_video,,MESA3D_GALLIUM_VA_BIN))
++endif
++endif
++
+ ifneq ($(filter true, $(BOARD_MESA3D_BUILD_LIBGBM)),)
+ # Modules 'libgbm', produces '/vendor/lib{64}/libgbm.so'
+ $(eval $(call mesa3d-lib,$(MESA_LIBGBM_NAME),,MESA3D_LIBGBM_BIN,$(MESA3D_TOP)/src/gbm/main))
+diff --git a/android/mesa3d_cross.mk b/android/mesa3d_cross.mk
+--- a/android/mesa3d_cross.mk
++++ b/android/mesa3d_cross.mk
+@@ -70,6 +70,7 @@
+ $(M_TARGET_PREFIX)MESA3D_LIBGLESV2_BIN   := $(MESON_OUT_DIR)/install/usr/local/lib/libGLESv2.so
+ $(M_TARGET_PREFIX)MESA3D_LIBGBM_BIN      := $(MESON_OUT_DIR)/install/usr/local/lib/$(MESA_LIBGBM_NAME).so
+ $(M_TARGET_PREFIX)MESA3D_DRI_GBM_BIN     := $(MESON_OUT_DIR)/install/usr/local/lib/gbm/dri_gbm.so
++$(M_TARGET_PREFIX)MESA3D_GALLIUM_VA_BIN  := $(MESON_OUT_DIR)/install/usr/local/lib/dri/libgallium_drv_video.so
+ 
+ 
+ MESA3D_GBM_BINS := \
+@@ -78,6 +79,7 @@
+ 
+ MESA3D_GLES_BINS := \
+     $($(M_TARGET_PREFIX)MESA3D_GALLIUM_BIN) \
++    $(if $(filter true,$(BOARD_MESA3D_GALLIUM_VA)),$($(M_TARGET_PREFIX)MESA3D_GALLIUM_VA_BIN)) \
+     $($(M_TARGET_PREFIX)MESA3D_LIBEGL_BIN)    \
+     $($(M_TARGET_PREFIX)MESA3D_LIBGLESV1_BIN) \
+     $($(M_TARGET_PREFIX)MESA3D_LIBGLESV2_BIN) \
+@@ -97,6 +99,7 @@
+ 	-Dcpp_rtti=false                                                             \
+ 	-Dlmsensors=disabled                                                         \
+ 	-Dandroid-libbacktrace=disabled                                              \
++	-Dgallium-va=$(if $(filter true,$(BOARD_MESA3D_GALLIUM_VA)),enabled,disabled) \
+ 	$(BOARD_MESA3D_MESON_ARGS)                                                   \
+ 
+ MESON_BUILD := PATH=/usr/bin:/bin:/sbin:$$PATH ninja -C $(MESON_OUT_DIR)/build

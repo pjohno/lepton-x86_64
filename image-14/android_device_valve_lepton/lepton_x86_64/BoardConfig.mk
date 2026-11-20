@@ -29,3 +29,9 @@ BOARD_MESA3D_MESON_ARGS += -Dmesa-clc=system
 # Hardware video decoding off by default, ahead of system.prop so the
 # launcher's /vendor/waydroid.prop import overrides it (video-defaults.prop).
 TARGET_SYSTEM_PROP := $(DEVICE_PATH)/lepton_x86_64/video-defaults.prop $(TARGET_SYSTEM_PROP)
+
+# Mesa's VA-API driver for AMD (patch 0019, radeonsi_drv_video.so), with every
+# codec Mesa supports, including the patent-encumbered H.264 and H.265 (off by
+# default since Mesa 22.2). -Dvideo-codecs also applies to Vulkan video.
+BOARD_MESA3D_GALLIUM_VA := true
+BOARD_MESA3D_MESON_ARGS += -Dvideo-codecs=all

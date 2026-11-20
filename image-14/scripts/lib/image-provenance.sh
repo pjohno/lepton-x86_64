@@ -46,6 +46,8 @@ LEPTON_CUSTOM_PATCHES=(
     "external/minigbm|0016-minigbm-gbm-mesa-blob-direct-map.patch"
     "external/ffmpeg|0017-ffmpeg-x86_64-without-vulkan.patch"
     "external/stagefright-plugins|0018-stagefright-plugins-without-raw-codec-data.patch"
+    "external/mesa|0019-mesa-android-gallium-va.patch"
+    "external/libva|0020-libva-standard-driver-name-first.patch"
 )
 
 # image_source_status REPO AOSP: verify copied source content and every patch.

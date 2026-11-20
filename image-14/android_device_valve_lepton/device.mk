@@ -152,7 +152,8 @@ PRODUCT_PACKAGES += \
     libva \
     libva-android \
     i965_drv_video \
-    iHD_drv_video
+    iHD_drv_video \
+    radeonsi_drv_video
 endif
 
 # Memtrack

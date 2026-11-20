@@ -1,0 +1,28 @@
+Lepton: libva loads <driver>_drv_video.so before libgallium_dri.so
+
+WayDroid's libva loads libgallium_dri.so for every non-Intel driver,
+because WayDroid's Mesa puts its VA entry point there. Lepton's Mesa
+installs the VA driver under the standard name (radeonsi_drv_video.so,
+patch 0019), so try that first and keep libgallium_dri.so as the fallback.
+
+diff --git a/va/va.c b/va/va.c
+--- a/va/va.c
++++ b/va/va.c
+@@ -362,11 +362,13 @@
+     char *driver_path = (char *) malloc(PATH_MAX);
+     if (!driver_path)
+         return NULL;
+-    if (strcmp(driver_name, "iHD") && strcmp(driver_name, "i965")) {
++    n = snprintf(driver_path, PATH_MAX, DRIVER_PATH_STRING,
++                 driver_dir, driver_name, DRIVER_EXTENSION);
++    /* Lepton: Mesa installs its VA driver under the standard name
++     * (radeonsi_drv_video.so); WayDroid's Mesa has it in libgallium_dri.so. */
++    if (n >= 0 && n < PATH_MAX && strcmp(driver_name, "iHD") && strcmp(driver_name, "i965")
++            && access(driver_path, F_OK) != 0) {
+         n = snprintf(driver_path, PATH_MAX, "%s/libgallium_dri.so", driver_dir);
+-    } else {
+-        n = snprintf(driver_path, PATH_MAX, DRIVER_PATH_STRING,
+-                     driver_dir, driver_name, DRIVER_EXTENSION);
+     }
+     if (n < 0) {
+         free(driver_path);
