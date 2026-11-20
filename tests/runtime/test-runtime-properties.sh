@@ -136,6 +136,7 @@ grep -qx 'debug.ffmpeg-codec2.rank=256' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.rank.video=256' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.rank.audio=4294967295' "$work/lepton.prop"   # audio stays on Android's decoders
 grep -qx 'media.sf.hwaccel=1' "$work/lepton.prop"
+grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"   # copy-back, not DRM PRIME
 grep -q 'Hardware video decoding (VA-API, experimental): on, using /dev/dri/renderD129' "$work/log" || { echo 'FAIL: video decoding on message'; exit 1; }
 LEPTON_VIDEO_HWACCEL=true LEPTON_FORCE_SOFTWARE=true setup_props > "$work/log"
 grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"

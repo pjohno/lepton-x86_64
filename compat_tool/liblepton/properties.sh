@@ -112,6 +112,10 @@ function lepton_video_hwaccel_props()
         props_echo "debug.ffmpeg-codec2.rank.video=256"
         props_echo "debug.ffmpeg-codec2.rank.audio=${LEPTON_FFMPEG_RANK_DISABLED}"
         props_echo "media.sf.hwaccel=1"
+        # Copy-back: FFmpeg decodes into its own VA surfaces and the frames
+        # are copied into Android's buffers. The service's DRM PRIME mode
+        # (zero-copy, its default) fails to create VA surfaces on i965.
+        props_echo "debug.ffmpeg-codec2.hwaccel.drm=false"
         println "Hardware video decoding (VA-API, experimental): on, using $(lepton_gpu_render_node 2>/dev/null || print 'the default render node')"
     else
         props_echo "debug.ffmpeg-codec2.rank=${LEPTON_FFMPEG_RANK_DISABLED}"

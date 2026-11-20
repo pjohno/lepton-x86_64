@@ -12,7 +12,12 @@ Set `LEPTON_VIDEO_HWACCEL=true` (Steam launch options, or
 
 - ranks the service's video decoders (256) ahead of Android's software ones
   (512); its audio decoders stay disabled, so audio keeps Android's decoders;
-- sets `media.sf.hwaccel=1`, which makes FFmpeg open a VA-API device.
+- sets `media.sf.hwaccel=1`, which makes FFmpeg open a VA-API device;
+- sets `debug.ffmpeg-codec2.hwaccel.drm=false` (copy-back): FFmpeg decodes
+  into its own VA surfaces and frames are copied into Android's buffers. The
+  service's default DRM PRIME mode (zero-copy) fails on i965: every VA surface
+  allocation returns "invalid parameter", and the app waits for frames that
+  never come.
 
 It is refused, with a log line, under software rendering, when Android's media
 decoders (Codec2) are off, and on images other than Android 14 x86_64. Off,
@@ -61,4 +66,4 @@ A working video does not show that the GPU decoded it. Check:
    service process (`android.hardware.media.c2-ffmpeg-service`) increases while
    it decodes. See `tests/runtime/README.md`.
 3. **Copies:** decoded frames are copied from VA surfaces into Android buffers
-   unless the service's DRM PRIME mode is used; zero-copy is not claimed.
+   (copy-back); zero-copy is not claimed.
