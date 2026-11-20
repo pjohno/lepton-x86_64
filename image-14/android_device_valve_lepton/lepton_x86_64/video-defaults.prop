@@ -1,0 +1,7 @@
+# Hardware video decoding (Codec2 FFmpeg service, VA-API) is off by default:
+# the service lists no components and FFmpeg opens no VA-API device. The
+# launcher overrides both (LEPTON_VIDEO_HWACCEL) through /vendor/waydroid.prop,
+# which system.prop imports after this file. Vendor properties would load
+# after that import and win, so these must stay in the system build.prop.
+debug.ffmpeg-codec2.rank=4294967295
+media.sf.hwaccel=0

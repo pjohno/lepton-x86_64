@@ -17,7 +17,10 @@ Set `LEPTON_VIDEO_HWACCEL=true` (Steam launch options, or
 It is refused, with a log line, under software rendering, when Android's media
 decoders (Codec2) are off, and on images other than Android 14 x86_64. Off,
 `debug.ffmpeg-codec2.rank` is `4294967295`: the service lists no components and
-Android's codec list is unchanged.
+Android's codec list is unchanged. These off defaults are in the system
+`build.prop` (`lepton_x86_64/video-defaults.prop`, ahead of the launcher's
+`/vendor/waydroid.prop` import); vendor properties load after that import
+and would override the launcher.
 
 libva opens the render node in `gralloc.gbm.device`, the GPU Lepton already
 selected for graphics.

@@ -25,3 +25,7 @@ BOARD_MESA3D_VULKAN_DRIVERS := amd intel
 # mesa_clc and vtn_bindgen2 for that; build-images-x86_64.sh builds them from
 # this checkout's Mesa in the Ubuntu 26 builder and puts them on the PATH.
 BOARD_MESA3D_MESON_ARGS += -Dmesa-clc=system
+
+# Hardware video decoding off by default, ahead of system.prop so the
+# launcher's /vendor/waydroid.prop import overrides it (video-defaults.prop).
+TARGET_SYSTEM_PROP := $(DEVICE_PATH)/lepton_x86_64/video-defaults.prop $(TARGET_SYSTEM_PROP)

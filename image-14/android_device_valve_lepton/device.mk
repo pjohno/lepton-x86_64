@@ -143,6 +143,8 @@ PRODUCT_COPY_FILES += \
 # (external/stagefright-plugins, manifests-34/20-video-vaapi.xml) lists no
 # components while debug.ffmpeg-codec2.rank is 0xFFFFFFFF, so Android's own
 # codecs are unchanged unless the launcher enables it (LEPTON_VIDEO_HWACCEL).
+# The off defaults are in lepton_x86_64/video-defaults.prop, not vendor
+# properties: the launcher's values must be able to override them.
 # libva finds its render node through gralloc.gbm.device, as gralloc does.
 ifeq ($(TARGET_PRODUCT),aosp_lepton_x86_64)
 PRODUCT_PACKAGES += \
@@ -150,10 +152,6 @@ PRODUCT_PACKAGES += \
     libva \
     libva-android \
     i965_drv_video
-
-PRODUCT_VENDOR_PROPERTIES += \
-    debug.ffmpeg-codec2.rank=4294967295 \
-    media.sf.hwaccel=0
 endif
 
 # Memtrack
