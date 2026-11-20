@@ -183,16 +183,21 @@ done
   fail "Vendored sources missing"
 
 if [[ "$ISOLATED" == true ]]; then
-  patch="$ROOT/image-14/patches/0009-hwc-local-wayland-fullscreen.patch"
-  project="$TARGET/hardware/waydroid"
-  if ! git -C "$project" apply --reverse --check "$patch" >/dev/null 2>&1; then
-    if git -C "$project" apply --check "$patch" >/dev/null 2>&1; then
-      fail "Local hwcomposer patch is missing but can be applied safely. Run: git -C '$project' apply '$patch'; then rerun (no reset or clean)."
-    fi
-    fail 'Local hwcomposer source is inconsistent with patch 0009; inspect hardware/waydroid and restore the expected source changes without resetting the checkout'
-  fi
   source "$ROOT/image-14/scripts/lib/image-provenance.sh"
-  image_source_status "$ROOT" "$TARGET" || fail 'Prepared source content differs from this branch; reconcile the listed files/patches without a reset or clean'
+  # The source status checks each project's patches as a stack. Later
+  # hwcomposer patches (0011, 0012) edit 0009's lines, so 0009 alone only
+  # explains a failure; checked first, it rejected every correct checkout.
+  if ! image_source_status "$ROOT" "$TARGET"; then
+    patch="$ROOT/image-14/patches/0009-hwc-local-wayland-fullscreen.patch"
+    project="$TARGET/hardware/waydroid"
+    if ! git -C "$project" apply --reverse --check "$patch" >/dev/null 2>&1; then
+      if git -C "$project" apply --check "$patch" >/dev/null 2>&1; then
+        fail "Local hwcomposer patch is missing but can be applied safely. Run: git -C '$project' apply '$patch'; then rerun (no reset or clean)."
+      fi
+      fail 'Local hwcomposer source is inconsistent with patch 0009; inspect hardware/waydroid and restore the expected source changes without resetting the checkout'
+    fi
+    fail 'Prepared source content differs from this branch; reconcile the listed files/patches without a reset or clean'
+  fi
   [[ ! -e "$RUNNING" ]] || fail 'Previous build was interrupted; inspect/repair it separately before an isolated build (no cleanup performed)'
 fi
 
