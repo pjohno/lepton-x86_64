@@ -126,6 +126,29 @@ grep -q 'if \[\[ "$(lepton_codec2_mode)" == heap \]\]; then' "$ROOT/compat_tool/
 grep -q 'podman_mount_entry "$(lepton_dma_heap_device)" "/dev/dma_heap/system" rw' "$ROOT/compat_tool/liblepton/mounting.sh"
 printf 'PASS: Android URL routing default, explicit Steam opt-in, Codec2 modes (gralloc on fixed AMD/Intel images, heap or off on older ones, overlay first, software, opt-out/opt-in, Android 11), so replacements\n'
 
+# Hardware video decoding (VA-API): off unless LEPTON_VIDEO_HWACCEL=true.
+LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'debug.ffmpeg-codec2.rank=4294967295' "$work/lepton.prop"
+grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"
+if grep -q 'Hardware video decoding' "$work/log"; then echo 'FAIL: video decoding reported when not requested'; exit 1; fi
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'debug.ffmpeg-codec2.rank=256' "$work/lepton.prop"
+grep -qx 'debug.ffmpeg-codec2.rank.video=256' "$work/lepton.prop"
+grep -qx 'debug.ffmpeg-codec2.rank.audio=4294967295' "$work/lepton.prop"   # audio stays on Android's decoders
+grep -qx 'media.sf.hwaccel=1' "$work/lepton.prop"
+grep -q 'Hardware video decoding (VA-API, experimental): on, using /dev/dri/renderD129' "$work/log" || { echo 'FAIL: video decoding on message'; exit 1; }
+LEPTON_VIDEO_HWACCEL=true LEPTON_FORCE_SOFTWARE=true setup_props > "$work/log"
+grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"
+grep -q 'off with software rendering' "$work/log"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-new" setup_props > "$work/log"
+grep -qx 'debug.ffmpeg-codec2.rank=4294967295' "$work/lepton.prop"
+grep -q "off because Android's media decoders (Codec2) are off" "$work/log"
+probe_sdk=30
+LEPTON_VIDEO_HWACCEL=true setup_props > "$work/log"
+grep -q 'needs Android 14 x86_64' "$work/log"
+probe_sdk=34
+echo 'PASS: hardware video decoding off by default; opt-in ranks FFmpeg video only; refused without GPU rendering, Codec2 or Android 14'
+
 # Local window policy crosses Podman via the generated property file, not env.
 LEPTON_LOCAL_DISPLAY_ACTIVE=1 setup_props
 if grep -q '^ro.lepton.local_' "$work/lepton.prop"; then echo 'FAIL: sysbake received local display policy'; exit 1; fi

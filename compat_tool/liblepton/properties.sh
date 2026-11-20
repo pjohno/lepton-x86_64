@@ -82,6 +82,48 @@ function lepton_dma_heap_problem()
     fi
 }
 
+# Hardware video decoding (experimental): the image's Codec2 FFmpeg service
+# decodes video with VA-API on the GPU gralloc uses (gralloc.gbm.device).
+# Off by default: the service then lists no components and Android's own
+# codecs are unchanged. LEPTON_VIDEO_HWACCEL=true ranks FFmpeg's video
+# decoders (256) ahead of Android's software ones (512); FFmpeg's audio
+# decoders stay off. Needs hardware rendering and Codec2 (not mode off).
+LEPTON_FFMPEG_RANK_DISABLED=4294967295
+function lepton_video_hwaccel_mode()
+{
+    if [[ "${LEPTON_VIDEO_HWACCEL:-false}" != true ]]; then
+        print off
+    elif [[ "$(uname -m)" != x86_64 || "$(android_sdk_version)" -lt 34 ]]; then
+        print unsupported
+    elif [[ "${LEPTON_FORCE_SOFTWARE:-}" == true ]]; then
+        print no-gpu
+    elif [[ "$(lepton_codec2_mode)" == off ]]; then
+        print no-codec2
+    else
+        print vaapi
+    fi
+}
+function lepton_video_hwaccel_props()
+{
+    local MODE
+    MODE="$(lepton_video_hwaccel_mode)"
+    if [[ "${MODE}" == vaapi ]]; then
+        props_echo "debug.ffmpeg-codec2.rank=256"
+        props_echo "debug.ffmpeg-codec2.rank.video=256"
+        props_echo "debug.ffmpeg-codec2.rank.audio=${LEPTON_FFMPEG_RANK_DISABLED}"
+        props_echo "media.sf.hwaccel=1"
+        println "Hardware video decoding (VA-API, experimental): on, using $(lepton_gpu_render_node 2>/dev/null || print 'the default render node')"
+    else
+        props_echo "debug.ffmpeg-codec2.rank=${LEPTON_FFMPEG_RANK_DISABLED}"
+        props_echo "media.sf.hwaccel=0"
+        case "${MODE}" in
+            unsupported) println "Hardware video decoding: LEPTON_VIDEO_HWACCEL needs Android 14 x86_64; off" ;;
+            no-gpu) println "Hardware video decoding: off with software rendering (LEPTON_FORCE_SOFTWARE)" ;;
+            no-codec2) println "Hardware video decoding: off because Android's media decoders (Codec2) are off" ;;
+        esac
+    fi
+}
+
 function setup_props()
 {
     local CONTEXT="${1:-${LEPTON_CONTEXT}}"
@@ -162,6 +204,8 @@ function setup_props()
             fi
             ;;
     esac
+    lepton_video_hwaccel_props
+
     props_echo "ro.opengles.version=196609"
     props_echo "ro.hardware.camera=v4l2"
 
