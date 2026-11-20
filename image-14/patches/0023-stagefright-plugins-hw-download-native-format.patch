@@ -18,7 +18,7 @@ diff --git a/utils/ffmpeg_hwaccel.c b/utils/ffmpeg_hwaccel.c
  #include "libavutil/opt.h"
  
  int ffmpeg_hwaccel_init(AVCodecContext *avctx) {
-@@ -83,6 +84,32 @@
+@@ -83,6 +84,29 @@
          return AVERROR(ENOMEM);
      }
  
@@ -29,18 +29,15 @@ diff --git a/utils/ffmpeg_hwaccel.c b/utils/ffmpeg_hwaccel.c
 +    {
 +        const AVHWFramesContext *hwfc = (const AVHWFramesContext *)frame->hw_frames_ctx->data;
 +        if (hwfc->sw_format != AV_PIX_FMT_NONE && hwfc->sw_format != AV_PIX_FMT_YUV420P) {
-+            // Transfer (driver copy into FFmpeg's buffer) before map: a map
-+            // makes the CPU read the surface itself, which is slow from
-+            // uncached GPU memory (AMD: 127 instead of ~190 fps at 720p).
 +            output->format = hwfc->sw_format;
-+            err = av_hwframe_transfer_data(output, frame, 0);
++            err = av_hwframe_map(output, frame, AV_HWFRAME_MAP_READ);
 +            if (err == 0) {
 +                goto finish;
 +            }
 +            av_frame_unref(output);
 +
 +            output->format = hwfc->sw_format;
-+            err = av_hwframe_map(output, frame, AV_HWFRAME_MAP_READ);
++            err = av_hwframe_transfer_data(output, frame, 0);
 +            if (err == 0) {
 +                goto finish;
 +            }
