@@ -159,6 +159,9 @@ if [[ "$MEDIA_SMOKE" == true ]]; then
     mkdir -p "$TMP/assets"
     ffmpeg -v error -f lavfi -i testsrc2=size=160x120:rate=15 -t 2 \
         -c:v libx264 -pix_fmt yuv420p -an "$TMP/assets/probe.mp4"
+    # 720p H.264 High for decoder selection and throughput diagnostics.
+    ffmpeg -v error -f lavfi -i testsrc2=size=1280x720:rate=30 -t 5 \
+        -c:v libx264 -profile:v high -pix_fmt yuv420p -an "$TMP/assets/probe720.mp4"
     ffmpeg -v error -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 \
         -c:a libvorbis "$TMP/assets/probe.ogg"
     ffmpeg -v error -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 \

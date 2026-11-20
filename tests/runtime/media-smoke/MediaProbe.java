@@ -29,14 +29,17 @@ public final class MediaProbe {
     public static void start(Activity activity) {
         new Thread(() -> {
             try {
-                int count = 0;
+                int count = 0, hardware = 0;
                 for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.ALL_CODECS).getCodecInfos()) {
                     if (!info.isEncoder()) {
                         count++;
-                        Log.i(TAG, "decoder=" + info.getName());
+                        if (info.isHardwareAccelerated()) hardware++;
+                        Log.i(TAG, "decoder=" + info.getName() + " " + describe(info) +
+                            " types=" + String.join(",", info.getSupportedTypes()));
                     }
                 }
-                Log.i(TAG, "LEPTON_MEDIA_DECODERS count=" + count);
+                Log.i(TAG, "LEPTON_MEDIA_DECODERS count=" + count + " hardware=" + hardware);
+                reportAvcCandidates();
                 reportDrm();
                 // Separate Android's audio output from decoding: raw PCM through
                 // AudioTrack needs no codec (the path games' own mixers use);
@@ -52,6 +55,11 @@ public final class MediaProbe {
                 final String result = "LEPTON_MEDIA_SMOKE_PASS decoders=" + count +
                     " avc_frames=" + video + " vorbis_buffers=" + audio;
                 Log.i(TAG, result);
+                // Diagnostics only (never fail the probe): which H.264 decoder
+                // runs, whether Android reports it as hardware, and how fast it
+                // decodes 720p to CPU buffers and to a GPU-consumable Surface.
+                timedDecode(activity, "probe720.mp4", "video/avc", false);
+                timedDecode(activity, "probe720.mp4", "video/avc", true);
                 File clip = new File(activity.getCacheDir(), "probe.mp4");
                 try (InputStream in = activity.getAssets().open("probe.mp4");
                      FileOutputStream out = new FileOutputStream(clip)) {
@@ -92,6 +100,120 @@ public final class MediaProbe {
                 });
             }
         }, "LeptonMediaProbe").start();
+    }
+
+    private static String describe(MediaCodecInfo info) {
+        return "hw=" + info.isHardwareAccelerated() + " sw_only=" + info.isSoftwareOnly() +
+            " vendor=" + info.isVendor() + " canonical=" + info.getCanonicalName();
+    }
+
+    // Every decoder that can take H.264, in the order MediaCodec.createDecoderByType
+    // considers them (MediaCodecList order), so a newly added decoder's rank shows.
+    private static void reportAvcCandidates() {
+        int rank = 0;
+        for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+            if (info.isEncoder()) continue;
+            for (String type : info.getSupportedTypes()) {
+                if (type.equalsIgnoreCase("video/avc")) {
+                    Log.i(TAG, "LEPTON_MEDIA_AVC_CANDIDATE rank=" + rank++ + " name=" + info.getName() +
+                        " " + describe(info));
+                }
+            }
+        }
+        if (rank == 0) Log.w(TAG, "LEPTON_MEDIA_AVC_CANDIDATE none");
+    }
+
+    // Decodes the 720p clip with the decoder Android selects, either to
+    // ByteBuffers (CPU copy) or to an ImageReader Surface (graphic buffers, the
+    // path players use). Reports decoder, Android's hardware flag, frames and
+    // throughput. Throughput alone does not prove hardware decoding; compare
+    // with host evidence (e.g. DRM fdinfo video-engine time). Never throws.
+    private static void timedDecode(Activity activity, String asset, String mime, boolean toSurface) {
+        String mode = toSurface ? "surface" : "buffer";
+        MediaExtractor extractor = new MediaExtractor();
+        MediaCodec codec = null;
+        android.media.ImageReader reader = null;
+        android.os.HandlerThread thread = null;
+        final int[] images = { 0 };
+        try (AssetFileDescriptor fd = activity.getAssets().openFd(asset)) {
+            extractor.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
+            MediaFormat format = null;
+            for (int i = 0; i < extractor.getTrackCount() && format == null; i++) {
+                MediaFormat candidate = extractor.getTrackFormat(i);
+                if (mime.equals(candidate.getString(MediaFormat.KEY_MIME))) {
+                    extractor.selectTrack(i);
+                    format = candidate;
+                }
+            }
+            if (format == null) throw new IllegalStateException("Missing test track " + mime);
+            int width = format.getInteger(MediaFormat.KEY_WIDTH), height = format.getInteger(MediaFormat.KEY_HEIGHT);
+            codec = MediaCodec.createDecoderByType(mime);
+            android.view.Surface surface = null;
+            if (toSurface) {
+                thread = new android.os.HandlerThread("LeptonImageReader");
+                thread.start();
+                reader = android.media.ImageReader.newInstance(width, height,
+                    android.graphics.ImageFormat.PRIVATE, 4,
+                    android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE);
+                reader.setOnImageAvailableListener(r -> {
+                    android.media.Image image = r.acquireNextImage();
+                    if (image != null) { images[0]++; image.close(); }
+                }, new android.os.Handler(thread.getLooper()));
+                surface = reader.getSurface();
+            }
+            codec.configure(format, surface, null, 0);
+            codec.start();
+            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+            int frames = 0;
+            boolean inputEnd = false, outputEnd = false;
+            long start = android.os.SystemClock.elapsedRealtime();
+            long deadline = start + 30000;
+            while (!outputEnd && android.os.SystemClock.elapsedRealtime() < deadline) {
+                if (!inputEnd) {
+                    int input = codec.dequeueInputBuffer(10000);
+                    if (input >= 0) {
+                        int size = extractor.readSampleData(codec.getInputBuffer(input), 0);
+                        if (size < 0) {
+                            codec.queueInputBuffer(input, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                            inputEnd = true;
+                        } else {
+                            codec.queueInputBuffer(input, 0, size, extractor.getSampleTime(), 0);
+                            extractor.advance();
+                        }
+                    }
+                }
+                int output = codec.dequeueOutputBuffer(info, 10000);
+                if (output >= 0) {
+                    if (info.size > 0 || toSurface) frames++;
+                    outputEnd = (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
+                    codec.releaseOutputBuffer(output, toSurface && !outputEnd);
+                }
+            }
+            long ms = Math.max(1, android.os.SystemClock.elapsedRealtime() - start);
+            String color = "";
+            try {
+                MediaFormat out = codec.getOutputFormat();
+                if (out.containsKey(MediaFormat.KEY_COLOR_FORMAT))
+                    color = " color_format=0x" + Integer.toHexString(out.getInteger(MediaFormat.KEY_COLOR_FORMAT));
+            } catch (Throwable ignored) { }
+            android.os.SystemClock.sleep(200);  // let the last images arrive
+            MediaCodecInfo selected = codec.getCodecInfo();
+            Log.i(TAG, (outputEnd ? "LEPTON_MEDIA_AVC_DECODE" : "LEPTON_MEDIA_AVC_DECODE_INCOMPLETE") +
+                " mode=" + mode + " decoder=" + selected.getName() + " " + describe(selected) +
+                " size=" + width + "x" + height + " frames=" + frames +
+                (toSurface ? " surface_images=" + images[0] : "") + " ms=" + ms +
+                " fps=" + (frames * 1000L / ms) + color);
+        } catch (Throwable error) {
+            Log.w(TAG, "LEPTON_MEDIA_AVC_DECODE_FAIL mode=" + mode + " " + error);
+        } finally {
+            if (codec != null) {
+                try { codec.stop(); } catch (Throwable ignored) { }
+                codec.release();
+            }
+            if (reader != null) reader.close();
+            if (thread != null) thread.quitSafely();
+            extractor.release();
+        }
     }
 
     // Informational: which DRM schemes Android offers (Widevine only when a
