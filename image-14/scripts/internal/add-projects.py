@@ -12,6 +12,8 @@ copied folder touches it.
 
 Writes a plan file for the container stage:
     manifest <file name>      new local manifest to install
+    mirror <file name>        copy into vendor/extra (Lepton's copied tree of
+                              android_vendor_valve, checked by provenance)
     project <path>            project to sync
     retired <path> <dest>     worktree moved out of the tree (with --execute)
 """
@@ -61,7 +63,8 @@ def main():
     if not installed.is_dir() or not resolved.is_file():
         fail('Checkout has no installed local manifests or resolved manifest')
 
-    new = []
+    new, mirror = [], []
+    copied = checkout / 'vendor/extra/manifest_scripts' / Path(args.manifests).name
     for source in sorted(Path(args.manifests).glob('*.xml')):
         destination = installed / source.name
         if destination.exists():
@@ -69,9 +72,16 @@ def main():
                 fail(f'Changed local manifest: {destination} (only new manifest files can be added)')
         else:
             new.append(source)
+        copy = copied / source.name
+        if not copy.exists():
+            mirror.append(source.name)
+        elif not filecmp.cmp(source, copy, shallow=False):
+            fail(f'Changed copied manifest: {copy}')
     if not new:
-        print('Nothing to add: every repository manifest is already installed')
-        Path(args.plan).write_text('')
+        lines = [f'mirror {name}' for name in mirror]
+        print('Nothing to add: every repository manifest is already installed' +
+              (f'; mirroring {len(mirror)} into vendor/extra' if mirror else ''))
+        Path(args.plan).write_text(''.join(line + '\n' for line in lines))
         return
 
     by_name, by_path = {}, {}
@@ -115,7 +125,8 @@ def main():
                 fail(f'{path} has local changes or is not a Git worktree; inspect it first')
 
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    lines = [f'manifest {m.name}' for m in new] + [f'project {p}' for p in projects]
+    lines = ([f'manifest {m.name}' for m in new] + [f'mirror {name}' for name in mirror] +
+             [f'project {p}' for p in projects])
     for path in retire:
         tree = checkout / path
         destination = retire_root / stamp / path

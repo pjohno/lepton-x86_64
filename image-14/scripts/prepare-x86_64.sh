@@ -293,6 +293,12 @@ cd /workspace/output
 plan=.lepton-clean14-state/add-projects.plan
 mapfile -t manifests < <(awk '$1 == "manifest" {print $2}' "$plan")
 mapfile -t projects < <(awk '$1 == "project" {print $2}' "$plan")
+mapfile -t mirrors < <(awk '$1 == "mirror" {print $2}' "$plan")
+for name in "${mirrors[@]}"; do
+  cp "/workspace/android_vendor_valve/manifest_scripts/manifests-34/$name" \
+    "vendor/extra/manifest_scripts/manifests-34/$name"
+  echo "[INFO] Mirrored $name into vendor/extra (copied tree)"
+done
 for name in "${manifests[@]}"; do
   [[ ! -e ".repo/local_manifests/$name" ]] || { echo "Manifest appeared meanwhile: $name"; exit 1; }
   cp "/workspace/android_vendor_valve/manifest_scripts/manifests-34/$name" ".repo/local_manifests/$name"

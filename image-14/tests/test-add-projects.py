@@ -34,6 +34,9 @@ class AddProjectsTests(unittest.TestCase):
         (self.aosp / '.repo/local_manifests').mkdir(parents=True)
         (self.repo / '02-waydroid.xml').write_text(OLD)
         (self.aosp / '.repo/local_manifests/02-waydroid.xml').write_text(OLD)
+        self.copied = self.aosp / 'vendor/extra/manifest_scripts/manifests'
+        self.copied.mkdir(parents=True)
+        (self.copied / '02-waydroid.xml').write_text(OLD)
         (self.aosp / '.lepton-resolved-manifest.xml').write_text(
             '<manifest>\n'
             '  <project path="hardware/intel/common/libva" name="WayDroid/libva" revision="abc" />\n'
@@ -78,6 +81,8 @@ class AddProjectsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         plan = self.plan.read_text().splitlines()
         self.assertIn('manifest 20-video.xml', plan)
+        # vendor/extra is Lepton's copied tree of the manifests' folder.
+        self.assertIn('mirror 20-video.xml', plan)
         self.assertIn('project external/libva', plan)
         self.assertIn('project external/ffmpeg', plan)
         # Moved, not deleted: the module file survives outside the checkout.
@@ -88,6 +93,19 @@ class AddProjectsTests(unittest.TestCase):
         rerun = self.run_tool()
         self.assertEqual(rerun.returncode, 0, rerun.stderr)
         self.assertIn('project external/libva', self.plan.read_text())
+
+    def test_installed_but_unmirrored_manifest_is_mirrored(self):
+        (self.repo / '20-video.xml').write_text('<manifest />\n')
+        (self.aosp / '.repo/local_manifests/20-video.xml').write_text('<manifest />\n')
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.plan.read_text().splitlines(), ['mirror 20-video.xml'])
+
+    def test_changed_copied_manifest_is_refused(self):
+        (self.copied / '02-waydroid.xml').write_text('<manifest />\n')
+        result = self.run_tool()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Changed copied manifest', result.stderr)
 
     def test_plan_only_moves_nothing(self):
         self.add('  <remove-project name="WayDroid/libva" />\n'
