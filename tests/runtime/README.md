@@ -210,7 +210,7 @@ Android (`c2.android.opus.decoder` in logcat), is the fixed-point libopus
 flattening peaks above full scale. Record the sink monitor and count runs of
 identical samples at the recording's maximum: flat tops mean saturation.
 `test-libopus-float-x86_64.py` checks the mechanism without booting Android:
-with `LEPTON_AOSP_DIR` set to a prepared checkout, it builds that libopus
+with `LEPTON_LIBOPUS_TEST_AOSP` set to a prepared checkout, it builds that libopus
 fixed and float (with 0015) around `opus-clip/opusclip.c`, decodes the same
 loud packets with `opus_multistream_decode` and requires no flat tops from
 the float build.

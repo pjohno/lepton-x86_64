@@ -7,7 +7,7 @@ decodes to int16 with opus_multistream_decode. Fixed point saturates decoded
 peaks above full scale into flat tops (crackle on loud music, e.g. Metrolist,
 which ships its own Opus decoder for ARM only); the float build soft-clips.
 
-Structural checks always run. With LEPTON_AOSP_DIR pointing at a prepared
+Structural checks always run. With LEPTON_LIBOPUS_TEST_AOSP pointing at a prepared
 Android 14 checkout (external/libopus unpatched or patched) and a C compiler,
 the behaviour is checked too: the same packets decoded by a fixed-point and a
 0015 float build of that libopus, counting flat-topped runs at full scale.
@@ -23,7 +23,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 PATCH = ROOT / 'image-14/patches/0015-libopus-float-decode-x86_64.patch'
 HARNESS = ROOT / 'tests/runtime/opus-clip/opusclip.c'
-AOSP = Path(os.environ['LEPTON_AOSP_DIR']) if os.environ.get('LEPTON_AOSP_DIR') else None
+AOSP = Path(os.environ['LEPTON_LIBOPUS_TEST_AOSP']) if os.environ.get('LEPTON_LIBOPUS_TEST_AOSP') else None
 
 
 def make_list(src, *names):
@@ -66,7 +66,7 @@ class StructureTests(unittest.TestCase):
 
 
 @unittest.skipUnless(AOSP and (AOSP / 'external/libopus/celt_sources.mk').is_file() and shutil.which('cc'),
-                     'set LEPTON_AOSP_DIR to a prepared Android 14 checkout to compile libopus')
+                     'set LEPTON_LIBOPUS_TEST_AOSP to a prepared Android 14 checkout to compile libopus')
 class DecodeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
