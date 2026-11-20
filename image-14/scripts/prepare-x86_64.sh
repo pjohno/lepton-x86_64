@@ -127,8 +127,7 @@ for name in \
   "$IMAGE/patches/0017-ffmpeg-x86_64-without-vulkan.patch" \
   "$IMAGE/patches/0018-stagefright-plugins-without-raw-codec-data.patch" \
   "$IMAGE/patches/0019-mesa-android-gallium-va.patch" \
-  "$IMAGE/patches/0020-libva-standard-driver-name-first.patch" \
-  "$IMAGE/patches/0021-intel-media-driver-android14-clang.patch"; do
+  "$IMAGE/patches/0020-intel-media-driver-android14-clang.patch"; do
   [[ -f "$name" ]] || err "Missing required file: $name"
 done
 podman image exists "$BUILDER" || err "Missing builder image: $BUILDER"
@@ -446,8 +445,7 @@ apply_custom /workspace/output/external/minigbm /workspace/patches/0016-minigbm-
 apply_custom /workspace/output/external/ffmpeg /workspace/patches/0017-ffmpeg-x86_64-without-vulkan.patch FfmpegNoVulkan
 apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0018-stagefright-plugins-without-raw-codec-data.patch StagefrightNoRawCodecData
 apply_custom /workspace/output/external/mesa /workspace/patches/0019-mesa-android-gallium-va.patch MesaGalliumVA
-apply_custom /workspace/output/external/libva /workspace/patches/0020-libva-standard-driver-name-first.patch LibvaStandardDriverName
-apply_custom /workspace/output/external/intel-media-driver /workspace/patches/0021-intel-media-driver-android14-clang.patch IntelMediaDriverClang
+apply_custom /workspace/output/external/intel-media-driver /workspace/patches/0020-intel-media-driver-android14-clang.patch IntelMediaDriverClang
 INNER
   touch "$STATE/patches.done"
   rm -- "$STATE/patches.started"

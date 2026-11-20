@@ -140,6 +140,10 @@ mkdir -p "$work/drm-amd/renderD128/device"; echo 0x1002 > "$work/drm-amd/renderD
 LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-amd" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
 grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"
 grep -q 'no VA-API driver for the radeon GPU' "$work/log" || { echo 'FAIL: AMD without radeonsi VA driver'; exit 1; }
+printf 'ELF...\0__vaDriverInit_1_23\0...' > "$work/rootfs-intel/vendor/lib64/libgallium_dri.so"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-amd" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'media.sf.hwaccel=1' "$work/lepton.prop"
+grep -q 'on, Mesa (libgallium_dri.so) using' "$work/log" || { echo 'FAIL: AMD with Mesa VA'; exit 1; }
 LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
 grep -qx 'debug.ffmpeg-codec2.rank=256' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.rank.video=256' "$work/lepton.prop"

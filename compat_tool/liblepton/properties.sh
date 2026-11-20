@@ -91,22 +91,25 @@ function lepton_dma_heap_problem()
 LEPTON_FFMPEG_RANK_DISABLED=4294967295
 # lepton_video_va_driver: the image's VA-API drivers for the selected GPU, in
 # the order libva tries them (vendor/lib64, overlay first), or nothing.
-# Intel: iHD (Gen 8 and newer), then i965 (Gen 4 to 9.5); AMD: Mesa's radeonsi.
+# Intel: iHD (Gen 8 and newer), then i965 (Gen 4 to 9.5). AMD: Mesa links its
+# VA driver into libgallium_dri.so when built with VA (__vaDriverInit_*).
+LEPTON_MESA_VA_MARKER='__vaDriverInit_'
 function lepton_video_va_driver()
 {
     local LIB FILE FOUND=()
-    local -a LIBS
     case "$(lepton_vulkan_hal)" in
-        intel) LIBS=(iHD_drv_video.so i965_drv_video.so) ;;
-        radeon) LIBS=(radeonsi_drv_video.so) ;;
+        intel)
+            for LIB in iHD_drv_video.so i965_drv_video.so; do
+                for FILE in "${LEPTON_DIR}/../images/rootfs_overlay/vendor/lib64/${LIB}" \
+                            "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/vendor/lib64/${LIB}"; do
+                    [[ -f "${FILE}" ]] && { FOUND+=("${LIB}"); break; }
+                done
+            done ;;
+        radeon)
+            lepton_image_has_marker vendor/lib64/libgallium_dri.so "${LEPTON_MESA_VA_MARKER}" &&
+                FOUND+=("Mesa (libgallium_dri.so)") ;;
         *) return 1 ;;
     esac
-    for LIB in "${LIBS[@]}"; do
-        for FILE in "${LEPTON_DIR}/../images/rootfs_overlay/vendor/lib64/${LIB}" \
-                    "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/vendor/lib64/${LIB}"; do
-            [[ -f "${FILE}" ]] && { FOUND+=("${LIB}"); break; }
-        done
-    done
     ((${#FOUND[@]})) || return 1
     print "${FOUND[*]}"
 }

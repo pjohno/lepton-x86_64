@@ -47,8 +47,7 @@ LEPTON_CUSTOM_PATCHES=(
     "external/ffmpeg|0017-ffmpeg-x86_64-without-vulkan.patch"
     "external/stagefright-plugins|0018-stagefright-plugins-without-raw-codec-data.patch"
     "external/mesa|0019-mesa-android-gallium-va.patch"
-    "external/libva|0020-libva-standard-driver-name-first.patch"
-    "external/intel-media-driver|0021-intel-media-driver-android14-clang.patch"
+    "external/intel-media-driver|0020-intel-media-driver-android14-clang.patch"
 )
 
 # image_source_status REPO AOSP: verify copied source content and every patch.
