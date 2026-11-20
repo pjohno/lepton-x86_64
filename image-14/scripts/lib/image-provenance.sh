@@ -44,6 +44,7 @@ LEPTON_CUSTOM_PATCHES=(
     "external/minigbm|0014-minigbm-gbm-mesa-blob-cpu-surface.patch"
     "external/libopus|0015-libopus-float-decode-x86_64.patch"
     "external/minigbm|0016-minigbm-gbm-mesa-blob-direct-map.patch"
+    "external/ffmpeg|0017-ffmpeg-x86_64-without-vulkan.patch"
 )
 
 # image_source_status REPO AOSP: verify copied source content and every patch.
