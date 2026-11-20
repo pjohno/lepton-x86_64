@@ -155,4 +155,21 @@ for flag in complete --with-gapps --with-ndk --with-widevine; do grep -Fxq -- "$
 run --execute || fail default
 cmp "$ws/images/system.img" "$product/system.img" && [[ ! -e "$ws/rootfs/saved" ]]
 [[ -s "$ws/rootfs/.lepton-image-provenance" ]]
-echo 'PASS: isolated incremental outputs, source/patch guards, stale/missing HAL refusal, checksums/provenance, new-rootfs bundle handoff, optional flavors and default replacement'
+# A later hwcomposer patch stacked on 0009's lines (as 0011/0012 are) leaves
+# 0009 unable to reverse alone; the stacked checkout is still correct.
+cat > "$fake/image-14/patches/0012-stacked-fixture.patch" <<'PATCH'
+diff --git a/source.c b/source.c
+--- a/source.c
++++ b/source.c
+@@ -1 +1 @@
+-patched
++stacked
+PATCH
+printf "LEPTON_CUSTOM_PATCHES+=('hardware/waydroid|0012-stacked-fixture.patch')\n" >> "$fake/image-14/scripts/lib/image-provenance.sh"
+git -C "$fake" -c user.name=Test -c user.email=t@example.invalid add -A
+git -C "$fake" -c user.name=Test -c user.email=t@example.invalid commit -qm stacked
+printf 'stacked\n' > "$aosp/hardware/waydroid/source.c"
+run --check --images-dir "$ws/stacked/images" --rootfs-dir "$ws/stacked/rootfs" || fail 'stacked hwcomposer patches rejected'
+printf 'patched\n' > "$aosp/hardware/waydroid/source.c"
+reject 'Prepared source content differs' --check --images-dir "$ws/stacked/images" --rootfs-dir "$ws/stacked/rootfs"
+echo 'PASS: isolated incremental outputs, source/patch guards, stacked hwcomposer patches, stale/missing HAL refusal, checksums/provenance, new-rootfs bundle handoff, optional flavors and default replacement'

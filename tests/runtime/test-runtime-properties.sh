@@ -82,11 +82,25 @@ assert_mode off 0 none
 LEPTON_DMA_HEAP_DEVICE=/dev/null assert_mode heap 4 none
 if grep -q 'media decoders' "$work/log"; then echo 'FAIL: decoders reported off with a usable heap'; exit 1; fi
 LEPTON_TEST_ROOTFS="$work/missing" LEPTON_DMA_HEAP_DEVICE=/dev/null assert_mode heap 4 none
-# Intel (iris) cannot map BLOB buffers yet: even a fixed image keeps the heap
-# path there, or reports decoders off. Software rendering on Intel is fine.
+# Intel (iris) rejects BLOB imports from gralloc without patch 0014, so an
+# image with only 0013 keeps the heap path there, or reports decoders off.
 LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-new" assert_mode off 0 none
-grep -q 'off: on Intel graphics they still need host heap access, and ' "$work/log" || { echo 'FAIL: Intel reason'; exit 1; }
+grep -q 'off: on Intel graphics this Android image needs host heap access for them, and .*Images with patches 0013 and 0014 need no host access.$' "$work/log" || { echo 'FAIL: Intel reason'; exit 1; }
 LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-new" LEPTON_DMA_HEAP_DEVICE=/dev/null assert_mode heap 4 none
+# Images with 0013 and 0014: gralloc BLOB pools on Intel, no host heap needed.
+mkdir -p "$work/rootfs-intel/vendor/lib64" "$work/rootfs-0014-only/vendor/lib64"
+cp "$work/rootfs-new/vendor/lib64/libgbm_mesa_wrapper.so" "$work/rootfs-intel/vendor/lib64/"
+printf 'ELF...\0lepton-gbm-blob-cpu-surface\0...' > "$work/rootfs-intel/vendor/lib64/libminigbm_gralloc_gbm_mesa.so"
+LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" assert_mode blob 4 0xfc0000
+if grep -q 'media decoders' "$work/log"; then echo 'FAIL: decoders reported off on a fixed Intel image'; exit 1; fi
+# 0014 without 0013 is not enough (the old allocator still maps), on Intel or AMD.
+cp "$work/rootfs-old/vendor/lib64/libgbm_mesa_wrapper.so" "$work/rootfs-0014-only/vendor/lib64/"
+cp "$work/rootfs-intel/vendor/lib64/libminigbm_gralloc_gbm_mesa.so" "$work/rootfs-0014-only/vendor/lib64/"
+LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-0014-only" assert_mode off 0 none
+LEPTON_TEST_ROOTFS="$work/rootfs-0014-only" assert_mode off 0 none
+# AMD needs only 0013; the fixed Intel image is also fine there.
+LEPTON_TEST_ROOTFS="$work/rootfs-intel" assert_mode blob 4 0xfc0000
+# Software rendering on Intel is fine with any image.
 LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_FORCE_SOFTWARE=true assert_mode blob 4 0xfc0000
 # Software rendering uses gralloc.default, which handles BLOB in any image.
 LEPTON_FORCE_SOFTWARE=true assert_mode blob 4 0xfc0000
@@ -110,7 +124,7 @@ probe_sdk=34
 # The heap is passed into the container only in heap mode.
 grep -q 'if \[\[ "$(lepton_codec2_mode)" == heap \]\]; then' "$ROOT/compat_tool/liblepton/mounting.sh"
 grep -q 'podman_mount_entry "$(lepton_dma_heap_device)" "/dev/dma_heap/system" rw' "$ROOT/compat_tool/liblepton/mounting.sh"
-printf 'PASS: Android URL routing default, explicit Steam opt-in, Codec2 modes (gralloc on fixed images, heap or off on older ones, overlay first, software, opt-out/opt-in, Android 11), so replacements\n'
+printf 'PASS: Android URL routing default, explicit Steam opt-in, Codec2 modes (gralloc on fixed AMD/Intel images, heap or off on older ones, overlay first, software, opt-out/opt-in, Android 11), so replacements\n'
 
 # Local window policy crosses Podman via the generated property file, not env.
 LEPTON_LOCAL_DISPLAY_ACTIVE=1 setup_props

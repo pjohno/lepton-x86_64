@@ -11,27 +11,39 @@ function props_file()
 # may open (root-only on SteamOS, the "video" group on Fedora).
 #   blob: AMD with an image whose gbm_mesa allocator never maps buffers
 #         itself (patch 0013); allocators without it crash on BLOB buffers
-#         on AMD, so the image is checked, overlay first. Not Intel yet:
-#         iris cannot map BLOB buffers through gbm_mesa (lock(BLOB) fails).
+#         on AMD, so the image is checked, overlay first. Intel also needs
+#         patch 0014: older gralloc imports BLOB buffers with a row wider
+#         than their stride, which iris rejects (lock(BLOB) fails).
 #         Software rendering uses gralloc.default, which handles BLOB
 #         buffers in every image.
 #   heap: older images when the user can open the heap.
 #   off:  no media decoders.
 # LEPTON_CODEC2=false forces off; LEPTON_CODEC2=true forces blob (testing).
 LEPTON_GBM_NO_MAP_MARKER='lepton-gbm-allocator-no-map-probe'
-function lepton_gralloc_blob_safe()
+LEPTON_GBM_BLOB_CPU_SURFACE_MARKER='lepton-gbm-blob-cpu-surface'
+# lepton_image_has_marker LIB MARKER: the library Android loads (overlay
+# first, then the rootfs) contains MARKER.
+function lepton_image_has_marker()
 {
-    [[ "${LEPTON_FORCE_SOFTWARE:-}" == "true" ]] && return 0
-    [[ "$(lepton_vulkan_hal)" == radeon ]] || return 1
-    local LIB=vendor/lib64/libgbm_mesa_wrapper.so FILE
+    local LIB="$1" MARKER="$2" FILE
     for FILE in "${LEPTON_DIR}/../images/rootfs_overlay/${LIB}" \
                 "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/${LIB}"; do
         if [[ -f "${FILE}" ]]; then
-            grep -qaF "${LEPTON_GBM_NO_MAP_MARKER}" -- "${FILE}"
+            grep -qaF "${MARKER}" -- "${FILE}"
             return
         fi
     done
     return 1
+}
+function lepton_gralloc_blob_safe()
+{
+    [[ "${LEPTON_FORCE_SOFTWARE:-}" == "true" ]] && return 0
+    local HAL
+    HAL="$(lepton_vulkan_hal)"
+    [[ "${HAL}" == radeon || "${HAL}" == intel ]] || return 1
+    lepton_image_has_marker vendor/lib64/libgbm_mesa_wrapper.so "${LEPTON_GBM_NO_MAP_MARKER}" || return 1
+    [[ "${HAL}" == radeon ]] && return 0
+    lepton_image_has_marker vendor/lib64/libminigbm_gralloc_gbm_mesa.so "${LEPTON_GBM_BLOB_CPU_SURFACE_MARKER}"
 }
 function lepton_codec2_mode()
 {
@@ -143,7 +155,7 @@ function setup_props()
                 if [[ "${LEPTON_CODEC2:-auto}" == false ]]; then
                     println "Android media decoders (Codec2): off (LEPTON_CODEC2=false); music and video apps will be silent"
                 elif [[ "$(lepton_vulkan_hal)" == intel ]]; then
-                    println "Android media decoders (Codec2): off: on Intel graphics they still need host heap access, and $(lepton_dma_heap_problem); music and video apps will be silent, games' own audio is unaffected"
+                    println "Android media decoders (Codec2): off: on Intel graphics this Android image needs host heap access for them, and $(lepton_dma_heap_problem); music and video apps will be silent, games' own audio is unaffected. Images with patches 0013 and 0014 need no host access."
                 else
                     println "Android media decoders (Codec2): off: this Android image needs host heap access for them, and $(lepton_dma_heap_problem); music and video apps will be silent, games' own audio is unaffected. Images with patch 0013 need no host access."
                 fi
