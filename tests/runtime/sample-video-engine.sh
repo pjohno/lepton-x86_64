@@ -42,7 +42,7 @@ interval="${2:-0.2}"
 while :; do
     t=$(date +%T.%N | cut -c1-12)
     for p in $(pgrep -u "$(id -u)" -f 'mediaswcodec|media.c2|c2-ffmpeg|media.codec|mediaserver|org.lepton.smoke|android.hardware.media'); do
-        cmd=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | cut -c1-60)
+        cmd=$(tr '\0' ' ' 2>/dev/null < "/proc/$p/cmdline" | cut -c1-60)
         [[ -n "$cmd" ]] || continue
         cpu=$(awk '{print $14+$15}' "/proc/$p/stat" 2>/dev/null)
         vid=0
