@@ -130,6 +130,7 @@ printf 'PASS: Android URL routing default, explicit Steam opt-in, Codec2 modes (
 LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
 grep -qx 'debug.ffmpeg-codec2.rank=4294967295' "$work/lepton.prop"
 grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"
+if grep -q 'hwaccel.drm=true\|hwaccel.force' "$work/lepton.prop"; then echo 'FAIL: hwaccel options set while off'; exit 1; fi
 if grep -q 'Hardware video decoding' "$work/log"; then echo 'FAIL: video decoding reported when not requested'; exit 1; fi
 # Without a VA driver for the GPU in the image, FFmpeg would decode in software.
 LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
@@ -150,6 +151,12 @@ grep -qx 'debug.ffmpeg-codec2.rank.video=256' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.rank.audio=4294967295' "$work/lepton.prop"   # audio stays on Android's decoders
 grep -qx 'media.sf.hwaccel=1' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"   # copy-back, not DRM PRIME
+grep -qx 'debug.ffmpeg-codec2.hwaccel.force=true' "$work/lepton.prop"   # only codecs the driver decodes
+if grep -q 'zero-copy' "$work/log"; then echo 'FAIL: zero-copy reported when not requested'; exit 1; fi
+LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_ZEROCOPY=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=true' "$work/lepton.prop"
+grep -q 'zero-copy (LEPTON_VIDEO_HWACCEL_ZEROCOPY) is a development option' "$work/log" || { echo 'FAIL: zero-copy warning'; exit 1; }
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
 grep -q 'Hardware video decoding (VA-API, experimental): on, i965_drv_video.so using /dev/dri/renderD129' "$work/log" || { echo 'FAIL: video decoding on message'; exit 1; }
 : > "$work/rootfs-intel/vendor/lib64/iHD_drv_video.so"
 LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"

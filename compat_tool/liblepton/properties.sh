@@ -139,10 +139,19 @@ function lepton_video_hwaccel_props()
         props_echo "debug.ffmpeg-codec2.rank.video=256"
         props_echo "debug.ffmpeg-codec2.rank.audio=${LEPTON_FFMPEG_RANK_DISABLED}"
         props_echo "media.sf.hwaccel=1"
+        # List only the video codecs the VA-API driver can decode (the service
+        # queries the driver); the others stay on Android's software decoders.
+        props_echo "debug.ffmpeg-codec2.hwaccel.force=true"
         # Copy-back: FFmpeg decodes into its own VA surfaces and the frames
-        # are copied into Android's buffers. The service's DRM PRIME mode
-        # (zero-copy, its default) fails to create VA surfaces on i965.
-        props_echo "debug.ffmpeg-codec2.hwaccel.drm=false"
+        # are copied into Android's buffers. Zero-copy (the service's DRM PRIME
+        # mode) is a development option only: the picture is wrong with iHD,
+        # SurfaceFlinger aborts on AMD, and i965 cannot import the buffers.
+        if [[ "${LEPTON_VIDEO_HWACCEL_ZEROCOPY:-false}" == true ]]; then
+            props_echo "debug.ffmpeg-codec2.hwaccel.drm=true"
+            println "Hardware video decoding: zero-copy (LEPTON_VIDEO_HWACCEL_ZEROCOPY) is a development option and known to be broken"
+        else
+            props_echo "debug.ffmpeg-codec2.hwaccel.drm=false"
+        fi
         println "Hardware video decoding (VA-API, experimental): on, $(lepton_video_va_driver) using $(lepton_gpu_render_node 2>/dev/null || print 'the default render node')"
     else
         props_echo "debug.ffmpeg-codec2.rank=${LEPTON_FFMPEG_RANK_DISABLED}"
