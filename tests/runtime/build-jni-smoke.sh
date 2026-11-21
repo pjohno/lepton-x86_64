@@ -184,6 +184,8 @@ if [[ "$MEDIA_SMOKE" == true ]]; then
     ffmpeg -v error -f lavfi -i testsrc2=size=1280x720:rate=30 -t 1 -c:v libx264 -pix_fmt yuv420p \
         -x264-params keyint=30:min-keyint=30:scenecut=0 -an -output_ts_offset 1 -f mpegts "$TMP/res-b.ts"
     cat "$TMP/res-a.ts" "$TMP/res-b.ts" > "$A/probe-reschange.ts"
+    ffmpeg -v error -f lavfi -i testsrc2=size=640x360:rate=30 -t 1 -c:v libx264 -profile:v high444 \
+        -pix_fmt yuv444p -an "$A/probe-h264-444.mp4"
     ffmpeg -v error -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 \
         -c:a libvorbis "$TMP/assets/probe.ogg"
     ffmpeg -v error -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 \

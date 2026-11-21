@@ -457,6 +457,9 @@ public final class MediaProbe {
         { "probe-vp9.webm", "video/x-vnd.on2.vp9", "vp9" },
         { "probe-av1.mp4", "video/av01", "av1" },
         { "probe-reschange.ts", "video/avc", "h264-resolution-change" },
+        // No VA-API driver decodes 4:4:4: exercises FFmpeg's software fallback
+        // inside the service (LEPTON_VA_SESSION decode=software).
+        { "probe-h264-444.mp4", "video/avc", "h264-high444" },
     };
 
     private static final class Run {
