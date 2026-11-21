@@ -191,6 +191,9 @@ the launcher log also says when media decoders are off):
 | `LEPTON_MEDIA_DECODERS count=N hardware=M` | Decoders Android lists, and how many it reports as hardware-accelerated (0 on current images) |
 | `LEPTON_MEDIA_AVC_CANDIDATE rank=R name=...` | H.264 decoders in the order `createDecoderByType` tries them, with `hw`, `sw_only`, `vendor` and canonical name |
 | `LEPTON_MEDIA_AVC_DECODE mode=buffer\|surface decoder=... fps=...` | 5 s 720p H.264 High decoded by the selected decoder to CPU buffers or to an ImageReader Surface; diagnostic only, never fails the probe |
+| `LEPTON_MEDIA_CODEC clip=... selected=... reference=... crc_match=... result=...` | Codec matrix (H.264 1080p, HEVC Main/Main10, VP9, AV1, H.264 resolution change, H.264 4:4:4): per-frame luma CRCs of the selected decoder against Android's `c2.android.*` decoder, then Surface output. `result=PASS`, `MISMATCH` (with `differing_frames` and `LEPTON_MEDIA_CODEC_CRCS`), `INCOMPLETE` (stalled), `UNSUPPORTED`, `NO_REFERENCE`, `NOT_COMPARED` (10-bit) or `SURFACE_FAIL`; diagnostic only |
+| `LEPTON_MEDIA_REPEAT ... result=` / `LEPTON_MEDIA_SEEK ... result=` | H.264 1080p decoded three times, and with a flush and seek to the 1 s key frame, compared with the reference |
+| `LEPTON_VA_CAPS` / `LEPTON_VA_SESSION` / `LEPTON_VA_SESSION_END` | From the FFmpeg Codec2 service with `LEPTON_VIDEO_HWACCEL=true`: VA driver and decodable codecs; per decoder session `decode=vaapi` or `software` with the reason; frame counts (see `image-14/docs/video-vaapi.md`) |
 | `C2AllocatorGralloc: failed transaction: lock(BLOB)` after `GBM-MESA-WRAPPER: Failed to map the buffer` | Intel image without patch 0014: gralloc imports BLOB buffers with a row wider than their stride, which iris rejects |
 
 `gbm-blob-probe.c` checks the host's Mesa driver directly, without Android: it
@@ -247,5 +250,7 @@ fdinfo (`drm-engine-video` on i915); sum it over a process's DRM fds while it
 decodes. On the Intel test host, GStreamer `vah264dec` kept the video engine
 46% busy while `openh264dec` left it at 0. Android's codec processes are host
 processes in Lepton, so the same counters apply to `media.swcodec` or a vendor
-Codec2 service. Current images: 0 ns for every media process during the
-720p probe on Intel.
+Codec2 service. With hardware decoding off, every media process shows 0 ns
+during the probe. `sample-video-engine.sh` samples the counters and CPU of the
+media processes during a run and totals them (`--summary`); see
+`image-14/docs/video-vaapi.md` for the full validation procedure.
