@@ -62,6 +62,9 @@ public final class MediaProbe {
                 // decodes 720p to CPU buffers and to a GPU-consumable Surface.
                 timedDecode(activity, "probe720.mp4", "video/avc", false);
                 timedDecode(activity, "probe720.mp4", "video/avc", true);
+                // Codec matrix: content compared with Android's software
+                // decoders, Surface output, repeat, seek/flush, resolution change.
+                codecMatrix(activity);
                 File clip = new File(activity.getCacheDir(), "probe.mp4");
                 try (InputStream in = activity.getAssets().open("probe.mp4");
                      FileOutputStream out = new FileOutputStream(clip)) {
@@ -437,5 +440,208 @@ public final class MediaProbe {
             }
             extractor.release();
         }
+    }
+
+    // ---- Codec matrix ---------------------------------------------------------
+    // Each clip is decoded to ByteBuffers by Android's own software decoder (the
+    // reference) and by the decoder Android selects, and the per-frame CRCs of
+    // the visible luma are compared; H.264/HEVC/VP9/AV1 decoding is bit-exact.
+    // 10-bit output is not compared (reference: 16-bit samples; the FFmpeg
+    // service converts to 8-bit). Then the selected decoder renders to a
+    // Surface. One LEPTON_MEDIA_CODEC line per clip. Whether the GPU decoded is
+    // in the service's LEPTON_VA_SESSION lines and the host's DRM counters.
+    private static final String[][] CLIPS = {
+        { "probe1080.mp4", "video/avc", "h264-1080p" },
+        { "probe-hevc.mp4", "video/hevc", "hevc-main" },
+        { "probe-hevc10.mp4", "video/hevc", "hevc-main10" },
+        { "probe-vp9.webm", "video/x-vnd.on2.vp9", "vp9" },
+        { "probe-av1.mp4", "video/av01", "av1" },
+        { "probe-reschange.ts", "video/avc", "h264-resolution-change" },
+    };
+
+    private static final class Run {
+        String decoder = "?";
+        java.util.List<Long> crcs = new java.util.ArrayList<>();
+        java.util.List<Long> afterSeek = new java.util.ArrayList<>();
+        int frames, surfaceImages = -1, bits = 8;
+        boolean complete;
+        long ms;
+        String error;
+    }
+
+    private static String softwareDecoder(String mime) {
+        for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+            if (info.isEncoder() || !info.getName().startsWith("c2.android.")) continue;
+            for (String type : info.getSupportedTypes()) {
+                if (type.equalsIgnoreCase(mime)) return info.getName();
+            }
+        }
+        return null;
+    }
+
+    // Decodes asset with decoder (null: the one Android selects). seekAfter >= 0:
+    // after that many output frames, flush and seek to seekUs, and record the
+    // CRCs that follow in afterSeek. Never throws; errors go to Run.error.
+    private static Run decodeClip(Activity activity, String asset, String mime, String decoder,
+                                  boolean toSurface, int seekAfter, long seekUs) {
+        Run run = new Run();
+        MediaExtractor extractor = new MediaExtractor();
+        MediaCodec codec = null;
+        android.media.ImageReader reader = null;
+        android.os.HandlerThread thread = null;
+        final int[] images = { 0 };
+        try (AssetFileDescriptor fd = activity.getAssets().openFd(asset)) {
+            extractor.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
+            MediaFormat format = null;
+            for (int i = 0; i < extractor.getTrackCount() && format == null; i++) {
+                MediaFormat candidate = extractor.getTrackFormat(i);
+                if (mime.equals(candidate.getString(MediaFormat.KEY_MIME))) {
+                    extractor.selectTrack(i);
+                    format = candidate;
+                }
+            }
+            if (format == null) throw new IllegalStateException("no " + mime + " track");
+            codec = decoder != null ? MediaCodec.createByCodecName(decoder) : MediaCodec.createDecoderByType(mime);
+            run.decoder = codec.getName();
+            android.view.Surface surface = null;
+            if (toSurface) {
+                thread = new android.os.HandlerThread("LeptonMatrixReader");
+                thread.start();
+                reader = android.media.ImageReader.newInstance(
+                    format.getInteger(MediaFormat.KEY_WIDTH), format.getInteger(MediaFormat.KEY_HEIGHT),
+                    android.graphics.ImageFormat.PRIVATE, 4,
+                    android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE);
+                reader.setOnImageAvailableListener(r -> {
+                    android.media.Image image = r.acquireNextImage();
+                    if (image != null) { images[0]++; image.close(); }
+                }, new android.os.Handler(thread.getLooper()));
+                surface = reader.getSurface();
+            }
+            codec.configure(format, surface, null, 0);
+            codec.start();
+            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+            boolean inputEnd = false, outputEnd = false, seeked = false;
+            long start = android.os.SystemClock.elapsedRealtime();
+            long lastProgress = start;
+            while (!outputEnd) {
+                long now = android.os.SystemClock.elapsedRealtime();
+                if (now - lastProgress > 10000) throw new IllegalStateException("stalled: no output for 10 s");
+                if (!inputEnd) {
+                    int input = codec.dequeueInputBuffer(10000);
+                    if (input >= 0) {
+                        int size = extractor.readSampleData(codec.getInputBuffer(input), 0);
+                        if (size < 0) {
+                            codec.queueInputBuffer(input, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                            inputEnd = true;
+                        } else {
+                            codec.queueInputBuffer(input, 0, size, extractor.getSampleTime(), 0);
+                            extractor.advance();
+                        }
+                    }
+                }
+                int output = codec.dequeueOutputBuffer(info, 10000);
+                if (output < 0) continue;
+                lastProgress = android.os.SystemClock.elapsedRealtime();
+                outputEnd = (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
+                if (info.size > 0 || (toSurface && !outputEnd)) {
+                    run.frames++;
+                    if (!toSurface) {
+                        android.media.Image image = codec.getOutputImage(output);
+                        if (image != null) {
+                            if (image.getFormat() == 0x36 /* YCBCR_P010 */) run.bits = 10;
+                            java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+                            if (hashLuma(image, crc)) (seeked ? run.afterSeek : run.crcs).add(crc.getValue());
+                        }
+                    }
+                }
+                codec.releaseOutputBuffer(output, toSurface && !outputEnd);
+                if (seekAfter >= 0 && !seeked && run.frames == seekAfter && !outputEnd) {
+                    codec.flush();
+                    extractor.seekTo(seekUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
+                    inputEnd = false;
+                    seeked = true;
+                }
+            }
+            run.complete = true;
+            run.ms = android.os.SystemClock.elapsedRealtime() - start;
+            if (toSurface) {
+                android.os.SystemClock.sleep(200);
+                run.surfaceImages = images[0];
+            }
+        } catch (Throwable error) {
+            run.error = error.getClass().getSimpleName() + ": " + error.getMessage();
+        } finally {
+            if (codec != null) {
+                try { codec.stop(); } catch (Throwable ignored) { }
+                codec.release();
+            }
+            if (reader != null) reader.close();
+            if (thread != null) thread.quitSafely();
+            extractor.release();
+        }
+        return run;
+    }
+
+    private static int matching(java.util.List<Long> a, java.util.List<Long> b, int bOffset) {
+        int same = 0;
+        for (int i = 0; i < a.size() && i + bOffset < b.size(); i++) {
+            if (a.get(i).equals(b.get(i + bOffset))) same++;
+        }
+        return same;
+    }
+
+    private static void codecMatrix(Activity activity) {
+        for (String[] clip : CLIPS) {
+            String asset = clip[0], mime = clip[1], name = clip[2];
+            String refName = softwareDecoder(mime);
+            Run ref = refName != null ? decodeClip(activity, asset, mime, refName, false, -1, 0) : null;
+            Run sel = decodeClip(activity, asset, mime, null, false, -1, 0);
+            Run surf = sel.error == null ? decodeClip(activity, asset, mime, null, true, -1, 0) : null;
+            String result;
+            int match = ref != null ? matching(sel.crcs, ref.crcs, 0) : 0;
+            if (sel.error != null && sel.error.contains("stalled")) result = "INCOMPLETE";
+            else if (sel.error != null) result = "UNSUPPORTED";
+            else if (ref == null || ref.error != null) result = "NO_REFERENCE";
+            else if (sel.bits != 8 || ref.bits != 8) result = "NOT_COMPARED";
+            else if (sel.crcs.size() == ref.crcs.size() && match == ref.crcs.size() && match > 0) result = "PASS";
+            else result = "MISMATCH";
+            if (surf != null && result.equals("PASS") && (surf.error != null || surf.surfaceImages < 1)) result = "SURFACE_FAIL";
+            Log.i(TAG, "LEPTON_MEDIA_CODEC clip=" + name + " mime=" + mime + " selected=" + sel.decoder +
+                " reference=" + (refName != null ? refName : "none") +
+                " frames=" + sel.crcs.size() + "/" + (ref != null ? ref.crcs.size() : -1) +
+                " crc_match=" + match + " bits=" + sel.bits + "/" + (ref != null ? ref.bits : -1) +
+                " surface_frames=" + (surf != null ? surf.frames : -1) +
+                " surface_images=" + (surf != null ? surf.surfaceImages : -1) +
+                " ms=" + sel.ms + " result=" + result +
+                (sel.error != null ? " error=\"" + sel.error + "\"" : "") +
+                (surf != null && surf.error != null ? " surface_error=\"" + surf.error + "\"" : "") +
+                (ref != null && ref.error != null ? " reference_error=\"" + ref.error + "\"" : ""));
+            android.os.SystemClock.sleep(20);
+            if (name.equals("h264-1080p") && ref != null && ref.error == null) {
+                repeatAndSeek(activity, asset, mime, ref);
+            }
+        }
+    }
+
+    // The selected decoder three times (decoder and buffer clean-up), then a
+    // flush + seek to the second key frame (1 s; clips have one per second).
+    private static void repeatAndSeek(Activity activity, String asset, String mime, Run ref) {
+        int identical = 0;
+        String decoder = "?";
+        for (int i = 0; i < 3; i++) {
+            Run again = decodeClip(activity, asset, mime, null, false, -1, 0);
+            decoder = again.decoder;
+            if (again.error == null && again.crcs.equals(ref.crcs)) identical++;
+        }
+        Log.i(TAG, "LEPTON_MEDIA_REPEAT decoder=" + decoder + " runs=3 identical_to_reference=" + identical +
+            " result=" + (identical == 3 ? "PASS" : "FAIL"));
+        Run seek = decodeClip(activity, asset, mime, null, false, 15, 1000000L);
+        int keyframe = 30;  // 30 fps, one key frame per second
+        int match = matching(seek.afterSeek, ref.crcs, keyframe);
+        boolean pass = seek.error == null && !seek.afterSeek.isEmpty() &&
+            match == seek.afterSeek.size() && seek.afterSeek.size() == ref.crcs.size() - keyframe;
+        Log.i(TAG, "LEPTON_MEDIA_SEEK decoder=" + seek.decoder + " before=" + seek.crcs.size() +
+            " after=" + seek.afterSeek.size() + "/" + (ref.crcs.size() - keyframe) + " crc_match=" + match +
+            " result=" + (pass ? "PASS" : "FAIL") + (seek.error != null ? " error=\"" + seek.error + "\"" : ""));
     }
 }

@@ -162,6 +162,28 @@ if [[ "$MEDIA_SMOKE" == true ]]; then
     # 720p H.264 High for decoder selection and throughput diagnostics.
     ffmpeg -v error -f lavfi -i testsrc2=size=1280x720:rate=30 -t 5 \
         -c:v libx264 -profile:v high -pix_fmt yuv420p -an "$TMP/assets/probe720.mp4"
+    # Codec matrix (MediaProbe.codecMatrix): 2 s at 30 fps, one key frame per
+    # second (the seek test seeks to 1 s), for content comparison with
+    # Android's software decoders.
+    A="$TMP/assets"
+    ffmpeg -v error -f lavfi -i testsrc2=size=1920x1080:rate=30 -t 2 -c:v libx264 -profile:v high \
+        -pix_fmt yuv420p -x264-params keyint=30:min-keyint=30:scenecut=0 -an "$A/probe1080.mp4"
+    ffmpeg -v error -f lavfi -i testsrc2=size=1280x720:rate=30 -t 2 -c:v libx265 -profile:v main \
+        -pix_fmt yuv420p -tag:v hvc1 -x265-params log-level=error:keyint=30:min-keyint=30:scenecut=0 \
+        -an "$A/probe-hevc.mp4"
+    ffmpeg -v error -f lavfi -i testsrc2=size=1280x720:rate=30 -t 2 -c:v libx265 -profile:v main10 \
+        -pix_fmt yuv420p10le -tag:v hvc1 -x265-params log-level=error:keyint=30:min-keyint=30:scenecut=0 \
+        -an "$A/probe-hevc10.mp4"
+    ffmpeg -v error -f lavfi -i testsrc2=size=1280x720:rate=30 -t 2 -c:v libvpx-vp9 -pix_fmt yuv420p \
+        -b:v 2M -g 30 -deadline realtime -cpu-used 8 -an "$A/probe-vp9.webm"
+    ffmpeg -v error -f lavfi -i testsrc2=size=1280x720:rate=30 -t 2 -c:v libsvtav1 -pix_fmt yuv420p \
+        -g 30 -preset 12 -an "$A/probe-av1.mp4"
+    # H.264 that changes from 640x360 to 1280x720 mid-stream (MPEG-TS segments).
+    ffmpeg -v error -f lavfi -i testsrc2=size=640x360:rate=30 -t 1 -c:v libx264 -pix_fmt yuv420p \
+        -x264-params keyint=30:min-keyint=30:scenecut=0 -an -f mpegts "$TMP/res-a.ts"
+    ffmpeg -v error -f lavfi -i testsrc2=size=1280x720:rate=30 -t 1 -c:v libx264 -pix_fmt yuv420p \
+        -x264-params keyint=30:min-keyint=30:scenecut=0 -an -output_ts_offset 1 -f mpegts "$TMP/res-b.ts"
+    cat "$TMP/res-a.ts" "$TMP/res-b.ts" > "$A/probe-reschange.ts"
     ffmpeg -v error -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 \
         -c:a libvorbis "$TMP/assets/probe.ogg"
     ffmpeg -v error -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 \
@@ -186,7 +208,9 @@ echo '[INFO] Linking, aligning and signing APK'
     if [[ "$MEDIA_SMOKE" == true ]]; then
         # AssetFileDescriptor requires uncompressed sample assets.
         cp -a "$TMP/assets" .
-        zip -q -0 unsigned.apk assets/probe.mp4 assets/probe.ogg assets/probe.wav
+        zip -q -0 unsigned.apk assets/probe.mp4 assets/probe.ogg assets/probe.wav assets/probe720.mp4 \
+            assets/probe1080.mp4 assets/probe-hevc.mp4 assets/probe-hevc10.mp4 assets/probe-vp9.webm \
+            assets/probe-av1.mp4 assets/probe-reschange.ts
     fi
 )
 "$ZIPALIGN" -f 4 "$TMP/apk/unsigned.apk" "$TMP/apk/aligned.apk"
