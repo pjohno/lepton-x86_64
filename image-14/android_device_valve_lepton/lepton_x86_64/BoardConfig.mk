@@ -30,8 +30,9 @@ BOARD_MESA3D_MESON_ARGS += -Dmesa-clc=system
 # launcher's /vendor/waydroid.prop import overrides it (video-defaults.prop).
 TARGET_SYSTEM_PROP := $(DEVICE_PATH)/lepton_x86_64/video-defaults.prop $(TARGET_SYSTEM_PROP)
 
-# Mesa's VA-API driver for AMD (patch 0019, inside libgallium_dri.so), with every
-# codec Mesa supports, including the patent-encumbered H.264 and H.265 (off by
-# default since Mesa 22.2). -Dvideo-codecs also applies to Vulkan video.
+# Mesa's VA-API driver for AMD (patch 0019, inside libgallium_dri.so). Decoders
+# only: H.264 and H.265 (patent-encumbered, off by default since Mesa 22.2),
+# VP9, AV1, MPEG-1/2 and VC-1. Lepton needs no hardware encoders.
+# -Dvideo-codecs also applies to Vulkan video (RADV, ANV).
 BOARD_MESA3D_GALLIUM_VA := true
-BOARD_MESA3D_MESON_ARGS += -Dvideo-codecs=all
+BOARD_MESA3D_MESON_ARGS += -Dvideo-codecs=h264dec,h265dec,vp9dec,av1dec,mpeg12dec,vc1dec
