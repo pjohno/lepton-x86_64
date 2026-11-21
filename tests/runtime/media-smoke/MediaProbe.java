@@ -582,6 +582,18 @@ public final class MediaProbe {
         return run;
     }
 
+    // Up to 12 frame numbers (of a) whose CRC differs from b, for diagnosis.
+    private static String differing(java.util.List<Long> a, java.util.List<Long> b, int bOffset) {
+        StringBuilder out = new StringBuilder();
+        int n = 0;
+        for (int i = 0; i < a.size() && n < 12; i++) {
+            if (i + bOffset >= b.size() || !a.get(i).equals(b.get(i + bOffset))) {
+                out.append(n++ == 0 ? "" : ",").append(i);
+            }
+        }
+        return out.toString();
+    }
+
     private static int matching(java.util.List<Long> a, java.util.List<Long> b, int bOffset) {
         int same = 0;
         for (int i = 0; i < a.size() && i + bOffset < b.size(); i++) {
@@ -613,6 +625,7 @@ public final class MediaProbe {
                 " surface_frames=" + (surf != null ? surf.frames : -1) +
                 " surface_images=" + (surf != null ? surf.surfaceImages : -1) +
                 " ms=" + sel.ms + " result=" + result +
+                (result.equals("MISMATCH") ? " differing_frames=" + differing(sel.crcs, ref.crcs, 0) : "") +
                 (sel.error != null ? " error=\"" + sel.error + "\"" : "") +
                 (surf != null && surf.error != null ? " surface_error=\"" + surf.error + "\"" : "") +
                 (ref != null && ref.error != null ? " reference_error=\"" + ref.error + "\"" : ""));
@@ -642,6 +655,8 @@ public final class MediaProbe {
             match == seek.afterSeek.size() && seek.afterSeek.size() == ref.crcs.size() - keyframe;
         Log.i(TAG, "LEPTON_MEDIA_SEEK decoder=" + seek.decoder + " before=" + seek.crcs.size() +
             " after=" + seek.afterSeek.size() + "/" + (ref.crcs.size() - keyframe) + " crc_match=" + match +
-            " result=" + (pass ? "PASS" : "FAIL") + (seek.error != null ? " error=\"" + seek.error + "\"" : ""));
+            " result=" + (pass ? "PASS" : "FAIL") +
+            (pass ? "" : " differing_frames=" + differing(seek.afterSeek, ref.crcs, keyframe)) +
+            (seek.error != null ? " error=\"" + seek.error + "\"" : ""));
     }
 }
