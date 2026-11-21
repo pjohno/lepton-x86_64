@@ -582,6 +582,12 @@ public final class MediaProbe {
         return run;
     }
 
+    private static String crcList(java.util.List<Long> crcs) {
+        StringBuilder out = new StringBuilder();
+        for (Long crc : crcs) out.append(out.length() == 0 ? "" : ",").append(Long.toHexString(crc));
+        return out.toString();
+    }
+
     // Up to 12 frame numbers (of a) whose CRC differs from b, for diagnosis.
     private static String differing(java.util.List<Long> a, java.util.List<Long> b, int bOffset) {
         StringBuilder out = new StringBuilder();
@@ -629,6 +635,12 @@ public final class MediaProbe {
                 (sel.error != null ? " error=\"" + sel.error + "\"" : "") +
                 (surf != null && surf.error != null ? " surface_error=\"" + surf.error + "\"" : "") +
                 (ref != null && ref.error != null ? " reference_error=\"" + ref.error + "\"" : ""));
+            if (result.equals("MISMATCH")) {
+                // Full per-frame CRC lists, to tell a dropped or extra frame
+                // (lists shifted) from changed pixels.
+                Log.i(TAG, "LEPTON_MEDIA_CODEC_CRCS clip=" + name + " selected=" + crcList(sel.crcs));
+                Log.i(TAG, "LEPTON_MEDIA_CODEC_CRCS clip=" + name + " reference=" + crcList(ref.crcs));
+            }
             android.os.SystemClock.sleep(20);
             if (name.equals("h264-1080p") && ref != null && ref.error == null) {
                 repeatAndSeek(activity, asset, mime, ref);
