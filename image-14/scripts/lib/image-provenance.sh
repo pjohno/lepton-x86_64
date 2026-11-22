@@ -52,6 +52,8 @@ LEPTON_CUSTOM_PATCHES=(
     "external/stagefright-plugins|0023-stagefright-plugins-hw-download-native-format.patch"
     "external/stagefright-plugins|0024-stagefright-plugins-va-capabilities-and-diagnostics.patch"
     "external/stagefright-plugins|0025-stagefright-plugins-hevc-main10-profile.patch"
+    "external/stagefright-plugins|0026-stagefright-plugins-va-max-picture-size.patch"
+    "frameworks/av|0027-frameworks-av-codec2-ffmpeg-size-limits.patch"
 )
 
 # image_source_status REPO AOSP: verify copied source content and every patch.
