@@ -42,6 +42,7 @@ public final class MediaProbe {
                 }
                 Log.i(TAG, "LEPTON_MEDIA_DECODERS count=" + count + " hardware=" + hardware);
                 reportAvcCandidates();
+                reportHevcMain10();
                 reportDrm();
                 // Separate Android's audio output from decoding: raw PCM through
                 // AudioTrack needs no codec (the path games' own mixers use);
@@ -135,6 +136,34 @@ public final class MediaProbe {
     // throughput. Throughput alone does not prove hardware decoding; compare
     // with host evidence (e.g. DRM fdinfo video-engine time). Never throws.
     // Adds the visible luma rows of a decoded frame to the CRC; false without an image.
+    // Players (VLC, ExoPlayer) choose by the stream's profile, not only the
+    // media type: a decoder that does not list HEVC Main10 is skipped for
+    // 10-bit streams. Report what each HEVC decoder lists and what Android
+    // picks for a 1080p Main10 format.
+    private static void reportHevcMain10() {
+        for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+            if (info.isEncoder()) continue;
+            for (String type : info.getSupportedTypes()) {
+                if (!type.equalsIgnoreCase("video/hevc")) continue;
+                boolean main10 = false;
+                StringBuilder profiles = new StringBuilder();
+                for (MediaCodecInfo.CodecProfileLevel pl : info.getCapabilitiesForType(type).profileLevels) {
+                    if (pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10) main10 = true;
+                    String token = Integer.toString(pl.profile);
+                    if (!(" " + profiles + " ").contains(" " + token + " ")) {
+                        profiles.append(profiles.length() == 0 ? "" : " ").append(token);
+                    }
+                }
+                Log.i(TAG, "LEPTON_MEDIA_HEVC_PROFILES name=" + info.getName() +
+                    " main10=" + main10 + " profiles=" + profiles);
+            }
+        }
+        MediaFormat format = MediaFormat.createVideoFormat("video/hevc", 1920, 1080);
+        format.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10);
+        String found = new MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format);
+        Log.i(TAG, "LEPTON_MEDIA_HEVC_MAIN10 decoder=" + (found == null ? "none" : found));
+    }
+
     private static boolean hashLuma(android.media.Image image, java.util.zip.CRC32 crc) {
         if (image == null) return false;
         try {
