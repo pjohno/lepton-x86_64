@@ -162,6 +162,32 @@ public final class MediaProbe {
         format.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10);
         String found = new MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format);
         Log.i(TAG, "LEPTON_MEDIA_HEVC_MAIN10 decoder=" + (found == null ? "none" : found));
+        reportLargestSizes();
+    }
+
+    // Size limits Android lists per video decoder (patches 0026/0027 take the
+    // c2.ffmpeg.* ones from VA), and what it picks for an 8K 24 fps stream.
+    private static void reportLargestSizes() {
+        String[] mimes = { "video/avc", "video/hevc", "video/x-vnd.on2.vp9", "video/av01" };
+        for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+            if (info.isEncoder()) continue;
+            for (String type : info.getSupportedTypes()) {
+                if (!java.util.Arrays.asList(mimes).contains(type.toLowerCase())) continue;
+                MediaCodecInfo.VideoCapabilities video =
+                    info.getCapabilitiesForType(type).getVideoCapabilities();
+                if (video == null) continue;
+                Log.i(TAG, "LEPTON_MEDIA_SIZE_LIMIT name=" + info.getName() + " type=" + type +
+                    " width=" + video.getSupportedWidths() + " height=" + video.getSupportedHeights() +
+                    " 8k24=" + video.areSizeAndRateSupported(7680, 4320, 24));
+                android.os.SystemClock.sleep(20);
+            }
+        }
+        for (String mime : mimes) {
+            MediaFormat format = MediaFormat.createVideoFormat(mime, 7680, 4320);
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, 24);
+            String found = new MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format);
+            Log.i(TAG, "LEPTON_MEDIA_8K mime=" + mime + " decoder=" + (found == null ? "none" : found));
+        }
     }
 
     private static boolean hashLuma(android.media.Image image, java.util.zip.CRC32 crc) {
