@@ -38,15 +38,56 @@ software decoder's. H.264, HEVC, VP9 and AV1 decoding is bit-exact.
 was 0.5 s (Intel) and 14.7 s (AMD) during a probe run; no other process used the
 video engine. With hardware decoding off, no process used it.
 
+**HEVC Main10 profile (patch 0025), AMD, `video-vaapi-test-19` (`9795c05`):**
+the probe's `LEPTON_MEDIA_HEVC_PROFILES` and `LEPTON_MEDIA_HEVC_MAIN10` lines
+show:
+- with hardware decoding on, `c2.ffmpeg.hevc.decoder` lists Main10, and Android
+  picks it for a Main10 stream. The session is `decode=vaapi
+  sw_format=p010le`, with every frame from the GPU;
+- with hardware decoding off, no decoder lists Main10.
+
+The other probe results matched test-16.
+
+**Real app: VLC 3.x** (`org.videolan.vlc` 13070208), on the desktop with
+`run-apk.sh --app --display desktop --video-hwaccel`. Clips opened by intent
+from `/data/local/tmp`.
+
+Intel, test-17 (before patch 0025):
+- H.264, HEVC 8-bit and VP9 played through `c2.ffmpeg.*` on VA-API;
+- HEVC 10-bit went to VLC's own software decoder.
+
+AMD, test-19:
+
+| Clip | VLC decoder | Service | Picture (user) |
+| --- | --- | --- | --- |
+| HEVC Main10 1080p | `c2.ffmpeg.hevc.decoder` | `decode=vaapi sw_format=p010le` | good |
+| HEVC Main 1080p | `c2.ffmpeg.hevc.decoder` | vaapi, 1235 hw / 0 sw frames | good |
+| H.264 High 1080p | `c2.ffmpeg.h264.decoder` | vaapi, 1446 hw / 0 sw frames | good |
+| VP9 Profile 0 1080p | `c2.ffmpeg.vp9.decoder` | vaapi, 720 hw / 0 sw frames | fine |
+| AV1 10-bit 1080p | VLC's dav1d | not used | not judged |
+| HEVC Main10 8K HLG | VLC's avcodec | not used | choppy, very slow |
+
+All sessions had 0 transfer failures. Only the FFmpeg service had video-engine
+time: 32.2 s over the session.
+
+The Main10 session's end line was lost because logcat's ring buffer filled.
+Keep a filtered `logcat` running into a file during app tests.
+
+VLC never uses MediaCodec for AV1, in 3.0.x or master: its `mediacodec.c` has
+no AV1 entry. GPU AV1 therefore needs another player.
+
+The 8K clip went past the service's HEVC limit (see "Known issues").
+
 **Not verified:**
-- 10-bit output: Android has no HEVC Main10 software decoder to compare with, and
-  copy-back converts to 8-bit;
-- desktop playback with these builds (earlier builds played correctly on the
-  Intel desktop);
+- 10-bit output against a reference: Android has no HEVC Main10 software decoder
+  to compare with, and copy-back converts to 8-bit. The user judged the picture
+  in VLC only;
 - newer Intel GPUs (Ice Lake and later; Xe GPUs on the `xe` kernel driver);
 - other AMD generations;
 - VP8, MPEG-2 and VC-1 content;
-- long playback and real apps (players, games).
+- real apps other than VLC (ExoPlayer-based players, games), and AV1 in a real
+  app;
+- long playback.
 
 ## Enabling
 
@@ -98,8 +139,9 @@ the five checked codecs (H.264, HEVC, VP8, VP9, AV1) and the other FFmpeg video
 decoders (MPEG-2/4, H.263, DivX, WMV...). The service marks all of them as
 hardware, so FFmpeg software decoders must not replace Android's.
 
-The list is per codec, not per profile. A stream whose profile the driver
-cannot decode, such as 4:4:4 or HEVC Main10 on a GPU without it, is still
+The list is per codec, not per profile. The one exception is HEVC Main10, which
+patch 0025 lists only when the driver reports `HEVC10`. A stream whose profile
+the driver cannot decode, such as 4:4:4 or HEVC Main10 on a GPU without it, is still
 decoded, by FFmpeg in software inside the service. It is logged as such (see
 "Diagnostics"), and it does not hang. Android's decoders cannot decode those
 streams either. Mesa is built with decoders only:
@@ -201,6 +243,7 @@ It is future work.
 | 0021 | `external/stagefright-plugins` | zero-copy: buffer identity without a BufferQueue; import logging |
 | 0023 | `external/stagefright-plugins` | copy-back in the surface's own format (bit-exact on Mesa) |
 | 0024 | `external/stagefright-plugins` | VA capability query and gating; session diagnostics |
+| 0025 | `external/stagefright-plugins` | list HEVC Main10 when VA decodes `HEVC10` |
 | experimental/0022 | `external/minigbm` | zero-copy NV12 layout; not applied |
 
 **Why 0023:** asking Mesa's `vaGetImage` for a format other than the surface's
@@ -242,5 +285,15 @@ On Intel GPUs supported by both drivers, libva tries iHD before i965. On the UHD
 - **Android's own software decoders:** comparing a `c2.android.*` decoder with
   itself sometimes gives one or a few differing frames, under heavy host load or
   on Intel. This is in Android's software path, not VA-API; not investigated.
-- **10-bit:** HEVC Main10 has no software decoder in this image; with hardware
-  decoding it is converted to 8-bit (YV12).
+- **10-bit:** HEVC Main10 has no software decoder in this image. With hardware
+  decoding it is converted to 8-bit (YV12) and shown as SDR. HDR10 and HDR10+
+  are not listed. HDR end to end would need all of these, and is a separate
+  project:
+  - P010 output;
+  - HDR profiles and metadata in Codec2;
+  - an HDR dataspace through SurfaceFlinger;
+  - 10-bit PQ through Lepton's display bridge.
+- **Size limits:** `media_codecs_ffmpeg_c2.xml` caps HEVC at 4096×4096 and AV1
+  at 2048×2048, below what the GPU decodes. Larger streams go to the app's own
+  software decoder: an 8K HEVC clip was choppy in VLC. These limits could come
+  from VA (`vaQuerySurfaceAttributes`); this has not been done.
