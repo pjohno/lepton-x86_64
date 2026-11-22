@@ -1,0 +1,173 @@
+Lepton: time each copy-back step (LEPTON_VA_TIMING)
+
+At the end of a decoding session, log the average wall time per output
+frame of each step: avcodec_send_packet, avcodec_receive_frame, the
+download (GPU wait plus map or copy), fetching and mapping the output
+block, the swscale conversion, and Codec2's whole process() call, with
+the session's output frame rate. No behaviour change; a few clock reads
+per frame.
+
+diff --git a/codec2/C2FFMPEGVideoDecodeComponent.cpp b/codec2/C2FFMPEGVideoDecodeComponent.cpp
+index ddf019e..6881ccb 100644
+--- a/codec2/C2FFMPEGVideoDecodeComponent.cpp
++++ b/codec2/C2FFMPEGVideoDecodeComponent.cpp
+@@ -255,6 +255,22 @@ c2_status_t C2FFMPEGVideoDecodeComponent::openDecoder() {
+     return C2_OK;
+ }
+ 
++// Lepton: wall time of one step, added to a LEPTON_VA_TIMING counter.
++static int64_t leptonNowUs() {
++    struct timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
++}
++
++namespace {
++struct ScopedStepTime {
++    explicit ScopedStepTime(int64_t& total) : mTotal(total), mStart(leptonNowUs()) {}
++    ~ScopedStepTime() { mTotal += leptonNowUs() - mStart; }
++    int64_t& mTotal;
++    int64_t mStart;
++};
++}  // namespace
++
+ // Lepton: one line when a session's first frame arrives, saying whether
+ // frames come from VA-API or FFmpeg decodes in software, and why.
+ void C2FFMPEGVideoDecodeComponent::noteDecodedFrame() {
+@@ -289,6 +305,20 @@ void C2FFMPEGVideoDecodeComponent::logSessionEnd() {
+               " transfer_failures=%" PRIu64,
+               mCtx ? avcodec_get_name(mCtx->codec_id) : "?", mHwFrames, mSwFrames, mTransferFailures);
+     }
++    if (mTimes.frames) {
++        // Average microseconds per output frame in each step. download is the
++        // GPU wait plus the map or copy; convert is swscale, which reads the
++        // mapped surface. process is the whole of Codec2's process() calls.
++        const double n = (double)mTimes.frames;
++        const int64_t wall = mTimes.lastUs - mTimes.firstUs;
++        ALOGI("LEPTON_VA_TIMING codec=%s size=%dx%d frames=%" PRIu64 " fps=%.1f us_per_frame:"
++              " send=%.0f receive=%.0f download=%.0f fetch=%.0f map=%.0f convert=%.0f process=%.0f",
++              mCtx ? avcodec_get_name(mCtx->codec_id) : "?", mTimes.width, mTimes.height,
++              mTimes.frames, wall > 0 ? (mTimes.frames - 1) * 1e6 / wall : 0.0,
++              mTimes.send / n, mTimes.receive / n, mTimes.download / n, mTimes.fetch / n,
++              mTimes.map / n, mTimes.convert / n, mTimes.process / n);
++    }
++    mTimes = StepTimes();
+     mHwFrames = mSwFrames = mTransferFailures = 0;
+     mSessionLogged = false;
+ }
+@@ -385,7 +415,11 @@ c2_status_t C2FFMPEGVideoDecodeComponent::sendInputBuffer(
+     mPacket->pts = timestamp;
+     mPacket->dts = AV_NOPTS_VALUE;
+ 
+-    int err = avcodec_send_packet(mCtx, mPacket);
++    int err;
++    {
++        ScopedStepTime t(mTimes.send);
++        err = avcodec_send_packet(mCtx, mPacket);
++    }
+     av_packet_unref(mPacket);
+ 
+     if (err < 0) {
+@@ -802,7 +836,11 @@ c2_status_t C2FFMPEGVideoDecodeComponent::receiveFrame(bool* hasPicture) {
+                 }}
+     } else {
+ #endif //CONFIG_VAAPI
+-        int err = avcodec_receive_frame(mCtx, mFrame);
++        int err;
++        {
++            ScopedStepTime t(mTimes.receive);
++            err = avcodec_receive_frame(mCtx, mFrame);
++        }
+         if (err == 0) {
+             noteDecodedFrame();
+ #if DEBUG_FRAMES && CONFIG_VAAPI
+@@ -901,7 +939,11 @@ c2_status_t C2FFMPEGVideoDecodeComponent::downloadFrame(bool forceSw) {
+     }
+ #endif
+ 
+-    int err = ffmpeg_hwaccel_get_frame(mCtx, mFrame);
++    int err;
++    {
++        ScopedStepTime t(mTimes.download);
++        err = ffmpeg_hwaccel_get_frame(mCtx, mFrame);
++    }
+     if (err < 0) {
+         mTransferFailures++;
+         ALOGE("downloadFrame: failed to receive frame from HW decoder: %s (%08x)",
+@@ -922,15 +964,20 @@ std::shared_ptr<C2Buffer> C2FFMPEGVideoDecodeComponent::getOutputBuffer(const st
+     std::shared_ptr<C2GraphicBlock> block;
+     c2_status_t err;
+ 
+-    err = pool->fetchGraphicBlock(ALIGN(mFrame->width, 16), ALIGN(mFrame->height, 2), mUtils->getPixelFormat(false),
+-                                  { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE }, &block);
++    {
++        ScopedStepTime t(mTimes.fetch);
++        err = pool->fetchGraphicBlock(ALIGN(mFrame->width, 16), ALIGN(mFrame->height, 2), mUtils->getPixelFormat(false),
++                                      { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE }, &block);
++    }
+     if (err != C2_OK) {
+         ALOGE("getOutputBuffer: failed to fetch graphic block %d x %d (%#x) err = %d",
+               mFrame->width, mFrame->height, mUtils->getPixelFormat(false), err);
+         return NULL;
+     }
+ 
++    int64_t mapStart = leptonNowUs();
+     C2GraphicView wView = block->map().get();
++    mTimes.map += leptonNowUs() - mapStart;
+ 
+     err = wView.error();
+     if (err != C2_OK) {
+@@ -974,8 +1021,11 @@ std::shared_ptr<C2Buffer> C2FFMPEGVideoDecodeComponent::getOutputBuffer(const st
+         return NULL;
+     }
+ 
+-    sws_scale(mImgConvertCtx, mFrame->data, mFrame->linesize,
+-              0, mFrame->height, data, linesize);
++    {
++        ScopedStepTime t(mTimes.convert);
++        sws_scale(mImgConvertCtx, mFrame->data, mFrame->linesize,
++                  0, mFrame->height, data, linesize);
++    }
+ 
+     return createGraphicBuffer(std::move(block), C2Rect(mFrame->width, mFrame->height));
+ }
+@@ -1185,6 +1235,13 @@ c2_status_t C2FFMPEGVideoDecodeComponent::outputFrame(
+     std::shared_ptr<C2Buffer> buffer = getOutputBuffer(pool);
+     if (buffer) {
+         buffer->setInfo(mIntf->getPixelFormatInfo());
++        const int64_t now = leptonNowUs();
++        if (!mTimes.frames++) {
++            mTimes.firstUs = now;
++            mTimes.width = mFrame->width;
++            mTimes.height = mFrame->height;
++        }
++        mTimes.lastUs = now;
+     }
+ 
+     if (work && c2_cntr64_t(mFrame->best_effort_timestamp) == work->input.ordinal.frameIndex) {
+@@ -1225,6 +1282,7 @@ void C2FFMPEGVideoDecodeComponent::process(
+     const std::unique_ptr<C2Work> &work,
+     const std::shared_ptr<C2BlockPool> &pool
+ ) {
++    ScopedStepTime processTime(mTimes.process);
+     size_t inSize = 0u;
+     bool eos = (work->input.flags & C2FrameData::FLAG_END_OF_STREAM);
+     C2ReadView rView = mDummyReadView;
+diff --git a/codec2/C2FFMPEGVideoDecodeComponent.h b/codec2/C2FFMPEGVideoDecodeComponent.h
+index 7975f6f..30543ca 100644
+--- a/codec2/C2FFMPEGVideoDecodeComponent.h
++++ b/codec2/C2FFMPEGVideoDecodeComponent.h
+@@ -123,6 +123,13 @@ private:
+     uint64_t mSwFrames = 0;
+     uint64_t mTransferFailures = 0;
+     bool mSessionLogged = false;
++    // Lepton: time spent in each step of a session (LEPTON_VA_TIMING).
++    struct StepTimes {
++        uint64_t frames = 0;
++        int64_t send = 0, receive = 0, download = 0, fetch = 0, map = 0, convert = 0, process = 0;
++        int64_t firstUs = 0, lastUs = 0;
++        int width = 0, height = 0;
++    } mTimes;
+     void noteDecodedFrame();
+     void logSessionEnd();
+ 

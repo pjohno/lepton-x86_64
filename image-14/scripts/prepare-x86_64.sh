@@ -133,7 +133,8 @@ for name in \
   "$IMAGE/patches/0024-stagefright-plugins-va-capabilities-and-diagnostics.patch" \
   "$IMAGE/patches/0025-stagefright-plugins-hevc-main10-profile.patch" \
   "$IMAGE/patches/0026-stagefright-plugins-va-max-picture-size.patch" \
-  "$IMAGE/patches/0027-frameworks-av-codec2-ffmpeg-size-limits.patch"; do
+  "$IMAGE/patches/0027-frameworks-av-codec2-ffmpeg-size-limits.patch" \
+  "$IMAGE/patches/0028-stagefright-plugins-copy-back-step-timing.patch"; do
   [[ -f "$name" ]] || err "Missing required file: $name"
 done
 podman image exists "$BUILDER" || err "Missing builder image: $BUILDER"
@@ -458,6 +459,7 @@ apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0
 apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0025-stagefright-plugins-hevc-main10-profile.patch StagefrightHevcMain10
 apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0026-stagefright-plugins-va-max-picture-size.patch StagefrightVaMaxSize
 apply_custom /workspace/output/frameworks/av /workspace/patches/0027-frameworks-av-codec2-ffmpeg-size-limits.patch Codec2FfmpegSizeLimits
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0028-stagefright-plugins-copy-back-step-timing.patch StagefrightCopyBackTiming
 INNER
   touch "$STATE/patches.done"
   rm -- "$STATE/patches.started"
