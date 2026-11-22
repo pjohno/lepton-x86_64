@@ -11,7 +11,7 @@ behind this name would pass for hardware. HDR10 and HDR10+ are never
 advertised, because copy-back outputs 8-bit YUV.
 
 diff --git a/codec2/C2FFMPEGVideoDecodeInterface.cpp b/codec2/C2FFMPEGVideoDecodeInterface.cpp
-index 7dad7de..c224d38 100644
+index 7dad7de..ca21401 100644
 --- a/codec2/C2FFMPEGVideoDecodeInterface.cpp
 +++ b/codec2/C2FFMPEGVideoDecodeInterface.cpp
 @@ -27,6 +27,22 @@ namespace android {
@@ -37,21 +37,27 @@ index 7dad7de..c224d38 100644
  C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
          const C2FFMPEGComponentInfo* componentInfo,
          const std::shared_ptr<C2ReflectorHelper>& helper)
-@@ -129,9 +145,14 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+@@ -117,6 +133,12 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+     }
+ 
+     else if (strcasecmp(componentInfo->mediaType, MEDIA_MIMETYPE_VIDEO_HEVC) == 0) {
++        std::vector<uint32_t> hevcProfiles = {
++                C2Config::PROFILE_HEVC_MAIN, C2Config::PROFILE_HEVC_MAIN_STILL};
++        if (vaDecodesHevcMain10()) {
++            hevcProfiles.push_back(C2Config::PROFILE_HEVC_MAIN_10);
++        }
++
+         addParameter(
+                 DefineParam(mActualOutputDelay, C2_PARAMKEY_OUTPUT_DELAY)
+                 .withDefault(new C2PortActualDelayTuning::output(8u))
+@@ -129,9 +151,7 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
                  .withDefault(new C2StreamProfileLevelInfo::input(0u,
                          C2Config::PROFILE_HEVC_MAIN, C2Config::LEVEL_HEVC_MAIN_5_1))
                  .withFields({
 -                    C2F(mProfileLevel, profile).oneOf({
 -                            C2Config::PROFILE_HEVC_MAIN,
 -                            C2Config::PROFILE_HEVC_MAIN_STILL}),
-+                    C2F(mProfileLevel, profile).oneOf(vaDecodesHevcMain10()
-+                            ? std::vector<C2Config::profile_t>{
-+                                    C2Config::PROFILE_HEVC_MAIN,
-+                                    C2Config::PROFILE_HEVC_MAIN_STILL,
-+                                    C2Config::PROFILE_HEVC_MAIN_10}
-+                            : std::vector<C2Config::profile_t>{
-+                                    C2Config::PROFILE_HEVC_MAIN,
-+                                    C2Config::PROFILE_HEVC_MAIN_STILL}),
++                    C2F(mProfileLevel, profile).oneOf(hevcProfiles),
                      C2F(mProfileLevel, level).oneOf({
                              C2Config::LEVEL_HEVC_MAIN_1,
                              C2Config::LEVEL_HEVC_MAIN_2, C2Config::LEVEL_HEVC_MAIN_2_1,
