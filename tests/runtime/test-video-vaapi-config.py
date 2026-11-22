@@ -23,6 +23,7 @@ VIDEO_PATCHES = {
     '0021-stagefright-plugins-drm-prime-buffer-id.patch': 'external/stagefright-plugins',
     '0023-stagefright-plugins-hw-download-native-format.patch': 'external/stagefright-plugins',
     '0024-stagefright-plugins-va-capabilities-and-diagnostics.patch': 'external/stagefright-plugins',
+    '0025-stagefright-plugins-hevc-main10-profile.patch': 'external/stagefright-plugins',
 }
 
 

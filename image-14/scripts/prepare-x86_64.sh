@@ -130,7 +130,8 @@ for name in \
   "$IMAGE/patches/0020-intel-media-driver-android14-clang.patch" \
   "$IMAGE/patches/0021-stagefright-plugins-drm-prime-buffer-id.patch" \
   "$IMAGE/patches/0023-stagefright-plugins-hw-download-native-format.patch" \
-  "$IMAGE/patches/0024-stagefright-plugins-va-capabilities-and-diagnostics.patch"; do
+  "$IMAGE/patches/0024-stagefright-plugins-va-capabilities-and-diagnostics.patch" \
+  "$IMAGE/patches/0025-stagefright-plugins-hevc-main10-profile.patch"; do
   [[ -f "$name" ]] || err "Missing required file: $name"
 done
 podman image exists "$BUILDER" || err "Missing builder image: $BUILDER"
@@ -452,6 +453,7 @@ apply_custom /workspace/output/external/intel-media-driver /workspace/patches/00
 apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0021-stagefright-plugins-drm-prime-buffer-id.patch StagefrightPrimeBufferId
 apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0023-stagefright-plugins-hw-download-native-format.patch StagefrightNativeDownload
 apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0024-stagefright-plugins-va-capabilities-and-diagnostics.patch StagefrightVaCapabilities
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0025-stagefright-plugins-hevc-main10-profile.patch StagefrightHevcMain10
 INNER
   touch "$STATE/patches.done"
   rm -- "$STATE/patches.started"

@@ -1,0 +1,57 @@
+Lepton: advertise HEVC Main10 when the VA-API driver decodes it
+
+The HEVC interface lists only Main and Main Still Picture. Players such as
+VLC and ExoPlayer match the stream's profile against that list, so they
+skip c2.ffmpeg.hevc.decoder for 10-bit streams and decode them in software.
+
+Add PROFILE_HEVC_MAIN_10 when media.sf.hwaccel is set and the VA driver
+reports HEVC10 (ro.waydroid.hwcodecs, else the LEPTON_VA_CAPS query from
+patch 0024). Without VA, the profile stays hidden: FFmpeg software decoding
+behind this name would pass for hardware. HDR10 and HDR10+ are never
+advertised, because copy-back outputs 8-bit YUV.
+
+diff --git a/codec2/C2FFMPEGVideoDecodeInterface.cpp b/codec2/C2FFMPEGVideoDecodeInterface.cpp
+index 7dad7de..c224d38 100644
+--- a/codec2/C2FFMPEGVideoDecodeInterface.cpp
++++ b/codec2/C2FFMPEGVideoDecodeInterface.cpp
+@@ -27,6 +27,22 @@ namespace android {
+ 
+ constexpr size_t kMaxDimension = 4080;
+ 
++// Lepton: advertise HEVC Main10 only when the VA-API driver decodes it, so
++// players pick this decoder for 10-bit streams instead of their own software
++// decoder. Without VA the profile stays hidden: FFmpeg software decoding behind
++// this name would look like hardware. Copy-back still outputs 8-bit YUV, so the
++// HDR10/HDR10+ profiles are never advertised.
++static bool vaDecodesHevcMain10() {
++    if (!base::GetBoolProperty("media.sf.hwaccel", false)) {
++        return false;
++    }
++    std::string codecs = base::GetProperty("ro.waydroid.hwcodecs", "");
++    if (codecs.empty()) {
++        codecs = C2FFMPEGVideoUtils::detectedHwCodecs();
++    }
++    return (" " + codecs + " ").find(" HEVC10 ") != std::string::npos;
++}
++
+ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+         const C2FFMPEGComponentInfo* componentInfo,
+         const std::shared_ptr<C2ReflectorHelper>& helper)
+@@ -129,9 +145,14 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+                 .withDefault(new C2StreamProfileLevelInfo::input(0u,
+                         C2Config::PROFILE_HEVC_MAIN, C2Config::LEVEL_HEVC_MAIN_5_1))
+                 .withFields({
+-                    C2F(mProfileLevel, profile).oneOf({
+-                            C2Config::PROFILE_HEVC_MAIN,
+-                            C2Config::PROFILE_HEVC_MAIN_STILL}),
++                    C2F(mProfileLevel, profile).oneOf(vaDecodesHevcMain10()
++                            ? std::vector<C2Config::profile_t>{
++                                    C2Config::PROFILE_HEVC_MAIN,
++                                    C2Config::PROFILE_HEVC_MAIN_STILL,
++                                    C2Config::PROFILE_HEVC_MAIN_10}
++                            : std::vector<C2Config::profile_t>{
++                                    C2Config::PROFILE_HEVC_MAIN,
++                                    C2Config::PROFILE_HEVC_MAIN_STILL}),
+                     C2F(mProfileLevel, level).oneOf({
+                             C2Config::LEVEL_HEVC_MAIN_1,
+                             C2Config::LEVEL_HEVC_MAIN_2, C2Config::LEVEL_HEVC_MAIN_2_1,
