@@ -1,30 +1,80 @@
-# Hardware video decoding (VA-API), experimental
+# Hardware video decoding (VA-API)
 
 Android 14 in Lepton decodes video with Android's software Codec2 decoders
 (`c2.android.*`). This adds a vendor Codec2 service that decodes with FFmpeg and,
 when enabled, uses the GPU's video engine through VA-API. It is built into the
-image and **off by default**.
+image and **off by default** (`LEPTON_VIDEO_HWACCEL=true` turns it on).
 
-The approach is: VA-API first, **copy-back** first, zero-copy later. FFmpeg
-decodes into its own VA surfaces, and each frame is copied into an ordinary
-Android buffer.
+What ships is **hardware decoding with copy-back**. The release does not include
+GPU video post-processing (VPP), zero-copy output or HDR output.
+
+## How it works
+
+```
+app (MediaCodec) → Codec2 → c2.ffmpeg.* (FFmpeg service) → FFmpeg hwaccel → VA-API driver → GPU video engine
+                                   │
+                                   └─ copy-back: VA surface → CPU (map) → swscale → Android buffer (YV12)
+```
+
+| Term | Meaning | In this release |
+| --- | --- | --- |
+| Hardware decoding | The GPU's video engine decodes the bitstream into VA surfaces in GPU memory | yes |
+| Copy-back | Each decoded surface is mapped for the CPU and copied, converted to 8-bit YV12, into an ordinary Android buffer (ByteBuffer or Surface) | yes |
+| GPU VPP | The GPU converts or scales (for example P010 to NV12, or straight into the Android buffer's format) through VA's video processing | no (future work) |
+| Zero-copy | The GPU decodes straight into Android's own (gralloc/DMA-BUF) buffers, with no CPU copy | no: a broken development option, see "Zero-copy" |
+
+Each frame, the service:
+1. sends the packet to FFmpeg (`avcodec_send_packet`), which submits the
+   decode to VA;
+2. receives the decoded VA surface (`avcodec_receive_frame`);
+3. waits for the GPU (`vaSyncSurface`);
+4. maps the surface for reading (see "Copy-back modes");
+5. gets an Android output buffer (`fetchGraphicBlock`) and maps it;
+6. converts NV12 or P010 to YV12 with swscale. Luma is copied unchanged for
+   8-bit; 10-bit is reduced to 8-bit.
+
+### Copy-back modes (patch 0029)
+
+| Mode | How it reads the surface | Default for |
+| --- | --- | --- |
+| `derive` | `av_hwframe_map(READ \| DIRECT)`: Mesa maps the surface through a cached staging copy, and swscale reads it directly | Mesa drivers (AMD radeonsi; `vaQueryVendorString` starts with "Mesa Gallium driver") |
+| `map` | FFmpeg's default read map: `vaCreateImage` + `vaGetImage` + `vaMapBuffer`, a new image buffer for every frame | every other driver (Intel iHD and i965) |
+
+`map` is the default on Intel because a direct map of an iHD surface can be
+uncached memory, which is slow to read. That is why FFmpeg avoids it for reads.
+If the derived map fails, the service logs it and uses `map` for the rest of the
+session.
+
+The 10-bit to 8-bit conversion runs on 2 swscale slice threads at 1080p and
+above (`sws_scale_frame`), and on 1 thread otherwise. 8-bit NV12 to YV12 stays
+on one thread: it is a plain copy, and more threads did not help.
 
 ## What has been tested
 
-Tested with bundle `video-vaapi-test-16` (image `f15ed14`) and media probe
-`0120786`, headless:
+Machines (results are from these two only):
 - Intel UHD 630 (Gen 9.5): iHD 24.3.4, with i965 also installed;
-- AMD RX 6700 XT: Mesa 26.0.8 radeonsi.
+- AMD RX 6700 XT (navi22): Mesa 26.0.8 radeonsi; host CPU i7-8700.
 
-The results below are from these two machines only.
+Bundles:
+- `video-vaapi-test-16` (`f15ed14`): both machines;
+- `-19`, `-20`, `-21` (`a9ea4d7`, before the copy-back work): AMD;
+- `-23` (`53b4370`, patches 0028/0029): AMD.
 
-| Clip (probe) | Intel UHD 630 | AMD RX 6700 XT |
+**Intel has not been tested with patch 0029.** It is expected to behave as
+before (the `map` mode plus threaded 10-bit conversion), but that is not
+measured. See "Testing on your machines".
+
+### Correctness (media probe, headless)
+
+| Clip (probe) | Intel UHD 630 (test-16) | AMD RX 6700 XT (test-23) |
 | --- | --- | --- |
-| H.264 High 720p and 1080p | VA-API; content identical to Android's decoder | same |
+| H.264 High 720p and 1080p | VA-API; identical to Android's decoder | same |
 | Repeat ×3, flush and seek | identical | identical |
 | HEVC Main | VA-API; identical | VA-API; identical |
-| HEVC Main10 | VA-API (P010); not compared, see below | same |
-| VP9 Profile 0 | VA-API; identical | VA-API; identical |
+| HEVC Main10 720p, 1080p, 4K | VA-API (P010); not compared | VA-API (P010); identical to host FFmpeg (see below) |
+| VP9 Profile 0 720p | VA-API; identical | VA-API; identical |
+| VP9 Profile 0 4K | not tested | VA-API; identical to host FFmpeg |
+| H.264, HEVC Main, AV1 4K | not tested | VA-API; identical to Android's decoder |
 | AV1 | not offered (iHD reports no AV1 on Gen 9.5); Android's `c2.android.av1.decoder` used | VA-API; identical |
 | H.264, 640×360 → 1280×720 mid-stream | VA-API; **one frame lost at the switch**, all others identical | same |
 | H.264 High 4:4:4 | FFmpeg software inside the service (no VA driver decodes 4:4:4), logged as such | same |
@@ -34,89 +84,120 @@ The results below are from these two machines only.
 "Identical" means the CRC of the visible luma of every frame equals Android's
 software decoder's. H.264, HEVC, VP9 and AV1 decoding is bit-exact.
 
-**Evidence of GPU decoding.** The DRM video-engine time of the FFmpeg service
-was 0.5 s (Intel) and 14.7 s (AMD) during a probe run; no other process used the
-video engine. With hardware decoding off, no process used it.
+The 10-bit and VP9 4K clips have no Android reference:
+- Android has no HEVC Main10 software decoder;
+- Android's VP9 decoder does not take 4K.
 
-**HEVC Main10 profile (patch 0025), AMD, `video-vaapi-test-19` (`9795c05`):**
-the probe's `LEPTON_MEDIA_HEVC_PROFILES` and `LEPTON_MEDIA_HEVC_MAIN10` lines
-show:
-- with hardware decoding on, `c2.ffmpeg.hevc.decoder` lists Main10, and Android
-  picks it for a Main10 stream. The session is `decode=vaapi
-  sw_format=p010le`, with every frame from the GPU;
-- with hardware decoding off, no decoder lists Main10.
+For these, the luma CRCs from test-23 were compared by hand with host FFmpeg
+decoding the same files and converting to 8-bit with swscale. All 60 frames of
+every clip were identical. The same CRCs were produced before and after patch
+0029 (test-21 and test-23), so the faster path changed no pixels.
 
-The other probe results matched test-16.
+**Evidence of GPU decoding.** Only the FFmpeg service had DRM video-engine time:
+- test-16: 0.5 s on Intel and 14.7 s on AMD during a probe run;
+- test-23: 45.9 s on AMD.
 
-**Real app: VLC 3.x** (`org.videolan.vlc` 13070208), on the desktop with
-`run-apk.sh --app --display desktop --video-hwaccel`. Clips opened by intent
-from `/data/local/tmp`.
+With hardware decoding off, no process used the video engine. In test-23:
+- 46 sessions used `derive` (`LEPTON_VA_COPYBACK`), with 0 transfer failures;
+- the 4:4:4 clip fell back to software;
+- with hardware decoding off, there were no VA lines, no service CPU time, and
+  audio was unchanged.
 
-Intel, test-17 (before patch 0025):
-- H.264, HEVC 8-bit and VP9 played through `c2.ffmpeg.*` on VA-API;
-- HEVC 10-bit went to VLC's own software decoder.
+### Performance: before and after (AMD, test-21 → test-23)
 
-AMD, test-19:
+The probe's throughput run decodes each clip (2 s, 60 frames) as fast as
+possible, with no CRCs (`LEPTON_MEDIA_THROUGHPUT`, frames/s):
 
-| Clip | VLC decoder | Service | Picture (user) |
-| --- | --- | --- | --- |
-| HEVC Main10 1080p | `c2.ffmpeg.hevc.decoder` | `decode=vaapi sw_format=p010le` | good |
-| HEVC Main 1080p | `c2.ffmpeg.hevc.decoder` | vaapi, 1235 hw / 0 sw frames | good |
-| H.264 High 1080p | `c2.ffmpeg.h264.decoder` | vaapi, 1446 hw / 0 sw frames | good |
-| VP9 Profile 0 1080p | `c2.ffmpeg.vp9.decoder` | vaapi, 720 hw / 0 sw frames | fine |
-| AV1 10-bit 1080p | VLC's dav1d | not used | not judged |
-| HEVC Main10 8K HLG | VLC's avcodec | not used | choppy, very slow |
+| Clip | ByteBuffer before | ByteBuffer after | Surface before | Surface after |
+| --- | --- | --- | --- | --- |
+| H.264 1080p | 110 | 198 | 107 | 230 |
+| HEVC Main10 1080p | 59 | 152 | 78 | 113 |
+| H.264 4K | 39 | 65 | 41 | 76 |
+| HEVC Main 4K | 39 | 64 | 40 | 77 |
+| HEVC Main10 4K | 22 | 47 | 22 | 54 |
+| VP9 4K | 36 | 59 | 36 | 62 |
+| AV1 4K | 32 | 50 | 34 | 56 |
 
-All sessions had 0 transfer failures. Only the FFmpeg service had video-engine
-time: 32.2 s over the session.
+The service's time per frame (`LEPTON_VA_TIMING`, ms; `sync` is part of
+`download` before 0029):
 
-The Main10 session's end line was lost because logcat's ring buffer filled.
-Keep a filtered `logcat` running into a file during app tests.
+| Clip | Step | send | receive | sync | download | map | convert | whole frame |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| HEVC Main 4K | before | 4.6 | 0.8 | – | 15.2 | 1.2 | 2.0 | 24.3 |
+| | after | 4.7 | 0.2 | 1.8 | 2.2 | 1.2 | 2.4 | 13.0 |
+| HEVC Main10 4K | before | 4.5 | 1.6 | – | 27.7 | 1.3 | 8.9 | 44.4 |
+| | after | 4.7 | 0.4 | 1.8 | 3.9 | 1.2 | 5.9 | 18.5 |
+| H.264 1080p | before | 1.7 | 0.2 | – | 2.7 | 0.5 | 0.5 | 6.1 |
+| | after | 1.6 | 0.1 | 0.2 | 0.8 | 0.4 | 0.6 | 4.2 |
 
-VLC never uses MediaCodec for AV1, in 3.0.x or master: its `mediacodec.c` has
-no AV1 entry. GPU AV1 therefore needs another player.
+**Bottleneck before:** the CPU read-back, not the GPU. FFmpeg's read map makes
+Mesa allocate a new image (12–25 MB at 4K) for every frame and copy the surface
+into it on one thread. The wait for the GPU (`sync`) was only 1–2 ms (5–8 ms for
+VP9 and AV1 at 4K).
 
-On test-19 the 8K clip failed to configure: the service took pictures up to
-4080×4080 only. Patches 0026/0027 take the limit from VA instead (see below).
+**After:** at 4K the largest costs are:
+- submitting the decode (`send`, 2–6 ms; FFmpeg's bitstream parsing and VA
+  submission);
+- the 10-bit conversion (about 6 ms on 2 threads).
 
-**Size limits from VA (patches 0026/0027), AMD, `video-vaapi-test-20`
-(`10483e7`).** `LEPTON_VA_CAPS max=` reported these maximum sizes:
-- HEVC, HEVC 10-bit, VP9 and AV1: 8192×4352;
-- H.264: 4096×4096;
-- MPEG-2: 1920×1088.
+Experiments (test-22, not shipped):
 
-Each `c2.ffmpeg.*` interface took these sizes (`LEPTON_VA_LIMITS`).
-Android's codec list then showed the same sizes (`LEPTON_CODEC_LIMITS`, and the
-probe's `LEPTON_MEDIA_SIZE_LIMIT`). The `c2.android.*` limits were unchanged.
+| Change | Result |
+| --- | --- |
+| Persistent VA image + `vaGetImage` | 10–20% faster than `map` |
+| 3 conversion threads | about the same as 2 |
+| 4 or more conversion threads | slower than 2 |
+| Threads for 8-bit conversion | no gain |
 
-For a 7680×4320 24 fps stream, `findDecoderForFormat` picks
-`c2.ffmpeg.hevc`, `c2.ffmpeg.vp9` and `c2.ffmpeg.av1.decoder`; H.264 has no
-decoder, as VA reports. With hardware decoding off, nothing changes: no VA
-query, no 8K decoder. The other probe results were the same as test-19.
+### Real app: VLC
 
-In VLC on test-20, high-resolution 10-bit clips decode on the GPU without
-errors, but copy-back is too slow to watch:
+VLC 3.x (`org.videolan.vlc` 13070208) was used on the desktop with
+`run-apk.sh --app --display desktop --video-hwaccel`. Clips were opened by
+intent from `/data/local/tmp`.
 
-| Clip | Service | Delivered | Picture (user) |
-| --- | --- | --- | --- |
-| HEVC Main10 8K 24 fps HLG | vaapi, 528 hw / 0 sw frames in 88 s | about 6 fps | froze |
-| HEVC Main10 4K 59.94 fps HDR10 (PQ) | vaapi, 1340 hw / 0 sw frames in 63 s | about 21 fps | blank: VLC drops late frames |
-| HEVC Main10 1080p | vaapi | not measured | plays |
+| Bundle | Clip | VLC decoder | Service | Picture (user) |
+| --- | --- | --- | --- | --- |
+| Intel test-17 | H.264, HEVC 8-bit, VP9 | `c2.ffmpeg.*` | VA-API | played |
+| Intel test-17 | HEVC 10-bit | VLC software (before patch 0025) | – | – |
+| AMD test-19 | H.264 High 1080p | `c2.ffmpeg.h264.decoder` | vaapi, 1446 hw / 0 sw frames | good |
+| AMD test-19 | HEVC Main 1080p | `c2.ffmpeg.hevc.decoder` | vaapi, 1235 hw / 0 sw | good |
+| AMD test-19 | VP9 Profile 0 1080p | `c2.ffmpeg.vp9.decoder` | vaapi, 720 hw / 0 sw | fine |
+| AMD test-19 | AV1 10-bit 1080p | VLC's dav1d | not used | not judged |
+| AMD test-23 | HEVC Main10 1080p 60 fps | `c2.ffmpeg.hevc.decoder` | vaapi, `derive`, 1797 hw / 0 sw | good |
+| AMD test-23 | HEVC Main10 4K 59.94 fps HDR10, clean MP4 | `c2.ffmpeg.hevc.decoder` | vaapi, `derive`, 2860 hw / 0 sw, 46.7 fps (20.5 ms per frame) | **black**: every frame late, so VLC drops it |
+| AMD test-23 | HEVC Main10 4K 59.94 fps HDR10, damaged MPEG-TS | `c2.ffmpeg.hevc.decoder` | vaapi, 2866 hw / 0 sw | one still frame (VLC's clock; see "Known issues") |
+| AMD test-20 | HEVC Main10 8K 24 fps HLG | `c2.ffmpeg.hevc.decoder` | vaapi, about 6 fps (before 0029) | froze |
 
-The limit is the service's CPU work for each frame: download from the GPU, then
-P010 to 8-bit conversion on one thread (see "Known issues").
+In every session above, all frames came from the GPU with 0 transfer failures.
+Only the FFmpeg service had video-engine time.
 
-**Not verified:**
-- 10-bit output against a reference: Android has no HEVC Main10 software decoder
-  to compare with, and copy-back converts to 8-bit. The user judged the picture
-  in VLC only;
-- newer Intel GPUs (Ice Lake and later; Xe GPUs on the `xe` kernel driver);
+VLC never uses MediaCodec for AV1, in 3.0.x or master: its `mediacodec.c` has no
+AV1 entry. GPU AV1 has only been tested with the probe.
+
+### Lifecycle (AMD, test-23)
+
+The probe was run 10 times in one instance, about 140 decoder sessions,
+alternating `derive` and `map`. After each pass the service's resident memory
+was 41.6 MB (±60 kB), with 19 threads and 18–22 open files. No leak was seen:
+- VA surfaces are released;
+- conversion threads exit;
+- buffers are freed when sessions end.
+
+Seek, flush and repeat sessions matched the reference.
+
+### Not verified
+
+- Intel with patch 0029, and newer Intel GPUs (Ice Lake and later; Xe GPUs on
+  the `xe` kernel driver);
+- Steam Deck (AMD Van Gogh, radeonsi): expected to use `derive` like the RX
+  6700 XT, but not run;
 - other AMD generations;
-- VP8, MPEG-2 and VC-1 content;
+- VP8, MPEG-2 and VC-1 content; VP9 Profile 2 and AV1 10-bit content;
 - real apps other than VLC (ExoPlayer-based players, games), and AV1 in a real
   app;
-- full-rate playback above 1080p 10-bit, which copy-back is too slow for;
-- long playback.
+- full-rate 4K60 10-bit (about 47 fps in VLC; see "Known issues");
+- HDR output (not supported);
+- long playback (beyond about 2 minutes).
 
 ## Enabling
 
@@ -153,6 +234,14 @@ It is refused, with a log line, in these cases:
 `tests/runtime/test-runtime-properties.sh` and `test-video-vaapi-config.py` cover
 this.
 
+**Tuning properties (patch 0029)** are for diagnosis. They are read when a
+decoder opens, so set them before starting playback:
+
+| Property | Values | Default |
+| --- | --- | --- |
+| `debug.ffmpeg-codec2.copyback` | `auto`, `map`, `derive` | `auto`: `derive` on Mesa, `map` otherwise |
+| `debug.ffmpeg-codec2.convert-threads` | `0` (auto) to `8` | `0`: 2 threads for 10-bit at 1080p and above, otherwise 1 |
+
 ## Codecs
 
 The service queries the VA driver once, listing the profiles with a VLD (decode)
@@ -184,6 +273,15 @@ Otherwise it uses 4080×4080, as before. When that size is beyond level 5.x,
 level 6 is also listed. Levels 6.1 and 6.2 are not listed, because VA reports no
 frame rate.
 
+On AMD (test-20), `LEPTON_VA_CAPS max=` reported:
+- 8192×4352 for HEVC, HEVC 10-bit, VP9 and AV1;
+- 4096×4096 for H.264;
+- 1920×1088 for MPEG-2.
+
+For a 7680×4320 24 fps stream, `findDecoderForFormat` picks `c2.ffmpeg.hevc`,
+`.vp9` and `.av1.decoder`. Being listed for 8K does not mean 8K plays at full
+rate.
+
 Android takes codec limits from the static `media_codecs` XML only. Patch 0027
 (`frameworks/av`, `Codec2InfoBuilder`) replaces the XML `size-range` of
 `c2.ffmpeg.*` video decoders with the component's range. It scales
@@ -197,9 +295,11 @@ The service logs to logcat:
 
 | Line | Meaning |
 | --- | --- |
-| `LEPTON_VA_CAPS` | once per service start: VA driver, render node, decodable codecs and profiles |
+| `LEPTON_VA_CAPS` | once per service start: VA driver, render node, decodable codecs and profiles, largest sizes |
 | `LEPTON_VA_SESSION codec= profile= size= decode=vaapi\|software [reason=] sw_format= zero_copy=` | once per decoder session, at its first frame |
+| `LEPTON_VA_COPYBACK mode= setting= vendor=` | once per hardware session: the copy-back mode chosen (patch 0029); `derive failed` if it fell back |
 | `LEPTON_VA_SESSION_END codec= hw_frames= sw_frames= transfer_failures=` | when the session ends |
+| `LEPTON_VA_TIMING codec= size= frames= fps= copyback= convert_threads= us_per_frame: send= receive= sync= download= fetch= map= convert= process=` | when the session ends: average microseconds per frame for each step (patch 0028). `fps` is the output rate, which includes time the app paused |
 
 Reasons for `decode=software`:
 - `hwaccel-off`;
@@ -214,30 +314,37 @@ dropped). It was 0 in every tested session.
 every component as hardware, and FFmpeg may still decode in software. Use the
 `LEPTON_VA_SESSION` lines and the GPU's video engine.
 
-## How to validate
+For a full-rate target, `process` must stay below the frame interval: 16.7 ms for
+60 fps, 33 ms for 30 fps.
+
+## Testing on your machines
+
+### With the test tools (a development host)
 
 ```bash
-# Media probe APK (built on a host with the AOSP checkout and ffmpeg)
+# Media probe APK (on a host with the AOSP checkout and ffmpeg)
 bash tests/runtime/build-jni-smoke.sh --aosp <aosp> --abi x86_64 --media-smoke --output probe.apk
 
-# GPU video-engine evidence while the probe runs (on the host)
+# Probe with hardware decoding, with the GPU video-engine sampler alongside
 bash tests/runtime/sample-video-engine.sh /tmp/video.log & s=$!
-bash tests/runtime/run-apk.sh [--stage-dir <stage>] --apk probe.apk --expect-abi x86_64 \
-    --media-smoke --rendering intel|amd --display headless --seconds 200 --video-hwaccel --execute
+bash tests/runtime/run-apk.sh --stage-dir <stage> --apk probe.apk --expect-abi x86_64 \
+    --media-smoke --rendering intel|amd --display headless --seconds 300 --video-hwaccel --execute
 kill $s; bash tests/runtime/sample-video-engine.sh --summary /tmp/video.log
 
 # Results (the run prints the retained log directory)
 grep -ah 'LEPTON_VA_CAPS' <dir>/boot-logcat.log
-grep -aoE 'LEPTON_MEDIA_(CODEC|REPEAT|SEEK|AVC_DECODE) .*|LEPTON_VA_SESSION.*' <dir>/app-logcat.log
+grep -aoE 'LEPTON_MEDIA_(CODEC|REPEAT|SEEK|THROUGHPUT) .*|LEPTON_VA_(SESSION|COPYBACK|TIMING).*' <dir>/app-logcat.log
 ```
 
-Expected with hardware decoding:
-- `LEPTON_MEDIA_CODEC ... result=PASS` for the 8-bit clips the GPU decodes;
-- `LEPTON_VA_SESSION ... decode=vaapi` for them;
-- video-engine time only for `android.hardware.media.c2-ffmpeg-service`.
+Run the probe again without `--video-hwaccel` for the software baseline: every
+decoder is `c2.android.*`, and there is no video-engine time.
 
-Run again without `--video-hwaccel` for the software baseline: every decoder is
-`c2.android.*`, and there is no video-engine time.
+Expected with hardware decoding:
+- `LEPTON_MEDIA_CODEC ... result=PASS` for the 8-bit clips the GPU decodes,
+  and `NOT_COMPARED` or `NO_REFERENCE` for 10-bit and VP9 4K;
+- `LEPTON_VA_SESSION ... decode=vaapi` for them;
+- `LEPTON_VA_COPYBACK mode=derive` on AMD and `mode=map` on Intel;
+- video-engine time only for `android.hardware.media.c2-ffmpeg-service`.
 
 `LEPTON_MEDIA_CODEC` results:
 - `PASS`: every frame identical to Android's decoder, and Surface output works;
@@ -245,9 +352,41 @@ Run again without `--video-hwaccel` for the software baseline: every decoder is
   with both CRC lists;
 - `INCOMPLETE`: no output for 10 s;
 - `UNSUPPORTED`: no decoder;
-- `NO_REFERENCE`: Android cannot decode the clip;
+- `NO_REFERENCE`: Android cannot decode the clip. The CRCs are still listed,
+  for comparison with host FFmpeg;
 - `NOT_COMPARED`: 10-bit output;
 - `SURFACE_FAIL`.
+
+Throughput only: start the probe with the intent extra `lepton.throughput`. It
+skips the other tests and ends with `LEPTON_MEDIA_THROUGHPUT_DONE`:
+
+```bash
+am start --activity-clear-task -n org.lepton.smoke/.MainActivity --ez lepton.throughput true
+```
+
+**Intel, comparing copy-back modes.** Intel defaults to `map`. To measure
+`derive` (which may be slower on iHD, or faster), set the property in the
+instance, rerun the throughput test, and compare the `LEPTON_VA_TIMING`
+`download` values and the CRCs with a `map` run:
+
+```bash
+setprop debug.ffmpeg-codec2.copyback derive    # then map, then auto
+```
+
+### On a Steam Deck or another desktop
+
+1. Add `LEPTON_VIDEO_HWACCEL=true %command%` to the game's Steam launch options.
+2. Play a 1080p H.264 or HEVC video in the app, then a 4K one.
+3. Collect the service lines from another terminal:
+   ```bash
+   lepton logcat <instance_or_application_name> --full | grep -E 'LEPTON_VA_(CAPS|SESSION|COPYBACK|TIMING)'
+   ```
+4. Check for:
+   - `decode=vaapi`;
+   - `transfer_failures=0`;
+   - a `process` value below the video's frame interval.
+5. Remove the launch option and play the same video: the `LEPTON_VA` lines
+   should be absent (Android's decoders).
 
 ## Zero-copy (development only, broken)
 
@@ -267,13 +406,59 @@ broken development option. Findings:
   output loops forever. VA surfaces are kept until the decoder closes. The
   generation and lifecycle of reused buffers have not been reviewed beyond that.
 
-Making zero-copy work needs:
-- NV12 import support in Mesa/RADV for Android hardware buffers, like patch 0002
-  does for YV12;
-- an allocation path for video buffers that does not change every NV12 buffer;
-- investigation of iHD's imports.
+## Future work
 
-It is future work.
+Copy-back costs CPU time and memory bandwidth for every frame. Two approaches
+would remove part or all of it. Neither is started.
+
+**1. GPU VPP into Android buffers.**
+- *How:* the service allocates the Android output buffer as before (YV12, a
+  format SurfaceFlinger already displays), imports it as a VA surface, and asks
+  the driver's video processor (`vaCreateContext` on `VAProfileNone` /
+  `VAEntrypointVideoProc`, or FFmpeg's `scale_vaapi`) to convert the decoded
+  surface into it on the GPU.
+- *What it removes:* the CPU map and the swscale conversion (at 4K 10-bit,
+  about 11 ms of the 18.5 ms per frame).
+- *Problems to solve:*
+  - Mesa's compositor changed luma values when it converted formats (the reason
+    for patch 0023), so its output must be checked against the CRCs, or accepted
+    as not bit-exact;
+  - the import has the same gralloc layout problems as zero-copy (pitches and
+    modifiers), but on a format that already displays;
+  - Intel iHD's VPP must be checked separately.
+
+**2. DMA-BUF / gralloc zero-copy.**
+- *How:* the GPU decodes straight into Android's buffers (NV12, or P010 for
+  10-bit) and SurfaceFlinger displays them.
+- *What it removes:* every copy.
+- *Problems to solve:* everything listed under "Zero-copy":
+  - NV12 import in Mesa/RADV for Android hardware buffers, like patch 0002 does
+    for YV12;
+  - an allocation path for video buffers that does not change every NV12
+    buffer's layout;
+  - iHD's broken imports;
+  - buffer reuse and generation in patch 0021.
+
+  It is also the only route to HDR.
+
+**HDR output.** HEVC Main10 has no software decoder in this image. With hardware
+decoding it is converted to 8-bit (YV12) and shown as SDR, with no tone mapping.
+HDR10 (PQ) content therefore looks too bright and washed out, and HLG looks
+flat. HDR10 and HDR10+ are not listed. HDR end to end is a separate project,
+needing all of:
+- P010 output (zero-copy or VPP);
+- HDR profiles and metadata in Codec2;
+- an HDR dataspace through SurfaceFlinger;
+- 10-bit PQ through Lepton's display bridge.
+
+**4K60 10-bit with copy-back.** These might close the remaining gap (about 47
+against 60 fps), and are untried:
+- a dedicated P010 to 8-bit loop in place of swscale's general path (estimated
+  2–3 ms against 6 ms). It must be checked against the 10-bit CRCs, since its
+  rounding may differ;
+- overlapping the conversion of one frame with the decode of the next (a worker
+  thread). This needs care with buffer ownership on flush, seek and resolution
+  change.
 
 ## Patches
 
@@ -289,12 +474,24 @@ It is future work.
 | 0025 | `external/stagefright-plugins` | list HEVC Main10 when VA decodes `HEVC10` |
 | 0026 | `external/stagefright-plugins` | picture-size range (and level 6) from VA's largest surface |
 | 0027 | `frameworks/av` | `c2.ffmpeg.*` video decoders' listed size limits from the component, not the XML |
+| 0028 | `external/stagefright-plugins` | time each copy-back step (`LEPTON_VA_TIMING`) |
+| 0029 | `external/stagefright-plugins` | faster copy-back: derived VA mapping on Mesa, threaded 10-bit conversion (`LEPTON_VA_COPYBACK`) |
 | experimental/0022 | `external/minigbm` | zero-copy NV12 layout; not applied |
 
 **Why 0023:** asking Mesa's `vaGetImage` for a format other than the surface's
 (YUV420P from NV12) converts through its video compositor and changes every
 pixel. The service now downloads in the surface's software format (NV12, or
 P010 for 10-bit), and its swscale step converts to YV12 without changing luma.
+
+**Review notes (0017–0027).** None of these block the release:
+- **0021:** reads minigbm's handle `magic` without first checking that the
+  handle is large enough. It only runs in zero-copy mode, and Lepton's gralloc is
+  minigbm; check `numInts` before any wider use.
+- **0024–0026:** the HEVC profile list is gated on VA, but VP9 Profile 2 and AV1
+  Profile 1 are listed as upstream had them, whatever VA reports. A stream the
+  GPU cannot decode (AV1 4:4:4, or VP9 10-bit without `VP92`) is decoded by
+  FFmpeg in software and logged as `decode=software`.
+- **0026:** includes `<map>` only through other headers.
 
 ## Components (third party)
 
@@ -318,35 +515,37 @@ AOSP's `libdav1d` and `libdrm`. Distributing an image that contains FFmpeg needs
 the LGPL notices and source availability for these libraries.
 
 On Intel GPUs supported by both drivers, libva tries iHD before i965. On the UHD
-630, iHD copy-back was slower than i965 (about 126/183 against 165/328 frames/s at
-720p, buffers/Surface).
+630 (test-16, before patch 0029), iHD copy-back was slower than i965: about
+126/183 frames/s against 165/328 at 720p (buffers/Surface).
 
 ## Known issues
 
+- **4K60 10-bit is below full rate.** On the RX 6700 XT, real 4K 59.94 fps
+  HEVC Main10 content runs at about 47 fps (20.5 ms per frame), so VLC drops
+  every late frame and shows black. 4K30 and 1080p60 10-bit have headroom; 8-bit
+  4K reaches 64–77 fps in the probe. 8K is listed but far below full rate. See
+  "Future work".
 - **Resolution change:** one frame is lost where an H.264 stream changes
-  resolution mid-stream (both GPUs). All other frames are identical. Not
-  investigated: the service pairs output frames with Android's work items by
-  timestamp.
+  resolution mid-stream (both GPUs). All other frames are identical. FFmpeg
+  decodes every frame. The last frame before the switch is lost where the
+  service pairs output frames with Android's work items (`unknown frame index`
+  in the log). This predates the copy-back work, which does not change it. Not
+  fixed for this release.
+- **HDR shown as SDR:** see "Future work". PQ content looks too bright.
 - **Android's own software decoders:** comparing a `c2.android.*` decoder with
   itself sometimes gives one or a few differing frames, under heavy host load or
   on Intel. This is in Android's software path, not VA-API; not investigated.
-- **10-bit:** HEVC Main10 has no software decoder in this image. With hardware
-  decoding it is converted to 8-bit (YV12) and shown as SDR. HDR10 and HDR10+
-  are not listed. HDR end to end would need all of these, and is a separate
-  project:
-  - P010 output;
-  - HDR profiles and metadata in Codec2;
-  - an HDR dataspace through SurfaceFlinger;
-  - 10-bit PQ through Lepton's display bridge.
-- **Copy-back above 1080p 10-bit:** the service downloads each frame from the
-  GPU and converts P010 to 8-bit on one thread (`threads = 1`). In VLC, 4K
-  59.94 fps HDR10 ran at about 21 fps and showed a blank screen, and 8K 24 fps
-  ran at about 6 fps and looked frozen. Not pursued:
-  - a multithreaded conversion (swscale slice threads) might reach 4K60;
-  - zero-copy would avoid the copy (broken; see above).
-- **VLC hang after a 4K clip:** opening another clip while the 4K60 clip lagged
-  made VLC stop responding. Android killed it ("app not responding") and VLC
-  restarted. Not investigated.
-- **App sessions in tests:** with `run-apk.sh --app --until-exit`, closing
-  VLC's window does not end the session, because VLC keeps running in the
-  background. To end it, run `am force-stop org.videolan.vlc` in the instance.
+- **VLC and damaged files:** an MPEG-TS file named `.mkv`, whose audio track
+  has no timestamps, broke VLC's clock. VLC showed one still frame ("picture way
+  too early"), and stopping it deadlocked VLC's own threads (`input_Close` and
+  `vlc_join`, with the MediaCodec thread waiting on a VLC mutex). The service
+  had decoded all 2866 frames and was idle. The same video remuxed into a clean
+  MP4 had no clock problem. This matches the earlier "VLC hang after a 4K
+  clip". It is in VLC, not the decoder.
+- **VLC does not release the decoder on Back:** VLC keeps the session open in
+  the background. With `run-apk.sh --app --until-exit`, closing VLC's window
+  does not end the session either. To end it, run `am force-stop
+  org.videolan.vlc` in the instance.
+- **Headless test instances:** an Ethernet `IpClient` retry loop keeps `logd`
+  busy (about 70% of a CPU) and adds noise to timings. It is unrelated to media.
+  Use several runs and take medians.
