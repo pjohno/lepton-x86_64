@@ -27,6 +27,15 @@ public final class MediaProbe {
     private static final String TAG = "LeptonMediaSmoke";
 
     public static void start(Activity activity) {
+        // am start ... --ez lepton.throughput true: the throughput phase only
+        // (comparing service settings in a running instance).
+        if (activity.getIntent().getBooleanExtra("lepton.throughput", false)) {
+            new Thread(() -> {
+                throughput(activity);
+                Log.i(TAG, "LEPTON_MEDIA_THROUGHPUT_DONE");
+            }, "LeptonMediaThroughput").start();
+            return;
+        }
         new Thread(() -> {
             try {
                 int count = 0, hardware = 0;
