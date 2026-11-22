@@ -27,6 +27,7 @@ VIDEO_PATCHES = {
     '0026-stagefright-plugins-va-max-picture-size.patch': 'external/stagefright-plugins',
     '0027-frameworks-av-codec2-ffmpeg-size-limits.patch': 'frameworks/av',
     '0028-stagefright-plugins-copy-back-step-timing.patch': 'external/stagefright-plugins',
+    '0029-stagefright-plugins-copy-back-download.patch': 'external/stagefright-plugins',
 }
 
 

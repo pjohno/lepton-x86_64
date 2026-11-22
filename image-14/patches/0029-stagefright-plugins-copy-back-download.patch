@@ -1,0 +1,273 @@
+Lepton: faster copy-back (derived VA mapping on Mesa, threaded 10-bit conversion)
+
+Profiling (LEPTON_VA_TIMING, patch 0028) on AMD RX 6700 XT showed the
+download dominating: FFmpeg's av_hwframe_map(READ) creates a VA image for
+every frame and copies the surface into it with vaGetImage. On Mesa that is
+a new 12 to 25 MB allocation and a single-threaded CPU copy per 4K frame
+(26 ms for 4K P010). FFmpeg avoids vaDeriveImage for reading because some
+drivers (Intel's) map the surface uncached.
+
+- Download: on Mesa's VA driver (vendor "Mesa Gallium driver"), map the
+  surface itself (AV_HWFRAME_MAP_DIRECT): radeonsi reads it through a cached
+  staging copy, 4 ms for 4K P010. Other drivers keep FFmpeg's map. If
+  deriving fails, the session falls back to FFmpeg's map.
+  debug.ffmpeg-codec2.copyback=auto|map|derive overrides (auto by default).
+- GPU wait: vaSyncSurface before the download, timed separately (sync).
+- Conversion: 10-bit frames of 1080p and larger convert on two swscale
+  slice threads (P010 to 8-bit is swscale's generic path; three or more
+  threads were no faster). 8-bit NV12 stays on one thread.
+  debug.ffmpeg-codec2.convert-threads=0 (auto) or 1 to 8 overrides.
+  Swscale's flags and output are unchanged (bit-identical luma).
+
+The swscale call returns when every slice is done and the derived mapping
+is released with the frame, so flush, seek, resolution changes and
+release are unchanged.
+
+diff --git a/codec2/C2FFMPEGVideoDecodeComponent.cpp b/codec2/C2FFMPEGVideoDecodeComponent.cpp
+index 6881ccb..89b5e6b 100644
+--- a/codec2/C2FFMPEGVideoDecodeComponent.cpp
++++ b/codec2/C2FFMPEGVideoDecodeComponent.cpp
+@@ -21,6 +21,7 @@
+ #include <android/hardware/graphics/common/1.2/types.h>
+ #include <log/log.h>
+ #include <algorithm>
++#include <cstring>
+ 
+ #include <SimpleC2Interface.h>
+ #include "C2FFMPEGVideoDecodeComponent.h"
+@@ -252,6 +253,12 @@ c2_status_t C2FFMPEGVideoDecodeComponent::openDecoder() {
+         return C2_NO_MEMORY;
+     }
+ 
++    {
++        std::string mode = base::GetProperty("debug.ffmpeg-codec2.copyback", "auto");
++        mCopyBackSetting = mode == "map" ? COPYBACK_MAP : mode == "derive" ? COPYBACK_DERIVE : COPYBACK_AUTO;
++        mConvertThreadsSetting = std::clamp(base::GetIntProperty("debug.ffmpeg-codec2.convert-threads", 0), 0, 8);
++    }
++
+     return C2_OK;
+ }
+ 
+@@ -311,14 +318,18 @@ void C2FFMPEGVideoDecodeComponent::logSessionEnd() {
+         // mapped surface. process is the whole of Codec2's process() calls.
+         const double n = (double)mTimes.frames;
+         const int64_t wall = mTimes.lastUs - mTimes.firstUs;
+-        ALOGI("LEPTON_VA_TIMING codec=%s size=%dx%d frames=%" PRIu64 " fps=%.1f us_per_frame:"
+-              " send=%.0f receive=%.0f download=%.0f fetch=%.0f map=%.0f convert=%.0f process=%.0f",
++        // sync is the wait for the GPU decode, before the download.
++        ALOGI("LEPTON_VA_TIMING codec=%s size=%dx%d frames=%" PRIu64 " fps=%.1f copyback=%s"
++              " convert_threads=%d us_per_frame: send=%.0f receive=%.0f sync=%.0f download=%.0f"
++              " fetch=%.0f map=%.0f convert=%.0f process=%.0f",
+               mCtx ? avcodec_get_name(mCtx->codec_id) : "?", mTimes.width, mTimes.height,
+               mTimes.frames, wall > 0 ? (mTimes.frames - 1) * 1e6 / wall : 0.0,
+-              mTimes.send / n, mTimes.receive / n, mTimes.download / n, mTimes.fetch / n,
+-              mTimes.map / n, mTimes.convert / n, mTimes.process / n);
++              !mDeriveDecided ? "-" : mDeriveDownload ? "derive" : "map", mConvThreads,
++              mTimes.send / n, mTimes.receive / n, mTimes.sync / n, mTimes.download / n,
++              mTimes.fetch / n, mTimes.map / n, mTimes.convert / n, mTimes.process / n);
+     }
+     mTimes = StepTimes();
++    mDeriveDecided = false;
+     mHwFrames = mSwFrames = mTransferFailures = 0;
+     mSessionLogged = false;
+ }
+@@ -354,6 +365,7 @@ void C2FFMPEGVideoDecodeComponent::deInitDecoder() {
+         av_frame_free(&mFrame);
+         mFrame = NULL;
+     }
++    av_frame_free(&mConvDst);
+     if (mPacket) {
+         av_packet_free(&mPacket);
+         mPacket = NULL;
+@@ -939,7 +951,29 @@ c2_status_t C2FFMPEGVideoDecodeComponent::downloadFrame(bool forceSw) {
+     }
+ #endif
+ 
+-    int err;
++    int err = -1;
++#if CONFIG_VAAPI
++    if (mFrame->format == AV_PIX_FMT_VAAPI) {
++        if (!mDeriveDecided) decideCopyBack();
++        {
++            // Wait for the GPU decode separately from the download.
++            AVHWFramesContext* hwfc = (AVHWFramesContext*)mFrame->hw_frames_ctx->data;
++            ScopedStepTime t(mTimes.sync);
++            vaSyncSurface(((AVVAAPIDeviceContext*)hwfc->device_ctx->hwctx)->display,
++                          (VASurfaceID)(uintptr_t)mFrame->data[3]);
++        }
++        if (mDeriveDownload) {
++            ScopedStepTime t(mTimes.download);
++            err = downloadFrameDerived();
++            if (err < 0) {
++                ALOGW("LEPTON_VA_COPYBACK derive failed (%s); FFmpeg's map for the rest of the session",
++                      av_err2str(err));
++                mDeriveDownload = false;
++            }
++        }
++    }
++    if (err < 0)
++#endif
+     {
+         ScopedStepTime t(mTimes.download);
+         err = ffmpeg_hwaccel_get_frame(mCtx, mFrame);
+@@ -1009,26 +1043,115 @@ std::shared_ptr<C2Buffer> C2FFMPEGVideoDecodeComponent::getOutputBuffer(const st
+         linesize[1] = linesize[2] = linesize[3] = 0;
+     }
+ 
+-    mImgConvertCtx = sws_getCachedContext(currentImgConvertCtx,
+-           mFrame->width, mFrame->height, (AVPixelFormat)mFrame->format,
+-           mFrame->width, mFrame->height, mUtils->getAVFormat(),
+-           SWS_BICUBIC, NULL, NULL, NULL);
+-    if (mImgConvertCtx && mImgConvertCtx != currentImgConvertCtx) {
+-        ALOGD("getOutputBuffer: created video converter - %s => %s",
+-              av_get_pix_fmt_name((AVPixelFormat)mFrame->format), av_get_pix_fmt_name(mUtils->getAVFormat()));
+-    } else if (! mImgConvertCtx) {
+-        ALOGE("getOutputBuffer: cannot initialize the conversion context");
++    (void)currentImgConvertCtx;
++    if (convertFrame(data, linesize) != C2_OK) {
+         return NULL;
+     }
+ 
+-    {
+-        ScopedStepTime t(mTimes.convert);
+-        sws_scale(mImgConvertCtx, mFrame->data, mFrame->linesize,
+-                  0, mFrame->height, data, linesize);
++    return createGraphicBuffer(std::move(block), C2Rect(mFrame->width, mFrame->height));
++}
++
++// Lepton: swscale from mFrame into the output block. 10-bit frames of 1080p
++// and larger convert on two of swscale's slice threads (P010 to 8-bit is
++// swscale's generic path; NV12 is a plain copy and gains nothing). The call
++// returns when every slice is done, so flush, seek and release are unchanged.
++static void leptonNoFree(void*, uint8_t*) {}
++
++c2_status_t C2FFMPEGVideoDecodeComponent::convertFrame(uint8_t* const data[4], const int linesize[4]) {
++    const AVPixelFormat dstFmt = mUtils->getAVFormat();
++    int threads = mConvertThreadsSetting;
++    if (threads == 0) {
++        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get((AVPixelFormat)mFrame->format);
++        threads = desc && desc->comp[0].depth > 8 && mFrame->width * mFrame->height >= 1920 * 1080 ? 2 : 1;
++    }
++    if (!mImgConvertCtx || mConvSrcW != mFrame->width || mConvSrcH != mFrame->height ||
++            mConvSrcFmt != mFrame->format || mConvDstFmt != dstFmt || mConvThreads != threads) {
++        sws_freeContext(mImgConvertCtx);
++        mImgConvertCtx = sws_alloc_context();
++        if (!mImgConvertCtx ||
++                av_opt_set_int(mImgConvertCtx, "srcw", mFrame->width, 0) < 0 ||
++                av_opt_set_int(mImgConvertCtx, "srch", mFrame->height, 0) < 0 ||
++                av_opt_set_int(mImgConvertCtx, "src_format", mFrame->format, 0) < 0 ||
++                av_opt_set_int(mImgConvertCtx, "dstw", mFrame->width, 0) < 0 ||
++                av_opt_set_int(mImgConvertCtx, "dsth", mFrame->height, 0) < 0 ||
++                av_opt_set_int(mImgConvertCtx, "dst_format", dstFmt, 0) < 0 ||
++                av_opt_set_int(mImgConvertCtx, "sws_flags", SWS_BICUBIC, 0) < 0 ||
++                av_opt_set_int(mImgConvertCtx, "threads", threads, 0) < 0 ||
++                sws_init_context(mImgConvertCtx, NULL, NULL) < 0) {
++            ALOGE("getOutputBuffer: cannot initialize the conversion context");
++            sws_freeContext(mImgConvertCtx);
++            mImgConvertCtx = NULL;
++            return C2_CORRUPTED;
++        }
++        mConvSrcW = mFrame->width;
++        mConvSrcH = mFrame->height;
++        mConvSrcFmt = mFrame->format;
++        mConvDstFmt = dstFmt;
++        mConvThreads = threads;
++        ALOGD("getOutputBuffer: created video converter - %s => %s, threads = %d",
++              av_get_pix_fmt_name((AVPixelFormat)mFrame->format), av_get_pix_fmt_name(dstFmt), threads);
++    }
++
++    ScopedStepTime t(mTimes.convert);
++    if (threads == 1) {
++        sws_scale(mImgConvertCtx, mFrame->data, mFrame->linesize, 0, mFrame->height, data, linesize);
++        return C2_OK;
+     }
++    // Slice threads need swscale's frame API; the output block is wrapped, not copied.
++    if (!mConvDst && !(mConvDst = av_frame_alloc())) return C2_NO_MEMORY;
++    mConvDst->format = dstFmt;
++    mConvDst->width = mFrame->width;
++    mConvDst->height = mFrame->height;
++    for (int i = 0; i < 4; i++) {
++        mConvDst->data[i] = data[i];
++        mConvDst->linesize[i] = linesize[i];
++    }
++    mConvDst->buf[0] = av_buffer_create(data[0], 1, leptonNoFree, NULL, 0);
++    if (!mConvDst->buf[0]) return C2_NO_MEMORY;
++    int err = sws_scale_frame(mImgConvertCtx, mConvDst, mFrame);
++    av_frame_unref(mConvDst);
++    if (err < 0) {
++        ALOGE("getOutputBuffer: conversion failed: %s", av_err2str(err));
++        return C2_CORRUPTED;
++    }
++    return C2_OK;
++}
+ 
+-    return createGraphicBuffer(std::move(block), C2Rect(mFrame->width, mFrame->height));
++#if CONFIG_VAAPI
++// Lepton: how to download this session's frames. FFmpeg's map for reading
++// creates a VA image per frame and copies the surface into it (vaGetImage);
++// on Mesa that is a fresh 12 to 25 MB allocation and a single-threaded copy at
++// 4K. Mapping the surface itself (vaDeriveImage) reads Mesa's cached staging
++// copy directly. FFmpeg avoids derive for reading because on some drivers
++// (Intel's) the direct mapping is uncached, so auto uses it on Mesa only.
++void C2FFMPEGVideoDecodeComponent::decideCopyBack() {
++    AVHWFramesContext* hwfc = (AVHWFramesContext*)mFrame->hw_frames_ctx->data;
++    const char* vendor = vaQueryVendorString(((AVVAAPIDeviceContext*)hwfc->device_ctx->hwctx)->display);
++    const bool mesa = vendor && strncmp(vendor, "Mesa Gallium driver", 19) == 0;
++    mDeriveDownload = mCopyBackSetting == COPYBACK_DERIVE || (mCopyBackSetting == COPYBACK_AUTO && mesa);
++    mDeriveDecided = true;
++    ALOGI("LEPTON_VA_COPYBACK mode=%s setting=%s vendor=\"%s\"", mDeriveDownload ? "derive" : "map",
++          mCopyBackSetting == COPYBACK_AUTO ? "auto" : mCopyBackSetting == COPYBACK_MAP ? "map" : "derive",
++          vendor ? vendor : "?");
++}
++
++int C2FFMPEGVideoDecodeComponent::downloadFrameDerived() {
++    AVFrame* out = av_frame_alloc();
++    if (!out) return AVERROR(ENOMEM);
++    out->format = ((AVHWFramesContext*)mFrame->hw_frames_ctx->data)->sw_format;
++    // The mapping holds a reference to the surface until mFrame is unreferenced.
++    int err = av_hwframe_map(out, mFrame, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_DIRECT);
++    if (err == 0) err = av_frame_copy_props(out, mFrame);
++    if (err < 0) {
++        av_frame_free(&out);
++        return err;
++    }
++    av_frame_unref(mFrame);
++    av_frame_move_ref(mFrame, out);
++    av_frame_free(&out);
++    return 0;
+ }
++#endif
+ 
+ c2_status_t C2FFMPEGVideoDecodeComponent::reconfigureOutputDelay(std::vector<std::unique_ptr<C2Param>>& configUpdate) {
+     uint32_t outputDelay = mIntf->getOutputDelay();
+diff --git a/codec2/C2FFMPEGVideoDecodeComponent.h b/codec2/C2FFMPEGVideoDecodeComponent.h
+index 30543ca..8d4e281 100644
+--- a/codec2/C2FFMPEGVideoDecodeComponent.h
++++ b/codec2/C2FFMPEGVideoDecodeComponent.h
+@@ -126,10 +126,25 @@ private:
+     // Lepton: time spent in each step of a session (LEPTON_VA_TIMING).
+     struct StepTimes {
+         uint64_t frames = 0;
+-        int64_t send = 0, receive = 0, download = 0, fetch = 0, map = 0, convert = 0, process = 0;
++        int64_t send = 0, receive = 0, sync = 0, download = 0, fetch = 0, map = 0, convert = 0, process = 0;
+         int64_t firstUs = 0, lastUs = 0;
+         int width = 0, height = 0;
+     } mTimes;
++    // Lepton: copy-back download and conversion (patch 0029).
++    // debug.ffmpeg-codec2.copyback: auto (default), map or derive.
++    enum CopyBackMode { COPYBACK_AUTO, COPYBACK_MAP, COPYBACK_DERIVE };
++    CopyBackMode mCopyBackSetting = COPYBACK_AUTO;
++    bool mDeriveDecided = false;  // per session, at the first hardware frame
++    bool mDeriveDownload = false;
++    // debug.ffmpeg-codec2.convert-threads: 0 (default) auto, else 1 to 8.
++    int mConvertThreadsSetting = 0;
++    int mConvSrcW = 0, mConvSrcH = 0, mConvSrcFmt = -1, mConvDstFmt = -1, mConvThreads = 0;
++    AVFrame* mConvDst = nullptr;
++    c2_status_t convertFrame(uint8_t* const data[4], const int linesize[4]);
++#if CONFIG_VAAPI
++    void decideCopyBack();
++    int downloadFrameDerived();
++#endif
+     void noteDecodedFrame();
+     void logSessionEnd();
+ 
