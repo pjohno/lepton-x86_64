@@ -76,7 +76,35 @@ Keep a filtered `logcat` running into a file during app tests.
 VLC never uses MediaCodec for AV1, in 3.0.x or master: its `mediacodec.c` has
 no AV1 entry. GPU AV1 therefore needs another player.
 
-The 8K clip went past the service's HEVC limit (see "Known issues").
+On test-19 the 8K clip failed to configure: the service took pictures up to
+4080×4080 only. Patches 0026/0027 take the limit from VA instead (see below).
+
+**Size limits from VA (patches 0026/0027), AMD, `video-vaapi-test-20`
+(`10483e7`).** `LEPTON_VA_CAPS max=` reported these maximum sizes:
+- HEVC, HEVC 10-bit, VP9 and AV1: 8192×4352;
+- H.264: 4096×4096;
+- MPEG-2: 1920×1088.
+
+Each `c2.ffmpeg.*` interface took these sizes (`LEPTON_VA_LIMITS`).
+Android's codec list then showed the same sizes (`LEPTON_CODEC_LIMITS`, and the
+probe's `LEPTON_MEDIA_SIZE_LIMIT`). The `c2.android.*` limits were unchanged.
+
+For a 7680×4320 24 fps stream, `findDecoderForFormat` picks
+`c2.ffmpeg.hevc`, `c2.ffmpeg.vp9` and `c2.ffmpeg.av1.decoder`; H.264 has no
+decoder, as VA reports. With hardware decoding off, nothing changes: no VA
+query, no 8K decoder. The other probe results were the same as test-19.
+
+In VLC on test-20, high-resolution 10-bit clips decode on the GPU without
+errors, but copy-back is too slow to watch:
+
+| Clip | Service | Delivered | Picture (user) |
+| --- | --- | --- | --- |
+| HEVC Main10 8K 24 fps HLG | vaapi, 528 hw / 0 sw frames in 88 s | about 6 fps | froze |
+| HEVC Main10 4K 59.94 fps HDR10 (PQ) | vaapi, 1340 hw / 0 sw frames in 63 s | about 21 fps | blank: VLC drops late frames |
+| HEVC Main10 1080p | vaapi | not measured | plays |
+
+The limit is the service's CPU work for each frame: download from the GPU, then
+P010 to 8-bit conversion on one thread (see "Known issues").
 
 **Not verified:**
 - 10-bit output against a reference: Android has no HEVC Main10 software decoder
@@ -87,6 +115,7 @@ The 8K clip went past the service's HEVC limit (see "Known issues").
 - VP8, MPEG-2 and VC-1 content;
 - real apps other than VLC (ExoPlayer-based players, games), and AV1 in a real
   app;
+- full-rate playback above 1080p 10-bit, which copy-back is too slow for;
 - long playback.
 
 ## Enabling
@@ -147,6 +176,20 @@ decoded, by FFmpeg in software inside the service. It is logged as such (see
 streams either. Mesa is built with decoders only:
 `-Dvideo-codecs=h264dec,h265dec,vp9dec,av1dec,mpeg12dec,vc1dec`. H.264 and
 H.265 are patent-encumbered; no hardware encoders are built.
+
+**Size limits (patches 0026/0027).** When hardware decoding is on and VA decodes
+the codec, the service queries each VA profile's largest surface
+(`VASurfaceAttribMaxWidth`/`MaxHeight`) and uses it as the picture-size range.
+Otherwise it uses 4080×4080, as before. When that size is beyond level 5.x,
+level 6 is also listed. Levels 6.1 and 6.2 are not listed, because VA reports no
+frame rate.
+
+Android takes codec limits from the static `media_codecs` XML only. Patch 0027
+(`frameworks/av`, `Codec2InfoBuilder`) replaces the XML `size-range` of
+`c2.ffmpeg.*` video decoders with the component's range. It scales
+`block-count-range` and `blocks-per-second-range` by the same factor, keeping
+the XML's frame rate at the largest size. Logged as `LEPTON_CODEC_LIMITS`.
+Other codecs keep their XML limits.
 
 ## Diagnostics
 
@@ -244,6 +287,8 @@ It is future work.
 | 0023 | `external/stagefright-plugins` | copy-back in the surface's own format (bit-exact on Mesa) |
 | 0024 | `external/stagefright-plugins` | VA capability query and gating; session diagnostics |
 | 0025 | `external/stagefright-plugins` | list HEVC Main10 when VA decodes `HEVC10` |
+| 0026 | `external/stagefright-plugins` | picture-size range (and level 6) from VA's largest surface |
+| 0027 | `frameworks/av` | `c2.ffmpeg.*` video decoders' listed size limits from the component, not the XML |
 | experimental/0022 | `external/minigbm` | zero-copy NV12 layout; not applied |
 
 **Why 0023:** asking Mesa's `vaGetImage` for a format other than the surface's
@@ -293,7 +338,15 @@ On Intel GPUs supported by both drivers, libva tries iHD before i965. On the UHD
   - HDR profiles and metadata in Codec2;
   - an HDR dataspace through SurfaceFlinger;
   - 10-bit PQ through Lepton's display bridge.
-- **Size limits:** `media_codecs_ffmpeg_c2.xml` caps HEVC at 4096×4096 and AV1
-  at 2048×2048, below what the GPU decodes. Larger streams go to the app's own
-  software decoder: an 8K HEVC clip was choppy in VLC. These limits could come
-  from VA (`vaQuerySurfaceAttributes`); this has not been done.
+- **Copy-back above 1080p 10-bit:** the service downloads each frame from the
+  GPU and converts P010 to 8-bit on one thread (`threads = 1`). In VLC, 4K
+  59.94 fps HDR10 ran at about 21 fps and showed a blank screen, and 8K 24 fps
+  ran at about 6 fps and looked frozen. Not pursued:
+  - a multithreaded conversion (swscale slice threads) might reach 4K60;
+  - zero-copy would avoid the copy (broken; see above).
+- **VLC hang after a 4K clip:** opening another clip while the 4K60 clip lagged
+  made VLC stop responding. Android killed it ("app not responding") and VLC
+  restarted. Not investigated.
+- **App sessions in tests:** with `run-apk.sh --app --until-exit`, closing
+  VLC's window does not end the session, because VLC keeps running in the
+  background. To end it, run `am force-stop org.videolan.vlc` in the instance.
