@@ -66,6 +66,7 @@ public final class MediaProbe {
                 // Codec matrix: content compared with Android's software
                 // decoders, Surface output, repeat, seek/flush, resolution change.
                 codecMatrix(activity);
+                throughput(activity);
                 File clip = new File(activity.getCacheDir(), "probe.mp4");
                 try (InputStream in = activity.getAssets().open("probe.mp4");
                      FileOutputStream out = new FileOutputStream(clip)) {
@@ -515,7 +516,40 @@ public final class MediaProbe {
         // No VA-API driver decodes 4:4:4: exercises FFmpeg's software fallback
         // inside the service (LEPTON_VA_SESSION decode=software).
         { "probe-h264-444.mp4", "video/avc", "h264-high444" },
+        // Copy-back at 1080p 10-bit and 4K (LEPTON_MEDIA_THROUGHPUT as well).
+        { "probe-hevc10-1080.mp4", "video/hevc", "hevc-main10-1080p" },
+        { "probe-h264-2160.mp4", "video/avc", "h264-2160p" },
+        { "probe-hevc-2160.mp4", "video/hevc", "hevc-main-2160p" },
+        { "probe-hevc10-2160.mp4", "video/hevc", "hevc-main10-2160p" },
+        { "probe-vp9-2160.webm", "video/x-vnd.on2.vp9", "vp9-2160p" },
+        { "probe-av1-2160.mp4", "video/av01", "av1-2160p" },
     };
+
+    // Clips decoded as fast as possible, without CRCs: frames per second to
+    // ByteBuffers and to a Surface, with the decoder Android selects.
+    private static final String[][] THROUGHPUT = {
+        { "probe1080.mp4", "video/avc", "h264-1080p" },
+        { "probe-hevc10-1080.mp4", "video/hevc", "hevc-main10-1080p" },
+        { "probe-h264-2160.mp4", "video/avc", "h264-2160p" },
+        { "probe-hevc-2160.mp4", "video/hevc", "hevc-main-2160p" },
+        { "probe-hevc10-2160.mp4", "video/hevc", "hevc-main10-2160p" },
+        { "probe-vp9-2160.webm", "video/x-vnd.on2.vp9", "vp9-2160p" },
+        { "probe-av1-2160.mp4", "video/av01", "av1-2160p" },
+    };
+
+    private static void throughput(Activity activity) {
+        for (String[] clip : THROUGHPUT) {
+            for (boolean toSurface : new boolean[] { false, true }) {
+                Run run = decodeClip(activity, clip[0], clip[1], null, toSurface, -1, 0, false);
+                Log.i(TAG, "LEPTON_MEDIA_THROUGHPUT clip=" + clip[2] + " mode=" + (toSurface ? "surface" : "buffer") +
+                    " decoder=" + run.decoder + " frames=" + run.frames +
+                    (toSurface ? " surface_images=" + run.surfaceImages : "") + " ms=" + run.ms +
+                    " fps=" + (run.ms > 0 ? String.format(java.util.Locale.ROOT, "%.1f", run.frames * 1000.0 / run.ms) : "0") +
+                    (run.error != null ? " error=\"" + run.error + "\"" : ""));
+                android.os.SystemClock.sleep(20);
+            }
+        }
+    }
 
     private static final class Run {
         String decoder = "?";
@@ -542,6 +576,13 @@ public final class MediaProbe {
     // CRCs that follow in afterSeek. Never throws; errors go to Run.error.
     private static Run decodeClip(Activity activity, String asset, String mime, String decoder,
                                   boolean toSurface, int seekAfter, long seekUs) {
+        return decodeClip(activity, asset, mime, decoder, toSurface, seekAfter, seekUs, true);
+    }
+
+    // hash false: no luma CRCs (throughput runs; hashing a 4K frame in Java
+    // takes longer than decoding it).
+    private static Run decodeClip(Activity activity, String asset, String mime, String decoder,
+                                  boolean toSurface, int seekAfter, long seekUs, boolean hash) {
         Run run = new Run();
         MediaExtractor extractor = new MediaExtractor();
         MediaCodec codec = null;
@@ -603,7 +644,7 @@ public final class MediaProbe {
                 outputEnd = (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
                 if (info.size > 0 || (toSurface && !outputEnd)) {
                     run.frames++;
-                    if (!toSurface) {
+                    if (!toSurface && hash) {
                         android.media.Image image = codec.getOutputImage(output);
                         if (image != null) {
                             if (image.getFormat() == 0x36 /* YCBCR_P010 */) run.bits = 10;
@@ -693,6 +734,10 @@ public final class MediaProbe {
                 (sel.error != null ? " error=\"" + sel.error + "\"" : "") +
                 (surf != null && surf.error != null ? " surface_error=\"" + surf.error + "\"" : "") +
                 (ref != null && ref.error != null ? " reference_error=\"" + ref.error + "\"" : ""));
+            if (result.equals("NO_REFERENCE") || result.equals("NOT_COMPARED")) {
+                // Compared off-device (host FFmpeg) and between builds.
+                Log.i(TAG, "LEPTON_MEDIA_CODEC_CRCS clip=" + name + " selected=" + crcList(sel.crcs));
+            }
             if (result.equals("MISMATCH")) {
                 // Full per-frame CRC lists, to tell a dropped or extra frame
                 // (lists shifted) from changed pixels.
