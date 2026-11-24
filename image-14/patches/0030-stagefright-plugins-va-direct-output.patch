@@ -1,4 +1,4 @@
-Lepton: VA-API direct output and GPU copy-back conversion (test-24, experimental)
+Lepton: VA-API direct output and GPU copy-back conversion (test-25, experimental)
 
 Three ways to deliver hardware-decoded frames, chosen per decoder session:
 
@@ -12,7 +12,9 @@ Three ways to deliver hardware-decoded frames, chosen per decoder session:
   no CPU conversion. Fixes to upstream's VPP mode:
   * no 64-alignment of the advertised picture size; the buffer is aligned,
     the blit covers the picture only and the output is cropped to it;
-  * same matrix and range in and out (as copy-back), from the frame's tags;
+  * same matrix in and out (as copy-back), from the frame's tags, and both
+    sides declared full range so no driver remaps values (Mesa 26.0's VA
+    post-processing otherwise squeezes limited range again);
   * wait for the decode before the blit and for the blit before the buffer
     reaches the framework; keep the decoded surface until the blit is done;
   * request the same buffers as copy-back (CPU-mappable YV12): minigbm
@@ -26,7 +28,9 @@ Three ways to deliver hardware-decoded frames, chosen per decoder session:
 
 Diagnostics: LEPTON_VA_SESSION output=, LEPTON_VA_DIRECT, LEPTON_VA_DIRECT_END,
 LEPTON_VA_VPP_END, LEPTON_VA_SLOW, LEPTON_VA_PERCENTILES, LEPTON_VA_DEADLINE.
-Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|frame-error.
+Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|frame-error;
+with direct output, pixels compares two frames of each session with the
+decoded surface (LEPTON_VA_DIRECT_PIXELS).
 
 --- a/codec2/C2FFMPEGVideoDecodeComponent.cpp
 +++ b/codec2/C2FFMPEGVideoDecodeComponent.cpp
@@ -147,7 +151,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
      if (mFilterGraph) {
          av_freep(&mFilterGraph->opaque);
          avfilter_graph_free(&mFilterGraph);
-@@ -678,8 +732,23 @@
+@@ -678,8 +732,25 @@
      VASurfaceID src_surface = (VASurfaceID)(uintptr_t)src->data[3];
      VASurfaceID dst_surface = (VASurfaceID)(uintptr_t)dst->data[3];
  
@@ -157,8 +161,10 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
 -    VARectangle dst_rect = {0, 0, (uint16_t)dst->width, (uint16_t)dst->height};
 +    VARectangle dst_rect = src_rect;
 +
-+    // Same matrix and range in and out, as the copy-back conversion: only the
-+    // layout and bit depth change, and the stream's colour tags stay valid.
++    // Same matrix in and out, as the copy-back conversion: only the layout and
++    // bit depth change, and the stream's colour tags stay valid. Both sides
++    // are declared full range so that no driver remaps the values (Mesa
++    // 26.0's VA post-processing squeezes limited range a second time).
 +    VAProcColorStandardType standard;
 +    switch (src->colorspace) {
 +        case AVCOL_SPC_BT709: standard = VAProcColorStandardBT709; break;
@@ -168,11 +174,11 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
 +        case AVCOL_SPC_BT2020_NCL: standard = VAProcColorStandardBT2020; break;
 +        default: standard = src->height >= 720 ? VAProcColorStandardBT709 : VAProcColorStandardBT601; break;
 +    }
-+    const uint8_t range = src->color_range == AVCOL_RANGE_JPEG ? VA_SOURCE_RANGE_FULL : VA_SOURCE_RANGE_REDUCED;
++    const uint8_t range = VA_SOURCE_RANGE_FULL;
  
      // 4. Setup Pipeline Parameters
      VAProcPipelineParameterBuffer params = {};
-@@ -688,9 +757,10 @@
+@@ -688,9 +759,10 @@
      params.output_region = &dst_rect;
      params.output_background_color = 0xFF000000;
      params.filter_flags = VA_FILTER_SCALING_DEFAULT;
@@ -186,7 +192,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
  
      VABufferID pipeline_buf = VA_INVALID_ID;
      vas = vaCreateBuffer(display, mVppContextId, VAProcPipelineParameterBufferType,
-@@ -719,6 +789,60 @@
+@@ -719,6 +791,108 @@
      return 0;
  }
  
@@ -226,6 +232,10 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
 +        }
 +    }
 +    if (ret >= 0) ret = av_frame_copy_props(out, decoded);
++    if (ret >= 0 && mVppValidation == VppValidation::Pixels &&
++            (mDirectFrames == 5 || mDirectFrames == 30)) {
++        compareDirectPlanes(decoded, (VASurfaceID)(uintptr_t)out->data[3]);
++    }
 +    if (ret >= 0) {
 +        if (!mDirectFrames) {
 +            ALOGI("LEPTON_VA_DIRECT input=%s output=%s picture=%dx%d buffer=%dx%d",
@@ -244,10 +254,54 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
 +    return ret;
 +}
 +
++// Lepton (vpp-validation=pixels): compare a direct-output buffer, read on the
++// CPU, with the decoded surface downloaded by FFmpeg.
++void C2FFMPEGVideoDecodeComponent::compareDirectPlanes(AVFrame* decoded, VASurfaceID surface) {
++    auto held = mHeldSurfaces.find(surface);
++    if (held == mHeldSurfaces.end() || !held->second) return;
++    AVFrame* ref = av_frame_alloc();
++    if (!ref) return;
++    if (av_hwframe_transfer_data(ref, decoded, 0) < 0) { av_frame_free(&ref); return; }
++    const bool tenBit = ref->format == AV_PIX_FMT_P010;
++    C2GraphicView view = held->second->map().get();
++    if (view.error() != C2_OK) { av_frame_free(&ref); return; }
++    const C2PlanarLayout layout = view.layout();
++    const int planes[3] = { C2PlanarLayout::PLANE_Y, C2PlanarLayout::PLANE_U, C2PlanarLayout::PLANE_V };
++    for (int c = 0; c < 3; ++c) {
++        const int sub = c > 0;
++        const int w = decoded->width >> sub, h = decoded->height >> sub;
++        const uint8_t* dst = view.data()[planes[c]];
++        const int rowInc = layout.planes[planes[c]].rowInc, colInc = layout.planes[planes[c]].colInc;
++        int peak = 0; int64_t sum = 0, sumAbs = 0, inexact = 0;
++        for (int y = 0; y < h; ++y) {
++            for (int x = 0; x < w; ++x) {
++                int expect;
++                if (tenBit) {
++                    const uint16_t* row = (const uint16_t*)(ref->data[sub] + y * ref->linesize[sub]);
++                    expect = std::min(255, (row[sub ? 2 * x + (c - 1) : x] + 128) >> 8);
++                } else {
++                    expect = ref->data[sub][y * ref->linesize[sub] + (sub ? 2 * x + (c - 1) : x)];
++                }
++                const int d = dst[y * rowInc + x * colInc] - expect;
++                sum += d; sumAbs += std::abs(d); inexact += d != 0;
++                peak = std::max(peak, std::abs(d));
++            }
++        }
++        const int cx = w / 3, cy = h / 2;
++        int expectMid = tenBit ? (((const uint16_t*)(ref->data[sub] + cy * ref->linesize[sub]))[sub ? 2 * cx + (c - 1) : cx] + 128) >> 8
++                               : ref->data[sub][cy * ref->linesize[sub] + (sub ? 2 * cx + (c - 1) : cx)];
++        ALOGI("LEPTON_VA_DIRECT_PIXELS frame=%" PRIu64 " plane=%c inexact=%" PRId64 "/%d peak=%d mean=%.3f mean_abs=%.3f"
++              " sample=%d expect=%d rowInc=%d colInc=%d",
++              mDirectFrames, "YUV"[c], inexact, w * h, peak, (double)sum / (w * h), (double)sumAbs / (w * h),
++              dst[cy * rowInc + cx * colInc], expectMid, rowInc, colInc);
++    }
++    av_frame_free(&ref);
++}
++
  void C2FFMPEGVideoDecodeComponent::destroyVppContext() {
      if (!mCtx || !mCtx->hw_frames_ctx) return;
  
-@@ -746,49 +870,47 @@
+@@ -746,49 +920,47 @@
  #if CONFIG_VAAPI
      if (mCtx->hw_frames_ctx && mUtils->isVPPMode()) {
          AVFrame* tempFrame = av_frame_alloc();
@@ -331,7 +385,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
                  } else {
                      // Move tempFrame to mFrame efficiently
                      av_frame_move_ref(mFrame, tempFrame);
-@@ -955,12 +1077,21 @@
+@@ -955,12 +1127,21 @@
  #if CONFIG_VAAPI
      if (mFrame->format == AV_PIX_FMT_VAAPI) {
          if (!mDeriveDecided) decideCopyBack();
@@ -356,7 +410,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
          }
          if (mDeriveDownload) {
              ScopedStepTime t(mTimes.download);
-@@ -1048,6 +1179,16 @@
+@@ -1048,6 +1229,16 @@
          return NULL;
      }
  
@@ -373,7 +427,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
      return createGraphicBuffer(std::move(block), C2Rect(mFrame->width, mFrame->height));
  }
  
-@@ -1135,6 +1276,197 @@
+@@ -1135,6 +1326,197 @@
            vendor ? vendor : "?");
  }
  
@@ -571,7 +625,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
  int C2FFMPEGVideoDecodeComponent::downloadFrameDerived() {
      AVFrame* out = av_frame_alloc();
      if (!out) return AVERROR(ENOMEM);
-@@ -1272,6 +1604,10 @@
+@@ -1272,6 +1654,10 @@
  
  c2_status_t C2FFMPEGVideoDecodeComponent::onStop() {
      ALOGD("onStop");
@@ -582,7 +636,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
      return C2_OK;
  }
  
-@@ -1288,6 +1624,10 @@
+@@ -1288,6 +1674,10 @@
  
  c2_status_t C2FFMPEGVideoDecodeComponent::onFlush_sm() {
      ALOGD("onFlush_sm");
@@ -593,7 +647,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
      if (mCtx && avcodec_is_open(mCtx)) {
          // Make sure that the next buffer output does not still
          // depend on fragments from the last one decoded.
-@@ -1367,8 +1707,17 @@
+@@ -1367,8 +1757,17 @@
          mTimes.lastUs = now;
      }
  
@@ -611,7 +665,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
          work->worklets.front()->output.configUpdate = std::move(configUpdate);
          work->worklets.front()->output.buffers.clear();
          if (buffer) {
-@@ -1378,8 +1727,9 @@
+@@ -1378,8 +1777,9 @@
          work->workletsProcessed = 1u;
          work->result = C2_OK;
      } else {
@@ -622,7 +676,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
              work->worklets.front()->output.configUpdate = std::move(configUpdate);
              work->worklets.front()->output.flags = (C2FrameData::flags_t)0;
              work->worklets.front()->output.buffers.clear();
-@@ -1405,7 +1755,24 @@
+@@ -1405,7 +1805,24 @@
      const std::unique_ptr<C2Work> &work,
      const std::shared_ptr<C2BlockPool> &pool
  ) {
@@ -648,7 +702,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
      size_t inSize = 0u;
      bool eos = (work->input.flags & C2FrameData::FLAG_END_OF_STREAM);
      C2ReadView rView = mDummyReadView;
-@@ -1670,8 +2037,15 @@
+@@ -1670,8 +2087,15 @@
  
      while (!block) {
          if (mAvailableSurfaces.empty()) {
@@ -665,7 +719,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
              if (err != C2_OK) {
                  ALOGE("getBufferVAAPI[%p]: failed to fetch graphic block %d x %d (%#x) err = %d",
                        hwfc, mSurfaceWidth, mSurfaceHeight, mUtils->getPixelFormat(true), err);
-@@ -1769,10 +2143,26 @@
+@@ -1769,10 +2193,26 @@
              descriptor.objects[0].drm_format_modifier = crosHandle->format_modifier;
  
              descriptor.layers[0].drm_format = crosHandle->format;
@@ -692,7 +746,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
          } else {
              // Determine Bytes Per Pixel (BPP)
              int bpp = 1;
-@@ -1810,12 +2200,12 @@
+@@ -1810,12 +2250,12 @@
          // Lepton: one line per imported buffer, to compare gralloc's layout
          // with what the VA driver expects.
          ALOGI("getBufferVAAPI: import buffer %d: %ux%u fourcc %#x drm %#x modifier %#" PRIx64
@@ -708,7 +762,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
          vas = vaCreateSurfaces(hwctx->display, mUtils->getVAFormat(),
                                 mSurfaceWidth, mSurfaceHeight, &surfaceId, 1, attributes, 2);
  
-@@ -1875,6 +2265,21 @@
+@@ -1875,6 +2315,21 @@
  
      auto p_it = mPendingSurfaces.find(surfaceId);
  
@@ -740,19 +794,20 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
  
  #include <deque>
  #include <unordered_map>
-@@ -97,6 +98,11 @@
+@@ -97,6 +98,12 @@
      void destroyVppContext();    
      // The optimized converter function
      int vaapi_vpp_convert(AVFrame *src, AVFrame *dst);
 +    // Lepton: direct output (VPP mode) diagnostics and fallback.
 +    int outputDirect(AVFrame* decoded);
++    void compareDirectPlanes(AVFrame* decoded, VASurfaceID surface);
 +    bool mDirectFailed = false;
 +    uint64_t mDirectFrames = 0, mDirectCopyBackFrames = 0;
 +    int64_t mDirectSubmitUs = 0, mDirectSyncUs = 0;
  #endif
  
  private:
-@@ -128,6 +134,13 @@
+@@ -128,6 +135,13 @@
          uint64_t frames = 0;
          int64_t send = 0, receive = 0, sync = 0, download = 0, fetch = 0, map = 0, convert = 0, process = 0;
          int64_t firstUs = 0, lastUs = 0;
@@ -766,7 +821,7 @@ Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|fram
          int width = 0, height = 0;
      } mTimes;
      // Lepton: copy-back download and conversion (patch 0029).
-@@ -144,6 +157,22 @@
+@@ -144,6 +158,22 @@
  #if CONFIG_VAAPI
      void decideCopyBack();
      int downloadFrameDerived();
