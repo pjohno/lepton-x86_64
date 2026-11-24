@@ -135,7 +135,8 @@ for name in \
   "$IMAGE/patches/0026-stagefright-plugins-va-max-picture-size.patch" \
   "$IMAGE/patches/0027-frameworks-av-codec2-ffmpeg-size-limits.patch" \
   "$IMAGE/patches/0028-stagefright-plugins-copy-back-step-timing.patch" \
-  "$IMAGE/patches/0029-stagefright-plugins-copy-back-download.patch"; do
+  "$IMAGE/patches/0029-stagefright-plugins-copy-back-download.patch" \
+  "$IMAGE/patches/0030-stagefright-plugins-va-direct-output.patch"; do
   [[ -f "$name" ]] || err "Missing required file: $name"
 done
 podman image exists "$BUILDER" || err "Missing builder image: $BUILDER"
@@ -462,6 +463,7 @@ apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0
 apply_custom /workspace/output/frameworks/av /workspace/patches/0027-frameworks-av-codec2-ffmpeg-size-limits.patch Codec2FfmpegSizeLimits
 apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0028-stagefright-plugins-copy-back-step-timing.patch StagefrightCopyBackTiming
 apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0029-stagefright-plugins-copy-back-download.patch StagefrightCopyBackDownload
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0030-stagefright-plugins-va-direct-output.patch StagefrightVaDirectOutput
 INNER
   touch "$STATE/patches.done"
   rm -- "$STATE/patches.started"

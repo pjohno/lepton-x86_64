@@ -130,6 +130,24 @@ function lepton_video_hwaccel_mode()
         print vaapi
     fi
 }
+# LEPTON_VIDEO_HWACCEL_OUTPUT=copyback|vpp|direct, if this image's FFmpeg
+# Codec2 service has that path (patch 0030); otherwise copyback, with a note.
+LEPTON_FFMPEG_SERVICE=vendor/bin/hw/android.hardware.media.c2-ffmpeg-service
+function lepton_video_hwaccel_output()
+{
+    local REQUESTED="${LEPTON_VIDEO_HWACCEL_OUTPUT:-copyback}" MARKER
+    case "${REQUESTED}" in
+        copyback) print copyback; return ;;
+        vpp) MARKER='debug.ffmpeg-codec2.copyback-vpp' ;;
+        direct) MARKER='LEPTON_VA_DIRECT_END' ;;
+        *) print copyback; return ;;
+    esac
+    if lepton_image_has_marker "${LEPTON_FFMPEG_SERVICE}" "${MARKER}"; then
+        print "${REQUESTED}"
+    else
+        print copyback
+    fi
+}
 function lepton_video_hwaccel_props()
 {
     local MODE
@@ -142,17 +160,21 @@ function lepton_video_hwaccel_props()
         # List only the video codecs the VA-API driver can decode (the service
         # queries the driver); the others stay on Android's software decoders.
         props_echo "debug.ffmpeg-codec2.hwaccel.force=true"
-        # Copy-back: FFmpeg decodes into its own VA surfaces and the frames
-        # are copied into Android's buffers. Zero-copy (the service's DRM PRIME
-        # mode) is a development option only: the picture is wrong with iHD,
-        # SurfaceFlinger aborts on AMD, and i965 cannot import the buffers.
-        if [[ "${LEPTON_VIDEO_HWACCEL_ZEROCOPY:-false}" == true ]]; then
-            props_echo "debug.ffmpeg-codec2.hwaccel.drm=true"
-            println "Hardware video decoding: zero-copy (LEPTON_VIDEO_HWACCEL_ZEROCOPY) is a development option and known to be broken"
-        else
-            props_echo "debug.ffmpeg-codec2.hwaccel.drm=false"
+        # How decoded frames reach Android's buffers (FFmpeg always decodes
+        # into its own VA surfaces):
+        #   copyback  the CPU downloads and converts each frame (default);
+        #   vpp       the GPU converts 10-bit BT.709 frames to 8-bit, then copy-back;
+        #   direct    the GPU converts each frame into Android's buffer itself
+        #             (the service's DRM PRIME "VPP mode", YV12; no readback).
+        local OUTPUT
+        OUTPUT="$(lepton_video_hwaccel_output)"
+        if [[ "${OUTPUT}" != "${LEPTON_VIDEO_HWACCEL_OUTPUT:-copyback}" ]]; then
+            println "Hardware video decoding: LEPTON_VIDEO_HWACCEL_OUTPUT=${LEPTON_VIDEO_HWACCEL_OUTPUT} is not available in this image (copyback, vpp or direct); using copyback"
         fi
-        println "Hardware video decoding (VA-API, experimental): on, $(lepton_video_va_driver) using $(lepton_gpu_render_node 2>/dev/null || print 'the default render node')"
+        props_echo "debug.ffmpeg-codec2.hwaccel.drm=$([[ "${OUTPUT}" == direct ]] && print true || print false)"
+        props_echo "debug.ffmpeg-codec2.pixel_format=$([[ "${OUTPUT}" == direct ]] && print YUV_420_PLANER || print YUV_420)"
+        props_echo "debug.ffmpeg-codec2.copyback-vpp=$([[ "${OUTPUT}" == vpp ]] && print true || print false)"
+        println "Hardware video decoding (VA-API, experimental): on, $(lepton_video_va_driver) using $(lepton_gpu_render_node 2>/dev/null || print 'the default render node'); output ${OUTPUT}"
     else
         props_echo "debug.ffmpeg-codec2.rank=${LEPTON_FFMPEG_RANK_DISABLED}"
         props_echo "media.sf.hwaccel=0"
