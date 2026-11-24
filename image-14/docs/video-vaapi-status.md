@@ -1,31 +1,35 @@
 # Hardware video decoding (VA-API): status
 
-Status on 2026-11-24 for branch `feature/video-vaapi`. The branch started from
-`main` at `39d77f3` and is not merged. The full description, results and
-testing steps are in [video-vaapi.md](video-vaapi.md).
+Status on 2026-11-24 for branch `feature/video-vaapi`, ready for review and
+not merged. The branch started from `main` at `39d77f3`. The full
+description, results and testing steps are in [video-vaapi.md](video-vaapi.md).
 
 ## Where it stands
 
-- **Off by default.** `LEPTON_VIDEO_HWACCEL=true` turns it on. When it is off,
-  Android's software decoders and the audio path are unchanged (checked on
-  test-25: `c2.android.*` decoders, no service activity, audio and video smoke
-  tests pass, ANGLE on Vulkan rendering).
-- **Hardware decoding** of H.264, HEVC (Main and Main10), VP9 and, on AMD, AV1,
-  on Intel UHD 630 (iHD or i965) and AMD RX 6700 XT (Mesa radeonsi). Only the
-  codecs and the HEVC Main10 profile the VA driver reports are offered;
-  unsupported streams fall back to FFmpeg software inside the service, logged.
-- **Three output paths** (`LEPTON_VIDEO_HWACCEL_OUTPUT`):
-  - `copyback` (default): bit-exact against Android's decoders on both GPUs;
-  - `direct` (new, patch 0030): the GPU converts each frame into Android's
-    buffer. Bit-exact on Intel; within about one code on AMD (Mesa 26.0.8);
-  - `vpp` (experimental): GPU 10-to-8-bit conversion before copy-back.
-- **4K60 10-bit** (59.94 fps HEVC Main10, VLC): direct output plays at full
-  rate with no late pictures on the UHD 630 and the RX 6700 XT, where copy-back
-  reaches about 20 and 42 fps. **Not yet measured on the Steam Deck**
-  (test-25 is ready for it).
-- **Robust:** repeat, flush, seek, resolution change (as before), Surface and
-  ByteBuffer output; no growth of service memory or open files over repeated
-  sessions.
+- **Opt-in.** `LEPTON_VIDEO_HWACCEL=true` turns it on; it is off by default.
+  When it is off, Android's software decoders, audio and rendering are
+  unchanged (checked on the release build, test-26).
+- **Hardware decoding** of H.264, HEVC (Main and Main10), VP9 and, on AMD, AV1
+  with Intel iHD/i965 and AMD Mesa radeonsi. Only the codecs and the HEVC Main10
+  profile the VA driver reports are offered, so apps that check profiles now
+  find a Main10 decoder; unsupported streams are decoded by FFmpeg in software
+  inside the service, and logged.
+- **Direct output is the default** when it is on: the GPU converts each frame
+  straight into Android's buffer, with no readback. Copy-back
+  (`LEPTON_VIDEO_HWACCEL_OUTPUT=copyback`) remains, for older images and as the
+  automatic per-session fallback when direct output fails.
+- **4K59.94 HEVC Main10 in VLC with direct output:**
+  - Intel UHD 630: 60.1 fps, 0 late pictures, 0 SurfaceFlinger drops;
+  - AMD RX 6700 XT: 60.1 fps, 0 late pictures;
+  - Steam Deck: 60.1 fps in a complete run (56.4 fps in a first run with
+    start-up), all 3,597 frames direct, smooth on screen; late-picture and
+    displayed-frame counts were not captured there.
+  With copy-back none of the three keeps up.
+- **Correct output:** direct output is bit-exact on Intel; on AMD (Mesa
+  26.0.8) it is within about one code, more next to sharp colour edges.
+  Copy-back is bit-exact on both.
+- **Robust:** repeat, flush, seek, forced fallback, Surface and ByteBuffer
+  output; the service's open files and memory stay flat over repeated sessions.
 
 ## What was done
 
@@ -35,22 +39,21 @@ testing steps are in [video-vaapi.md](video-vaapi.md).
 | `3b13fd3`–`12c536d` | VA capability gating and session logs (0024), decode-only Mesa, probe codec matrix, video-engine sampler |
 | `eaff44b`–`6b900e6` | HEVC Main10 listed when VA decodes it (0025) |
 | `10483e7`–`57b7799` | Decoder size limits from VA, up to 8K (0026, 0027) |
-| `387203f`–`9fc072c` | Copy-back step timing (0028); faster copy-back (0029); 4K and 10-bit probe clips; throughput mode |
-| `0f51f42`–now | Direct output and GPU copy-back conversion (0030); `LEPTON_VIDEO_HWACCEL_OUTPUT` replaces the broken zero-copy option; experimental minigbm patch removed |
+| `387203f`–`9fc072c` | Copy-back step timing (0028); faster copy-back (0029) |
+| `0f51f42`–`86eff5a` | Direct output (0030), launch option replacing the broken zero-copy option, licences, docs |
+| `f6e768f` and later | Direct output by default; GPU copy-back conversion and experiment hooks removed; safe minigbm handle checks (0021); release docs |
 
-## Still to do
+## Known limitations
 
-1. **Steam Deck with direct output** (test-25): compare `copyback`, `vpp` and
-   `direct` on the 4K59.94 Main10 clip.
-2. **After the Deck result:** decide whether `direct` becomes the default output
-   when hardware decoding is on, and drop `vpp` and the AMD experiment's test
-   hooks from 0030 if direct output supersedes them.
-3. **HDR is shown as SDR** on every path (no tone mapping).
+1. **HDR is shown as SDR** (no tone mapping) on every path.
+2. **4K60 is not guaranteed** on other hardware, with other apps, or while a
+   game loads the GPU; the Steam Deck has about 4 ms of spare time per frame.
+3. **Direct output on AMD is not bit-exact** with the image's Mesa 26.0.8.
 4. **Resolution change:** one frame is lost where an H.264 stream changes
-   resolution mid-stream (the service's frame pairing).
+   resolution mid-stream.
 5. **Not tested:** newer Intel GPUs, other AMD generations; VP8, MPEG-2, VC-1,
-   VP9 Profile 2 and AV1 10-bit content; real apps other than VLC; long
-   playback; direct output while a game loads the GPU.
-6. **Existing test failures, also on `main`:** the same 16 test scripts fail on
-   both (usage-only scripts run without arguments, runtime-dependent tests,
+   VP9 Profile 2 and AV1 10-bit content; real apps other than VLC; playback
+   longer than a few minutes.
+6. **Existing test failures, also on `main`:** the same 16 test scripts fail
+   on both (scripts that need arguments or a running instance,
    `test-local-display`, `test-customize-package`, `test-customize-inject`).

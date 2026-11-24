@@ -5,34 +5,34 @@ Android 14 in Lepton decodes video with Android's software Codec2 decoders
 when enabled, uses the GPU's video engine through VA-API. It is built into the
 image and **off by default** (`LEPTON_VIDEO_HWACCEL=true` turns it on).
 
-Decoded frames reach Android in one of three ways, chosen with
-`LEPTON_VIDEO_HWACCEL_OUTPUT` (see "Enabling"):
+When it is on, decoded frames reach Android in one of two ways
+(`LEPTON_VIDEO_HWACCEL_OUTPUT`, see "Enabling"):
 
-- **copy-back** (default): the CPU downloads each frame and converts it;
-- **direct** (patch 0030): the GPU converts each frame straight into Android's
-  buffer; no readback and no CPU conversion. The fastest path: real-time 4K60
-  10-bit on the Intel UHD 630 and the RX 6700 XT, where copy-back is not;
-- **vpp** (patch 0030, experimental): the GPU converts 10-bit BT.709 frames
-  to 8-bit, then copy-back.
+- **direct** (default, patch 0030): the GPU converts each frame straight into
+  Android's buffer; no readback and no CPU conversion. It played a 4K59.94 HEVC
+  Main10 clip at full rate on an Intel UHD 630, an AMD RX 6700 XT and a Steam
+  Deck, where copy-back could not;
+- **copy-back**: the CPU downloads each frame and converts it. Used when asked
+  for, on images without direct output, and automatically for the rest of a
+  session whenever direct output fails.
 
-HDR output is not included.
+HDR output is not included: 10-bit video is shown as 8-bit SDR.
 
 ## How it works
 
 ```
 app (MediaCodec) → Codec2 → c2.ffmpeg.* (FFmpeg service) → FFmpeg hwaccel → VA-API driver → GPU video engine
                                    │                                               (decodes into FFmpeg's own VA surfaces)
-                                   ├─ copy-back: VA surface → CPU (map) → swscale → Android buffer (YV12)
-                                   ├─ vpp:       VA surface → GPU (P010 → NV12) → CPU (map) → swscale → Android buffer
-                                   └─ direct:    VA surface → GPU video processor → Android buffer (YV12, imported as a VA surface)
+                                   ├─ direct:    VA surface → GPU video processor → Android buffer (YV12, imported as a VA surface)
+                                   └─ copy-back: VA surface → CPU (map) → swscale → Android buffer (YV12)
 ```
 
 | Term | Meaning | In this release |
 | --- | --- | --- |
 | Hardware decoding | The GPU's video engine decodes the bitstream into VA surfaces in GPU memory | yes |
 | Copy-back | Each decoded surface is mapped for the CPU and copied, converted to 8-bit YV12, into an ordinary Android buffer (ByteBuffer or Surface) | yes |
-| GPU VPP | The GPU converts formats through VA's video processing (`VAEntrypointVideoProc`) | yes: `direct` (into the Android buffer) and `vpp` (before copy-back) |
-| Direct output | The GPU writes the converted frame into Android's own (gralloc) buffer, which SurfaceFlinger then shows | yes, `LEPTON_VIDEO_HWACCEL_OUTPUT=direct` |
+| GPU VPP | The GPU converts formats through VA's video processing (`VAEntrypointVideoProc`) | yes, for direct output |
+| Direct output | The GPU writes the converted frame into Android's own (gralloc) buffer, which SurfaceFlinger then shows | yes, the default |
 | Zero-copy | The GPU *decodes* straight into Android's buffers | no: removed; see "Direct output" for why direct output differs |
 
 Each frame, with copy-back, the service:
@@ -107,12 +107,11 @@ Bundles:
 - `video-vaapi-test-16` (`f15ed14`): both machines;
 - `-19`, `-20`, `-21` (`a9ea4d7`, before the copy-back work): AMD;
 - `-23` (`53b4370`, patches 0028/0029): AMD; Intel (copy-back, 4K60 below);
-- `-25` (`94fdcbb`, patch 0030): both machines (direct output, below).
-  `-24` was the first direct-output build; it is superseded (washed-out colour
-  on Mesa, fixed in `-25`).
-
-The Steam Deck has run copy-back and the GPU copy-back conversion (`vpp`) only;
-direct output on the Deck is the next test (see "On a Steam Deck").
+- `-25` (`94fdcbb`, patch 0030): both machines and the Steam Deck (direct
+  output, below). `-24` was the first direct-output build; it is superseded
+  (washed-out colour on Mesa, fixed in `-25`);
+- `-26` (`f6e768f`, the release state: direct output by default, `vpp` removed,
+  safe handle checks): both machines (regression, below).
 
 ### Correctness (media probe, headless)
 
@@ -199,7 +198,7 @@ Experiments (test-22, not shipped):
 | 4 or more conversion threads | slower than 2 |
 | Threads for 8-bit conversion | no gain |
 
-### Direct output and 4K60 (VLC, test-23/-25)
+### Direct output and 4K60 (VLC, test-23 to -26)
 
 The same clip throughout: `meridian_2160p5994_main10_sdr709.mkv`, HEVC Main10,
 3840×2160, 59.94 fps (16.68 ms per frame), limited-range BT.709 SDR, 60 s,
@@ -209,12 +208,13 @@ resolution, played through to the end.
 | Machine | Output | Delivered | VLC late pictures | Service work per frame |
 | --- | --- | --- | --- | --- |
 | Intel UHD 630 (desktop) | copy-back | 20.4 fps | 2,248 | 49 ms: map 30.6, gralloc map 8.0, convert 4.5, decode wait 3.6 |
-| Intel UHD 630 | vpp | 25.2 fps | 2,880 | 40 ms: NV12 map 21.6, gralloc map 7.2 |
+| Intel UHD 630 | GPU conversion + copy-back (removed) | 25.2 fps | 2,880 | 40 ms: NV12 map 21.6, gralloc map 7.2 |
 | Intel UHD 630 | **direct** | **60.1 fps** | **0** | decode wait 3.4, GPU conversion 9.0, submit 0.3 |
 | RX 6700 XT (headless) | copy-back | 42.0 fps | 3,588 | 23.7 ms |
-| RX 6700 XT | vpp | 59.7 fps | 469 (start-up) | about 14 ms of work |
+| RX 6700 XT | GPU conversion + copy-back (removed) | 59.7 fps | 469 (start-up) | about 14 ms of work |
 | RX 6700 XT | **direct** | **60.1 fps** | **0** | decode wait 5.5, GPU conversion 1.1, submit 0.2 |
-| Steam Deck (earlier tests) | copy-back / vpp | – | falls behind | about 24 / 19 ms per frame |
+| Steam Deck | copy-back / GPU conversion + copy-back (earlier) | – | falls behind | about 24 / 19 ms per frame |
+| Steam Deck (test-25, two runs) | **direct** | 56.4 and **60.1 fps** | not captured | decode wait 7.6, GPU conversion 3.4, submit 1.4 |
 
 With direct output, every one of the 3,597 frames was converted on the GPU
 (`LEPTON_VA_DIRECT_END frames=3597 copyback_frames=0 fallback=0`), with no
@@ -227,6 +227,22 @@ headroom left.
 On the Intel host, outside Android, the UHD 630 decodes this clip at about 340
 fps, so the decoder itself was never the limit; the CPU round trip was.
 
+**Steam Deck.** Both runs converted all 3,597 frames directly
+(`copyback_frames=0 fallback=0`, no transfer failures), and the second
+delivered 60.1 fps; the first run's 56.4 fps includes player start-up in its
+time window. Playback on the Deck's screen was smooth. About 12.5 ms of each
+16.68 ms frame is work (mostly waiting for the Deck's video decoder); the rest
+is waiting for VLC's queue, which is the headroom. `LEPTON_VA_DEADLINE` counted
+about 1,200 `process` calls over 16.68 ms per run: those calls include waits
+for the app's output queue and are not dropped frames. VLC's late-picture count
+and SurfaceFlinger's displayed-frame totals were not captured on the Deck, so
+displayed frames there are not independently verified.
+
+The service's `fps` is the rate at which it delivered frames to the app. On
+Intel and AMD, VLC's own count of late pictures and SurfaceFlinger's frame
+statistics were also recorded (the table); on the Deck only the service's
+numbers and the visual check are available.
+
 Also with direct output on Intel:
 - 1080p H.264, HEVC Main, VP9 (30 fps) and HEVC Main10 (60 fps) at full rate
   with 0 late pictures;
@@ -235,7 +251,7 @@ Also with direct output on Intel:
 - through the launcher option alone (test-25, `LEPTON_VIDEO_HWACCEL_OUTPUT=direct`),
   all 3,597 frames direct.
 
-**Pixels.** With `vpp-validation=pixels` the service reads two output buffers
+**Pixels.** With `direct-validation=pixels` the service reads two output buffers
 of each session back on the CPU and compares them with the decoded surface
 (`LEPTON_VA_DIRECT_PIXELS`):
 - **Intel iHD 24.3.4:** identical, every plane, for 8-bit and 10-bit sessions at
@@ -245,9 +261,8 @@ of each session back on the CPU and compares them with the decoded surface
 - **AMD, Mesa 26.0.8 (the image's Mesa):** not bit-exact. About a third of luma
   samples are one code high (mean +0.5), with peaks of 16–17 codes next to sharp
   chroma edges; V is about one code high. Mesa 26.0 converts YUV to YUV through
-  RGB, so chroma interpolation leaks into luma at edges. The GPU copy-back
-  conversion (`vpp`) has the same character. Natural video looks the same as
-  copy-back. Mesa 26.2.7 on the host converts exactly, so a newer Mesa in the
+  RGB, so chroma interpolation leaks into luma at edges. Natural video looks
+  the same as copy-back. Mesa 26.2.7 on the host converts exactly, so a newer Mesa in the
   image should make it bit-exact (not done: it is a shared graphics change).
 
 The probe's occasional HEVC "mismatches" on Intel (one to four frames) were
@@ -259,6 +274,29 @@ every run.
 decoder sessions): the service stayed at 13 open files with Surface output; with
 ByteBuffer output, after the import fix, it levels at about 145 DMA-BUF handles
 (Codec2's buffer cache) whatever the number of runs, at about 55 MB resident.
+
+### Release regression (test-26)
+
+test-26 is the release state (`f6e768f`). Launch options only, no properties
+set by hand:
+
+| Check | Intel UHD 630 | RX 6700 XT |
+| --- | --- | --- |
+| Hardware decoding off: probe, audio, rendering | Android's `c2.android.*` decoders, no service activity, audio and video smoke pass; ANGLE on Vulkan/ANV | – |
+| `LEPTON_VIDEO_HWACCEL=true` only | `output direct`; 39 probe sessions direct, 0 copy-back frames, 0 fallbacks | `output direct`; 45 sessions, 0 copy-back frames, 0 fallbacks |
+| Probe CRCs, direct | H.264 1080p/4K, VP9, repeat, seek: identical; HEVC: single-frame reference glitches only | within about one code (Mesa 26.0.8, see "Pixels") |
+| `..._OUTPUT=copyback` | `output copy-back`; CRCs as before | `output copy-back`; identical to Android's decoders |
+| H.264 High 4:4:4 | FFmpeg software inside the service, logged | same |
+| VLC 4K59.94 Main10, default | 60.1 fps, 3,597 frames, 0 late, 0 SurfaceFlinger drops | – |
+| VLC seeks (8), flushes (6) | 0 late, no fallback | – |
+| VLC 1080p H.264, VP9 | 30 fps, 0 late | – |
+| Forced fallback (`direct-validation=fallback`) | 3 frames direct, then 2,281 by copy-back, 0 transfer failures, session ended normally | – |
+| Service after the sessions | same process, 13 open files, 0 DMA-BUF handles, about 48 MB | – |
+
+One of two hardware-off probe runs on Intel ended with the probe app itself
+crashing (in `MediaExtractor.readSampleData`, after Android's own HEVC decoder
+rejected a 4K clip); the rerun passed. The service is not involved when
+hardware decoding is off.
 
 ### Real app: VLC
 
@@ -300,7 +338,9 @@ Seek, flush and repeat sessions matched the reference.
 
 - newer Intel GPUs (Ice Lake and later; Xe GPUs on the `xe` kernel driver), and
   i965 with direct output;
-- Steam Deck with direct output (test-25);
+- on the Steam Deck: VLC's late-picture count and SurfaceFlinger's displayed
+  frames with direct output (only the service's numbers and the on-screen
+  check were collected), and clips other than the 4K59.94 Main10 one;
 - other AMD generations;
 - VP8, MPEG-2 and VC-1 content; VP9 Profile 2 and AV1 10-bit content;
 - real apps other than VLC (ExoPlayer-based players, games), and AV1 in a real
@@ -327,16 +367,17 @@ Set `LEPTON_VIDEO_HWACCEL=true` (Steam launch options, or
   decoders.
 - the output path, from `LEPTON_VIDEO_HWACCEL_OUTPUT`:
 
-| `LEPTON_VIDEO_HWACCEL_OUTPUT` | `hwaccel.drm` | `pixel_format` | `copyback-vpp` |
-| --- | --- | --- | --- |
-| `copyback` (default) | `false` | `YUV_420` | `false` |
-| `direct` | `true` | `YUV_420_PLANER` | `false` |
-| `vpp` | `false` | `YUV_420` | `true` |
+| `LEPTON_VIDEO_HWACCEL_OUTPUT` | `hwaccel.drm` | `pixel_format` |
+| --- | --- | --- |
+| `direct` (default) | `true` | `YUV_420_PLANER` |
+| `copyback` | `false` | `YUV_420` |
 
-`direct` and `vpp` are used only when the image's service has them (patch
-0030); otherwise, and for any other value, the launcher logs it and uses
-`copyback`. The launcher's line ends with the path in use, for example
-`... using /dev/dri/renderD128; output direct`.
+`direct` is used only when the image's service has it (patch 0030); older
+images get `copyback`, with a log line. Any other value also gives `copyback`,
+with a log line. The launcher's line ends with the path in use, for example
+`... using /dev/dri/renderD128; output direct`. Even with `direct`, the service
+switches a session to copy-back by itself if direct output fails (see "Direct
+output").
 
 It is refused, with a log line, in these cases:
 - under software rendering;
@@ -418,12 +459,12 @@ The service logs to logcat:
 | Line | Meaning |
 | --- | --- |
 | `LEPTON_VA_CAPS` | once per service start: VA driver, render node, decodable codecs and profiles, largest sizes |
-| `LEPTON_VA_SESSION codec= profile= size= decode=vaapi\|software [reason=] sw_format= zero_copy= output=` | once per decoder session, at its first frame; `output=copy-back\|copy-back-vpp\|direct\|software` |
+| `LEPTON_VA_SESSION codec= profile= size= decode=vaapi\|software [reason=] sw_format= zero_copy= output=` | once per decoder session, at its first frame; `output=direct\|copy-back\|software` |
 | `LEPTON_VA_DIRECT input= output= picture= buffer=` | direct output: first converted frame of a session |
 | `LEPTON_VA_DIRECT fallback=` | direct output failed; the rest of the session uses copy-back |
 | `LEPTON_VA_DIRECT_END frames= copyback_frames= fallback= submit_us= gpu_wait_us=` | direct output, when the session ends. `copyback_frames` must be 0 for a fully direct session |
-| `LEPTON_VA_VPP_END frames= fallback= submit_us= sync_us= read_us=` | `vpp` output, when the session ends |
-| `LEPTON_VA_SLOW`, `LEPTON_VA_PERCENTILES`, `LEPTON_VA_DEADLINE` | when the session ends: slowest `process` call, p95/p99 per step (0.5 ms bins), calls over 16.68 ms |
+| `LEPTON_VA_SLOW`, `LEPTON_VA_PERCENTILES`, `LEPTON_VA_DEADLINE` | when the session ends: slowest `process` call, p95/p99 per step (0.5 ms bins), calls over 16.68 ms. `process` includes waits for the app's output queue, so long calls are not dropped frames |
+| `LEPTON_VA_DIRECT_PIXELS` / `LEPTON_VA_DIRECT_TEST` | only with `setprop debug.ffmpeg-codec2.direct-validation pixels` (compare two output buffers per session with the decoded surface) or `fallback` (fail the fourth frame to exercise the fallback), set before playback |
 | `LEPTON_VA_COPYBACK mode= setting= vendor=` | once per hardware session: the copy-back mode chosen (patch 0029); `derive failed` if it fell back |
 | `LEPTON_VA_SESSION_END codec= hw_frames= sw_frames= transfer_failures=` | when the session ends |
 | `LEPTON_VA_TIMING codec= size= frames= fps= copyback= convert_threads= us_per_frame: send= receive= sync= download= fetch= map= convert= process=` | when the session ends: average microseconds per frame for each step (patch 0028). `fps` is the output rate, which includes time the app paused |
@@ -502,13 +543,21 @@ setprop debug.ffmpeg-codec2.copyback derive    # then map, then auto
 
 ### On a Steam Deck or another desktop
 
-1. Add `LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_OUTPUT=direct %command%`
-   to the app's Steam launch options (then `vpp`, then remove the
-   `..._OUTPUT` part for copy-back, to compare).
+1. Add `LEPTON_VIDEO_HWACCEL=true %command%` to the app's Steam launch options
+   (direct output). To compare with copy-back, use
+   `LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_OUTPUT=copyback %command%`.
 2. Play a 1080p H.264 or HEVC video in the app, then a 4K one, to the end.
-3. Collect the service and player lines from another terminal:
+3. Collect the service and player lines from another terminal. The `lepton`
+   command is inside the install, for example
+   `~/.local/share/lepton_x86_64_<id>/compat_tool/lepton`; `lepton ps` lists
+   instances:
    ```bash
-   lepton logcat <instance_or_application_name> --full | grep -aE 'LEPTON_VA_|too late to be displayed'
+   lepton logcat <instance_or_application_name> --full -d | grep -aE 'LEPTON_VA_|too late to be displayed'
+   ```
+   A clip can be copied into the instance and opened in the app with:
+   ```bash
+   lepton exec <instance> sh -c 'cat > /data/local/tmp/v.mkv && chmod 644 /data/local/tmp/v.mkv' < video.mkv
+   lepton exec <instance> am start -a android.intent.action.VIEW -d file:///data/local/tmp/v.mkv -t 'video/*' -p <package>
    ```
 4. Check for:
    - `decode=vaapi` and `output=direct` in `LEPTON_VA_SESSION`;
@@ -537,8 +586,8 @@ now direct output (patch 0030). What remains:
 - **Bit-exact direct output on AMD:** Mesa 26.2 converts YUV to YUV exactly;
   the image's Mesa 26.0.8 goes through RGB (see "Pixels"). Updating Mesa is a
   shared graphics change, to be weighed on its own.
-- **Direct output as the default** once it has been confirmed on the Steam Deck,
-  and dropping `vpp`, which direct output supersedes.
+- **Hardware decoding on by default**, once more GPUs, apps and longer sessions
+  have been tried.
 
 **HDR output.** HEVC Main10 has no software decoder in this image. With hardware
 decoding it is converted to 8-bit (YV12) and shown as SDR, with no tone mapping
@@ -559,7 +608,7 @@ needing all of:
 | 0018 | `external/stagefright-plugins` | drop the "raw codec data" parameter, which only exists in WayDroid's `frameworks/av` |
 | 0019 | `external/mesa` | VA-API in Mesa's Android build; accept libva-android's display |
 | 0020 | `external/intel-media-driver` | build iHD with Android 14's clang |
-| 0021 | `external/stagefright-plugins` | buffer identity without a BufferQueue (direct output to ByteBuffers); import logging |
+| 0021 | `external/stagefright-plugins` | buffer identity without a BufferQueue (direct output to ByteBuffers), with a size and magic check before minigbm handle fields are read; import logging |
 | 0023 | `external/stagefright-plugins` | copy-back in the surface's own format (bit-exact on Mesa) |
 | 0024 | `external/stagefright-plugins` | VA capability query and gating; session diagnostics |
 | 0025 | `external/stagefright-plugins` | list HEVC Main10 when VA decodes `HEVC10` |
@@ -567,7 +616,7 @@ needing all of:
 | 0027 | `frameworks/av` | `c2.ffmpeg.*` video decoders' listed size limits from the component, not the XML |
 | 0028 | `external/stagefright-plugins` | time each copy-back step (`LEPTON_VA_TIMING`) |
 | 0029 | `external/stagefright-plugins` | faster copy-back: derived VA mapping on Mesa, threaded 10-bit conversion (`LEPTON_VA_COPYBACK`) |
-| 0030 | `external/stagefright-plugins` | direct output (GPU converts into Android's buffer); GPU copy-back conversion (`vpp`); deadline diagnostics; pixel validation hook |
+| 0030 | `external/stagefright-plugins` | direct output (GPU converts into Android's buffer) with copy-back fallback; deadline diagnostics; `direct-validation` test switch |
 
 **Why 0023:** asking Mesa's `vaGetImage` for a format other than the surface's
 (YUV420P from NV12) converts through its video compositor and changes every
@@ -575,9 +624,10 @@ pixel. The service now downloads in the surface's software format (NV12, or
 P010 for 10-bit), and its swscale step converts to YV12 without changing luma.
 
 **Review notes (0017–0027).** None of these block the release:
-- **0021:** reads minigbm's handle `magic` without first checking that the
-  handle is large enough. It runs in direct output only, and Lepton's gralloc is
-  minigbm (the import also requires it); check `numInts` before any wider use.
+- **0021:** fixed: minigbm handle fields are read only after checking that the
+  handle has an fd and is large enough for `cros_gralloc_handle`, and that the
+  magic number matches. Other handles are refused by the import, and direct
+  output falls back to copy-back.
 - **0024–0026:** the HEVC profile list is gated on VA, but VP9 Profile 2 and AV1
   Profile 1 are listed as upstream had them, whatever VA reports. A stream the
   GPU cannot decode (AV1 4:4:4, or VP9 10-bit without `VP92`) is decoded by
@@ -611,14 +661,13 @@ On Intel GPUs supported by both drivers, libva tries iHD before i965. On the UHD
 
 ## Known issues
 
-- **4K60 with copy-back is below full rate** on every tested machine (Intel
-  UHD 630 about 20 fps, RX 6700 XT about 42 fps for 10-bit; Steam Deck about 24
-  ms per frame, falling behind); VLC drops the late pictures. Direct output
-  reaches 60 fps on the UHD 630 and the RX 6700 XT. **Full-resolution 4K60 HEVC
-  Main10 playback is not guaranteed on Steam Deck**: copy-back with `vpp`
-  averages about 19 ms per frame against a 16.68 ms frame interval, so playback
-  falls behind and VLC discards late pictures; direct output on the Deck has
-  not been measured yet. 8K is listed but far below full rate.
+- **4K60 needs direct output.** With copy-back, 4K59.94 10-bit runs below full
+  rate on every tested machine (UHD 630 about 20 fps, RX 6700 XT about 42 fps,
+  Steam Deck about 24 ms per frame), and VLC drops the late pictures. Direct
+  output reached full rate on all three, but 4K60 is not guaranteed on other
+  hardware, with other apps, or while a game loads the GPU: on the Steam Deck
+  about 4 ms of each 16.7 ms frame is spare. 8K is listed but far below full
+  rate.
 - **Direct output on AMD is not bit-exact** (Mesa 26.0.8; see "Pixels"): within
   about one code on average, more next to sharp chroma edges.
 - **Direct output on Intel Gen 9 uses the render engine** for the conversion
