@@ -51,7 +51,7 @@ class VideoVaapiConfigTests(unittest.TestCase):
         self.assertTrue(all(c.endswith('dec') for c in codecs), codecs)
         self.assertIn('h264dec', codecs)
 
-    def test_video_patches_registered_and_zero_copy_allocator_patch_not_applied(self):
+    def test_video_patches_registered_and_no_minigbm_video_layout(self):
         applied = re.findall(r'^apply_custom (\S+) /workspace/patches/(\S+)', PREPARE, flags=re.M)
         names = [name for _, name in applied]
         for name, project in VIDEO_PATCHES.items():
@@ -60,7 +60,8 @@ class VideoVaapiConfigTests(unittest.TestCase):
             self.assertIn(f'"{project}|{name}"', PROVENANCE)
             self.assertIn(name, names)
         self.assertEqual(sorted(VIDEO_PATCHES), [n for n in names if n in VIDEO_PATCHES])
-        self.assertTrue((ROOT / 'image-14/patches/experimental/0022-minigbm-gbm-mesa-nv12-video-layout.patch').is_file())
+        # Direct output uses ordinary YV12 buffers; the zero-copy NV12 layout patch is gone.
+        self.assertFalse((ROOT / 'image-14/patches/experimental').exists())
         self.assertNotIn('0022-minigbm', PREPARE)
         self.assertNotIn('0022-minigbm', PROVENANCE)
 

@@ -5,25 +5,37 @@ Android 14 in Lepton decodes video with Android's software Codec2 decoders
 when enabled, uses the GPU's video engine through VA-API. It is built into the
 image and **off by default** (`LEPTON_VIDEO_HWACCEL=true` turns it on).
 
-What ships is **hardware decoding with copy-back**. The release does not include
-GPU video post-processing (VPP), zero-copy output or HDR output.
+Decoded frames reach Android in one of three ways, chosen with
+`LEPTON_VIDEO_HWACCEL_OUTPUT` (see "Enabling"):
+
+- **copy-back** (default): the CPU downloads each frame and converts it;
+- **direct** (patch 0030): the GPU converts each frame straight into Android's
+  buffer; no readback and no CPU conversion. The fastest path: real-time 4K60
+  10-bit on the Intel UHD 630 and the RX 6700 XT, where copy-back is not;
+- **vpp** (patch 0030, experimental): the GPU converts 10-bit BT.709 frames
+  to 8-bit, then copy-back.
+
+HDR output is not included.
 
 ## How it works
 
 ```
 app (MediaCodec) → Codec2 → c2.ffmpeg.* (FFmpeg service) → FFmpeg hwaccel → VA-API driver → GPU video engine
-                                   │
-                                   └─ copy-back: VA surface → CPU (map) → swscale → Android buffer (YV12)
+                                   │                                               (decodes into FFmpeg's own VA surfaces)
+                                   ├─ copy-back: VA surface → CPU (map) → swscale → Android buffer (YV12)
+                                   ├─ vpp:       VA surface → GPU (P010 → NV12) → CPU (map) → swscale → Android buffer
+                                   └─ direct:    VA surface → GPU video processor → Android buffer (YV12, imported as a VA surface)
 ```
 
 | Term | Meaning | In this release |
 | --- | --- | --- |
 | Hardware decoding | The GPU's video engine decodes the bitstream into VA surfaces in GPU memory | yes |
 | Copy-back | Each decoded surface is mapped for the CPU and copied, converted to 8-bit YV12, into an ordinary Android buffer (ByteBuffer or Surface) | yes |
-| GPU VPP | The GPU converts or scales (for example P010 to NV12, or straight into the Android buffer's format) through VA's video processing | no (future work) |
-| Zero-copy | The GPU decodes straight into Android's own (gralloc/DMA-BUF) buffers, with no CPU copy | no: a broken development option, see "Zero-copy" |
+| GPU VPP | The GPU converts formats through VA's video processing (`VAEntrypointVideoProc`) | yes: `direct` (into the Android buffer) and `vpp` (before copy-back) |
+| Direct output | The GPU writes the converted frame into Android's own (gralloc) buffer, which SurfaceFlinger then shows | yes, `LEPTON_VIDEO_HWACCEL_OUTPUT=direct` |
+| Zero-copy | The GPU *decodes* straight into Android's buffers | no: removed; see "Direct output" for why direct output differs |
 
-Each frame, the service:
+Each frame, with copy-back, the service:
 1. sends the packet to FFmpeg (`avcodec_send_packet`), which submits the
    decode to VA;
 2. receives the decoded VA surface (`avcodec_receive_frame`);
@@ -49,6 +61,42 @@ The 10-bit to 8-bit conversion runs on 2 swscale slice threads at 1080p and
 above (`sws_scale_frame`), and on 1 thread otherwise. 8-bit NV12 to YV12 stays
 on one thread: it is a plain copy, and more threads did not help.
 
+### Direct output (patch 0030)
+
+The service's DRM PRIME "VPP mode" from upstream, made to work. FFmpeg still
+decodes into its own VA surfaces, laid out as each driver wants. Per frame, the
+service:
+1. waits for the decode (`vaSyncSurface`);
+2. fetches an Android output buffer: the same CPU-mappable YV12 buffer copy-back
+   uses (minigbm refuses YV12 for decoder-only usage). It is imported as a VA
+   surface once per BufferQueue slot (ByteBuffer outputs get a new buffer each
+   frame; their imports are dropped when the frame is released);
+3. has the GPU convert the decoded surface into it (`VAProfileNone` /
+   `VAEntrypointVideoProc`), covering the picture only: the buffer is aligned to
+   64 and the output is cropped to the decoded size;
+4. waits for the GPU (`vaSyncSurface`) before the buffer goes to the framework,
+   keeping the decoded surface until then.
+
+The conversion changes layout and bit depth only: same matrix in and out, both
+sides declared full range so no driver remaps values. Android's YV12 (planes Y,
+V, U) is described to VA as I420 with the U plane first, because Mesa writes a
+YV12 import's chroma in I420 order. 10-bit frames are rounded to 8-bit.
+
+Any failure (no video processor, import refused, a GPU error) and interlaced
+frames switch the session to copy-back (`LEPTON_VA_DIRECT fallback=`). Nothing
+outside the service changes: SurfaceFlinger, gralloc and minigbm get the
+buffers they already get with copy-back.
+
+This is not the old zero-copy experiment. Zero-copy had the GPU *decode* into
+linear gralloc buffers: iHD produced wrong pictures, i965 refused the imports and
+AMD needed NV12 buffers SurfaceFlinger could not display. Direct output decodes
+into the driver's own surfaces and only *writes* the final YV12 into Android's
+buffer, a linear format both drivers render to and SurfaceFlinger displays.
+
+**Cost by GPU.** On Intel Gen 9 the conversion to a planar format runs on the
+render engine (shaders), about 4 ms per 4K frame on the host and 9 ms in Android
+under SurfaceFlinger's load. On the RX 6700 XT it takes about 1 ms.
+
 ## What has been tested
 
 Machines (results are from these two only):
@@ -58,11 +106,13 @@ Machines (results are from these two only):
 Bundles:
 - `video-vaapi-test-16` (`f15ed14`): both machines;
 - `-19`, `-20`, `-21` (`a9ea4d7`, before the copy-back work): AMD;
-- `-23` (`53b4370`, patches 0028/0029): AMD.
+- `-23` (`53b4370`, patches 0028/0029): AMD; Intel (copy-back, 4K60 below);
+- `-25` (`94fdcbb`, patch 0030): both machines (direct output, below).
+  `-24` was the first direct-output build; it is superseded (washed-out colour
+  on Mesa, fixed in `-25`).
 
-**Intel has not been tested with patch 0029.** It is expected to behave as
-before (the `map` mode plus threaded 10-bit conversion), but that is not
-measured. See "Testing on your machines".
+The Steam Deck has run copy-back and the GPU copy-back conversion (`vpp`) only;
+direct output on the Deck is the next test (see "On a Steam Deck").
 
 ### Correctness (media probe, headless)
 
@@ -149,6 +199,67 @@ Experiments (test-22, not shipped):
 | 4 or more conversion threads | slower than 2 |
 | Threads for 8-bit conversion | no gain |
 
+### Direct output and 4K60 (VLC, test-23/-25)
+
+The same clip throughout: `meridian_2160p5994_main10_sdr709.mkv`, HEVC Main10,
+3840×2160, 59.94 fps (16.68 ms per frame), limited-range BT.709 SDR, 60 s,
+3,597 frames, no audio. VLC 3.x (`org.videolan.vlc` 13070208), native
+resolution, played through to the end.
+
+| Machine | Output | Delivered | VLC late pictures | Service work per frame |
+| --- | --- | --- | --- | --- |
+| Intel UHD 630 (desktop) | copy-back | 20.4 fps | 2,248 | 49 ms: map 30.6, gralloc map 8.0, convert 4.5, decode wait 3.6 |
+| Intel UHD 630 | vpp | 25.2 fps | 2,880 | 40 ms: NV12 map 21.6, gralloc map 7.2 |
+| Intel UHD 630 | **direct** | **60.1 fps** | **0** | decode wait 3.4, GPU conversion 9.0, submit 0.3 |
+| RX 6700 XT (headless) | copy-back | 42.0 fps | 3,588 | 23.7 ms |
+| RX 6700 XT | vpp | 59.7 fps | 469 (start-up) | about 14 ms of work |
+| RX 6700 XT | **direct** | **60.1 fps** | **0** | decode wait 5.5, GPU conversion 1.1, submit 0.2 |
+| Steam Deck (earlier tests) | copy-back / vpp | – | falls behind | about 24 / 19 ms per frame |
+
+With direct output, every one of the 3,597 frames was converted on the GPU
+(`LEPTON_VA_DIRECT_END frames=3597 copyback_frames=0 fallback=0`), with no
+readback, map or CPU conversion (`download=0 map=0 convert=0`). SurfaceFlinger
+recorded the video layer at its 60 Hz cadence with 0 dropped frames. The
+service's CPU time on Intel fell from 93 s (copy-back) to 7 s for the clip.
+The rest of each 16.7 ms is spent waiting for VLC's output queue, which is the
+headroom left.
+
+On the Intel host, outside Android, the UHD 630 decodes this clip at about 340
+fps, so the decoder itself was never the limit; the CPU round trip was.
+
+Also with direct output on Intel:
+- 1080p H.264, HEVC Main, VP9 (30 fps) and HEVC Main10 (60 fps) at full rate
+  with 0 late pictures;
+- seeking (arrow keys, 5–8 seeks) flushed and recovered with 0 late pictures and
+  no fallback;
+- through the launcher option alone (test-25, `LEPTON_VIDEO_HWACCEL_OUTPUT=direct`),
+  all 3,597 frames direct.
+
+**Pixels.** With `vpp-validation=pixels` the service reads two output buffers
+of each session back on the CPU and compares them with the decoded surface
+(`LEPTON_VA_DIRECT_PIXELS`):
+- **Intel iHD 24.3.4:** identical, every plane, for 8-bit and 10-bit sessions at
+  720p, 1080p and 4K (10-bit compared with nearest rounding). The media probe's
+  CRCs also match Android's decoders for H.264, HEVC Main and VP9 at 1080p and
+  4K, and for repeat and seek.
+- **AMD, Mesa 26.0.8 (the image's Mesa):** not bit-exact. About a third of luma
+  samples are one code high (mean +0.5), with peaks of 16–17 codes next to sharp
+  chroma edges; V is about one code high. Mesa 26.0 converts YUV to YUV through
+  RGB, so chroma interpolation leaks into luma at edges. The GPU copy-back
+  conversion (`vpp`) has the same character. Natural video looks the same as
+  copy-back. Mesa 26.2.7 on the host converts exactly, so a newer Mesa in the
+  image should make it bit-exact (not done: it is a shared graphics change).
+
+The probe's occasional HEVC "mismatches" on Intel (one to four frames) were
+traced to Android's reference decoder: the differing reference frames all
+carried one identical CRC, while the direct output's CRCs were the same in
+every run.
+
+**Lifecycle (direct).** Six VLC sessions and repeated probe runs (each about 25
+decoder sessions): the service stayed at 13 open files with Surface output; with
+ByteBuffer output, after the import fix, it levels at about 145 DMA-BUF handles
+(Codec2's buffer cache) whatever the number of runs, at about 55 MB resident.
+
 ### Real app: VLC
 
 VLC 3.x (`org.videolan.vlc` 13070208) was used on the desktop with
@@ -187,15 +298,15 @@ Seek, flush and repeat sessions matched the reference.
 
 ### Not verified
 
-- Intel with patch 0029, and newer Intel GPUs (Ice Lake and later; Xe GPUs on
-  the `xe` kernel driver);
-- Steam Deck (AMD Van Gogh, radeonsi): expected to use `derive` like the RX
-  6700 XT, but not run;
+- newer Intel GPUs (Ice Lake and later; Xe GPUs on the `xe` kernel driver), and
+  i965 with direct output;
+- Steam Deck with direct output (test-25);
 - other AMD generations;
 - VP8, MPEG-2 and VC-1 content; VP9 Profile 2 and AV1 10-bit content;
 - real apps other than VLC (ExoPlayer-based players, games), and AV1 in a real
   app;
-- full-rate 4K60 10-bit (about 47 fps in VLC; see "Known issues");
+- full-rate 4K60 with copy-back (not reached on any tested machine; see "Known
+  issues"); direct output under heavy GPU load (a game running alongside);
 - HDR output (not supported);
 - long playback (beyond about 2 minutes).
 
@@ -214,7 +325,18 @@ Set `LEPTON_VIDEO_HWACCEL=true` (Steam launch options, or
 - **`debug.ffmpeg-codec2.hwaccel.force=true`:** the service lists only the video
   codecs the VA driver decodes (see "Codecs"). The others stay on Android's
   decoders.
-- **`debug.ffmpeg-codec2.hwaccel.drm=false`:** copy-back.
+- the output path, from `LEPTON_VIDEO_HWACCEL_OUTPUT`:
+
+| `LEPTON_VIDEO_HWACCEL_OUTPUT` | `hwaccel.drm` | `pixel_format` | `copyback-vpp` |
+| --- | --- | --- | --- |
+| `copyback` (default) | `false` | `YUV_420` | `false` |
+| `direct` | `true` | `YUV_420_PLANER` | `false` |
+| `vpp` | `false` | `YUV_420` | `true` |
+
+`direct` and `vpp` are used only when the image's service has them (patch
+0030); otherwise, and for any other value, the launcher logs it and uses
+`copyback`. The launcher's line ends with the path in use, for example
+`... using /dev/dri/renderD128; output direct`.
 
 It is refused, with a log line, in these cases:
 - under software rendering;
@@ -296,7 +418,12 @@ The service logs to logcat:
 | Line | Meaning |
 | --- | --- |
 | `LEPTON_VA_CAPS` | once per service start: VA driver, render node, decodable codecs and profiles, largest sizes |
-| `LEPTON_VA_SESSION codec= profile= size= decode=vaapi\|software [reason=] sw_format= zero_copy=` | once per decoder session, at its first frame |
+| `LEPTON_VA_SESSION codec= profile= size= decode=vaapi\|software [reason=] sw_format= zero_copy= output=` | once per decoder session, at its first frame; `output=copy-back\|copy-back-vpp\|direct\|software` |
+| `LEPTON_VA_DIRECT input= output= picture= buffer=` | direct output: first converted frame of a session |
+| `LEPTON_VA_DIRECT fallback=` | direct output failed; the rest of the session uses copy-back |
+| `LEPTON_VA_DIRECT_END frames= copyback_frames= fallback= submit_us= gpu_wait_us=` | direct output, when the session ends. `copyback_frames` must be 0 for a fully direct session |
+| `LEPTON_VA_VPP_END frames= fallback= submit_us= sync_us= read_us=` | `vpp` output, when the session ends |
+| `LEPTON_VA_SLOW`, `LEPTON_VA_PERCENTILES`, `LEPTON_VA_DEADLINE` | when the session ends: slowest `process` call, p95/p99 per step (0.5 ms bins), calls over 16.68 ms |
 | `LEPTON_VA_COPYBACK mode= setting= vendor=` | once per hardware session: the copy-back mode chosen (patch 0029); `derive failed` if it fell back |
 | `LEPTON_VA_SESSION_END codec= hw_frames= sw_frames= transfer_failures=` | when the session ends |
 | `LEPTON_VA_TIMING codec= size= frames= fps= copyback= convert_threads= us_per_frame: send= receive= sync= download= fetch= map= convert= process=` | when the session ends: average microseconds per frame for each step (patch 0028). `fps` is the output rate, which includes time the app paused |
@@ -375,90 +502,54 @@ setprop debug.ffmpeg-codec2.copyback derive    # then map, then auto
 
 ### On a Steam Deck or another desktop
 
-1. Add `LEPTON_VIDEO_HWACCEL=true %command%` to the game's Steam launch options.
-2. Play a 1080p H.264 or HEVC video in the app, then a 4K one.
-3. Collect the service lines from another terminal:
+1. Add `LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_OUTPUT=direct %command%`
+   to the app's Steam launch options (then `vpp`, then remove the
+   `..._OUTPUT` part for copy-back, to compare).
+2. Play a 1080p H.264 or HEVC video in the app, then a 4K one, to the end.
+3. Collect the service and player lines from another terminal:
    ```bash
-   lepton logcat <instance_or_application_name> --full | grep -E 'LEPTON_VA_(CAPS|SESSION|COPYBACK|TIMING)'
+   lepton logcat <instance_or_application_name> --full | grep -aE 'LEPTON_VA_|too late to be displayed'
    ```
 4. Check for:
-   - `decode=vaapi`;
-   - `transfer_failures=0`;
-   - a `process` value below the video's frame interval.
-5. Remove the launch option and play the same video: the `LEPTON_VA` lines
+   - `decode=vaapi` and `output=direct` in `LEPTON_VA_SESSION`;
+   - `LEPTON_VA_DIRECT_END ... copyback_frames=0 fallback=0`;
+   - `LEPTON_VA_TIMING ... fps=` close to the video's rate, and few or no
+     "too late" lines from VLC;
+   - natural colour, no stripes or green/pink cast, smooth motion.
+5. Remove the launch options and play the same video: the `LEPTON_VA` lines
    should be absent (Android's decoders).
 
-## Zero-copy (development only, broken)
+## Zero-copy (removed)
 
-`LEPTON_VIDEO_HWACCEL_ZEROCOPY=true` selects the service's DRM PRIME mode:
-the GPU decodes straight into Android's buffers. The launcher reports it as a
-broken development option. Findings:
-
-- **Intel i965:** every VA surface import fails; the app waits for frames.
-- **Intel iHD:** imports succeed, but the decoded data is wrong (CRC mismatch,
-  scrambled picture).
-- **AMD radeonsi:** decoding is bit-exact once the buffers have 256-byte pitches
-  and a linear modifier. That needs `patches/experimental/0022` (minigbm), which
-  is not applied by default. SurfaceFlinger then aborts creating a texture from
-  the NV12 buffer (`Failed to create a valid texture ... format:35`).
-- **Patch 0021** (applied; only active in this mode) keys VA surfaces by
-  minigbm's buffer id for buffers without a BufferQueue slot. Without it, ByteBuffer
-  output loops forever. VA surfaces are kept until the decoder closes. The
-  generation and lifecycle of reused buffers have not been reviewed beyond that.
+`LEPTON_VIDEO_HWACCEL_ZEROCOPY` is gone. It had the GPU decode straight into
+Android's buffers (the service's DRM PRIME mode with NV12): i965 refused every
+import, iHD decoded wrong pictures into linear buffers, and on AMD
+SurfaceFlinger aborted on the NV12 buffers (which also needed a minigbm layout
+change, the former `experimental/0022`). Direct output keeps decoding in the
+driver's own surfaces and gets the same benefit for display. Patch 0021 (buffer
+identity without a BufferQueue) is now used by direct output's ByteBuffer path.
 
 ## Future work
 
-Copy-back costs CPU time and memory bandwidth for every frame. Two approaches
-would remove part or all of it. Neither is started.
+GPU conversion into Android buffers, which this section used to propose, is
+now direct output (patch 0030). What remains:
 
-**1. GPU VPP into Android buffers.**
-- *How:* the service allocates the Android output buffer as before (YV12, a
-  format SurfaceFlinger already displays), imports it as a VA surface, and asks
-  the driver's video processor (`vaCreateContext` on `VAProfileNone` /
-  `VAEntrypointVideoProc`, or FFmpeg's `scale_vaapi`) to convert the decoded
-  surface into it on the GPU.
-- *What it removes:* the CPU map and the swscale conversion (at 4K 10-bit,
-  about 11 ms of the 18.5 ms per frame).
-- *Problems to solve:*
-  - Mesa's compositor changed luma values when it converted formats (the reason
-    for patch 0023), so its output must be checked against the CRCs, or accepted
-    as not bit-exact;
-  - the import has the same gralloc layout problems as zero-copy (pitches and
-    modifiers), but on a format that already displays;
-  - Intel iHD's VPP must be checked separately.
-
-**2. DMA-BUF / gralloc zero-copy.**
-- *How:* the GPU decodes straight into Android's buffers (NV12, or P010 for
-  10-bit) and SurfaceFlinger displays them.
-- *What it removes:* every copy.
-- *Problems to solve:* everything listed under "Zero-copy":
-  - NV12 import in Mesa/RADV for Android hardware buffers, like patch 0002 does
-    for YV12;
-  - an allocation path for video buffers that does not change every NV12
-    buffer's layout;
-  - iHD's broken imports;
-  - buffer reuse and generation in patch 0021.
-
-  It is also the only route to HDR.
+- **Bit-exact direct output on AMD:** Mesa 26.2 converts YUV to YUV exactly;
+  the image's Mesa 26.0.8 goes through RGB (see "Pixels"). Updating Mesa is a
+  shared graphics change, to be weighed on its own.
+- **Direct output as the default** once it has been confirmed on the Steam Deck,
+  and dropping `vpp`, which direct output supersedes.
 
 **HDR output.** HEVC Main10 has no software decoder in this image. With hardware
-decoding it is converted to 8-bit (YV12) and shown as SDR, with no tone mapping.
+decoding it is converted to 8-bit (YV12) and shown as SDR, with no tone mapping
+(on every output path).
 HDR10 (PQ) content therefore looks too bright and washed out, and HLG looks
 flat. HDR10 and HDR10+ are not listed. HDR end to end is a separate project,
 needing all of:
-- P010 output (zero-copy or VPP);
+- P010 or another 10-bit output format SurfaceFlinger can display;
 - HDR profiles and metadata in Codec2;
 - an HDR dataspace through SurfaceFlinger;
 - 10-bit PQ through Lepton's display bridge.
-
-**4K60 10-bit with copy-back.** These might close the remaining gap (about 47
-against 60 fps), and are untried:
-- a dedicated P010 to 8-bit loop in place of swscale's general path (estimated
-  2–3 ms against 6 ms). It must be checked against the 10-bit CRCs, since its
-  rounding may differ;
-- overlapping the conversion of one frame with the decode of the next (a worker
-  thread). This needs care with buffer ownership on flush, seek and resolution
-  change.
 
 ## Patches
 
@@ -468,7 +559,7 @@ against 60 fps), and are untried:
 | 0018 | `external/stagefright-plugins` | drop the "raw codec data" parameter, which only exists in WayDroid's `frameworks/av` |
 | 0019 | `external/mesa` | VA-API in Mesa's Android build; accept libva-android's display |
 | 0020 | `external/intel-media-driver` | build iHD with Android 14's clang |
-| 0021 | `external/stagefright-plugins` | zero-copy: buffer identity without a BufferQueue; import logging |
+| 0021 | `external/stagefright-plugins` | buffer identity without a BufferQueue (direct output to ByteBuffers); import logging |
 | 0023 | `external/stagefright-plugins` | copy-back in the surface's own format (bit-exact on Mesa) |
 | 0024 | `external/stagefright-plugins` | VA capability query and gating; session diagnostics |
 | 0025 | `external/stagefright-plugins` | list HEVC Main10 when VA decodes `HEVC10` |
@@ -476,7 +567,7 @@ against 60 fps), and are untried:
 | 0027 | `frameworks/av` | `c2.ffmpeg.*` video decoders' listed size limits from the component, not the XML |
 | 0028 | `external/stagefright-plugins` | time each copy-back step (`LEPTON_VA_TIMING`) |
 | 0029 | `external/stagefright-plugins` | faster copy-back: derived VA mapping on Mesa, threaded 10-bit conversion (`LEPTON_VA_COPYBACK`) |
-| experimental/0022 | `external/minigbm` | zero-copy NV12 layout; not applied |
+| 0030 | `external/stagefright-plugins` | direct output (GPU converts into Android's buffer); GPU copy-back conversion (`vpp`); deadline diagnostics; pixel validation hook |
 
 **Why 0023:** asking Mesa's `vaGetImage` for a format other than the surface's
 (YUV420P from NV12) converts through its video compositor and changes every
@@ -485,8 +576,8 @@ P010 for 10-bit), and its swscale step converts to YV12 without changing luma.
 
 **Review notes (0017–0027).** None of these block the release:
 - **0021:** reads minigbm's handle `magic` without first checking that the
-  handle is large enough. It only runs in zero-copy mode, and Lepton's gralloc is
-  minigbm; check `numInts` before any wider use.
+  handle is large enough. It runs in direct output only, and Lepton's gralloc is
+  minigbm (the import also requires it); check `numInts` before any wider use.
 - **0024–0026:** the HEVC profile list is gated on VA, but VP9 Profile 2 and AV1
   Profile 1 are listed as upstream had them, whatever VA reports. A stream the
   GPU cannot decode (AV1 4:4:4, or VP9 10-bit without `VP92`) is decoded by
@@ -520,11 +611,19 @@ On Intel GPUs supported by both drivers, libva tries iHD before i965. On the UHD
 
 ## Known issues
 
-- **4K60 10-bit is below full rate.** On the RX 6700 XT, real 4K 59.94 fps
-  HEVC Main10 content runs at about 47 fps (20.5 ms per frame), so VLC drops
-  every late frame and shows black. 4K30 and 1080p60 10-bit have headroom; 8-bit
-  4K reaches 64–77 fps in the probe. 8K is listed but far below full rate. See
-  "Future work".
+- **4K60 with copy-back is below full rate** on every tested machine (Intel
+  UHD 630 about 20 fps, RX 6700 XT about 42 fps for 10-bit; Steam Deck about 24
+  ms per frame, falling behind); VLC drops the late pictures. Direct output
+  reaches 60 fps on the UHD 630 and the RX 6700 XT. **Full-resolution 4K60 HEVC
+  Main10 playback is not guaranteed on Steam Deck**: copy-back with `vpp`
+  averages about 19 ms per frame against a 16.68 ms frame interval, so playback
+  falls behind and VLC discards late pictures; direct output on the Deck has
+  not been measured yet. 8K is listed but far below full rate.
+- **Direct output on AMD is not bit-exact** (Mesa 26.0.8; see "Pixels"): within
+  about one code on average, more next to sharp chroma edges.
+- **Direct output on Intel Gen 9 uses the render engine** for the conversion
+  (about 9 ms per 4K frame in Android). It shares the GPU with the game or app
+  being drawn; under heavy rendering load 4K60 may fall behind.
 - **Resolution change:** one frame is lost where an H.264 stream changes
   resolution mid-stream (both GPUs). All other frames are identical. FFmpeg
   decodes every frame. The last frame before the switch is lost where the

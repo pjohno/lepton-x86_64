@@ -198,6 +198,7 @@ the launcher log also says when media decoders are off):
 | `LEPTON_VA_CAPS` / `LEPTON_VA_SESSION` / `LEPTON_VA_SESSION_END` | From the FFmpeg Codec2 service with `LEPTON_VIDEO_HWACCEL=true`: VA driver and decodable codecs; per decoder session `decode=vaapi` or `software` with the reason; frame counts (see `image-14/docs/video-vaapi.md`) |
 | `LEPTON_MEDIA_THROUGHPUT clip=... mode=buffer\|surface decoder=... fps=...` | The 1080p and 4K clips decoded as fast as possible (no CRCs) by the selected decoder, to ByteBuffers and to a Surface; diagnostic only. Started with the intent extra `--ez lepton.throughput true`, the probe runs only this and ends with `LEPTON_MEDIA_THROUGHPUT_DONE` |
 | `LEPTON_VA_COPYBACK` / `LEPTON_VA_TIMING` | From the FFmpeg service (patches 0028/0029): copy-back mode per hardware session (`derive` on Mesa, `map` otherwise), and average microseconds per frame for each step when a session ends |
+| `LEPTON_VA_DIRECT` / `LEPTON_VA_DIRECT_END` / `LEPTON_VA_DIRECT_PIXELS` | Direct output (patch 0030, `LEPTON_VIDEO_HWACCEL_OUTPUT=direct`): first converted frame, per-session totals (`copyback_frames=0` means no CPU readback), and with `setprop debug.ffmpeg-codec2.vpp-validation pixels` before playback, per-plane differences between the Android buffer and the decoded surface |
 | `C2AllocatorGralloc: failed transaction: lock(BLOB)` after `GBM-MESA-WRAPPER: Failed to map the buffer` | Intel image without patch 0014: gralloc imports BLOB buffers with a row wider than their stride, which iris rejects |
 
 `gbm-blob-probe.c` checks the host's Mesa driver directly, without Android: it
@@ -212,6 +213,16 @@ cc -O1 -o /tmp/gbm-blob-probe tests/runtime/gbm-blob-probe.c /usr/lib64/libgbm.s
 
 On Intel (iris) the `current` rows report `IMPORT FAILED` above 4 KiB; on AMD
 (radeonsi) both geometries map. `fixed` rows must map on every driver.
+
+`va-vpp-import-probe.c` checks, without Android, whether the host's VA-API
+driver can do direct output: convert a P010 or NV12 surface into an imported
+linear buffer laid out like Android's YV12, exactly. Build and usage are in the
+file's header; `i420` is the description the service uses:
+
+```bash
+cc -O2 -o /tmp/va-vpp-import-probe tests/runtime/va-vpp-import-probe.c -lva -lva-drm -lgbm
+/tmp/va-vpp-import-probe i420 1024
+```
 
 ### Opus clipping (patch 0015)
 
