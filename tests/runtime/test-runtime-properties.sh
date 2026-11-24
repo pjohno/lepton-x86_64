@@ -150,31 +150,30 @@ grep -qx 'debug.ffmpeg-codec2.rank=256' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.rank.video=256' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.rank.audio=4294967295' "$work/lepton.prop"   # audio stays on Android's decoders
 grep -qx 'media.sf.hwaccel=1' "$work/lepton.prop"
-grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"   # copy-back by default
+grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"   # this image has no direct output
 grep -qx 'debug.ffmpeg-codec2.pixel_format=YUV_420' "$work/lepton.prop"
-grep -qx 'debug.ffmpeg-codec2.copyback-vpp=false' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.hwaccel.force=true' "$work/lepton.prop"   # only codecs the driver decodes
+grep -q 'this image has no direct output; using copyback' "$work/log" || { echo 'FAIL: older image falls back to copyback'; exit 1; }
 grep -q '; output copyback$' "$work/log" || { echo 'FAIL: copy-back output message'; exit 1; }
-if grep -q 'not available in this image' "$work/log"; then echo 'FAIL: output note when not requested'; exit 1; fi
-# LEPTON_VIDEO_HWACCEL_OUTPUT: only paths the image's service has (patch 0030).
+if grep -q 'copyback-vpp' "$work/lepton.prop"; then echo 'FAIL: removed vpp property set'; exit 1; fi
+# Direct output is the default when the image's service has it (patch 0030).
 mkdir -p "$work/rootfs-intel/vendor/bin/hw"
 svc="$work/rootfs-intel/vendor/bin/hw/android.hardware.media.c2-ffmpeg-service"
-printf 'ELF...\0LEPTON_VA_TIMING\0' > "$svc"
-LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_OUTPUT=direct LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
-grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"
-grep -q 'LEPTON_VIDEO_HWACCEL_OUTPUT=direct is not available in this image' "$work/log" || { echo 'FAIL: direct without service support'; exit 1; }
-printf 'ELF...\0LEPTON_VA_DIRECT_END\0debug.ffmpeg-codec2.copyback-vpp\0' > "$svc"
-LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_OUTPUT=direct LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+printf 'ELF...\0LEPTON_VA_DIRECT_END\0' > "$svc"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
 grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=true' "$work/lepton.prop"
 grep -qx 'debug.ffmpeg-codec2.pixel_format=YUV_420_PLANER' "$work/lepton.prop"
-grep -qx 'debug.ffmpeg-codec2.copyback-vpp=false' "$work/lepton.prop"
-grep -q '; output direct$' "$work/log" || { echo 'FAIL: direct output message'; exit 1; }
-LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_OUTPUT=vpp LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -q '; output direct$' "$work/log" || { echo 'FAIL: direct by default'; exit 1; }
+if grep -q 'using copyback' "$work/log"; then echo 'FAIL: fallback note with direct available'; exit 1; fi
+LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_OUTPUT=copyback LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
 grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"
-grep -qx 'debug.ffmpeg-codec2.copyback-vpp=true' "$work/lepton.prop"
-LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_OUTPUT=bogus LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
-grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"
-grep -q 'OUTPUT=bogus is not available' "$work/log" || { echo 'FAIL: unknown output value'; exit 1; }
+grep -qx 'debug.ffmpeg-codec2.pixel_format=YUV_420' "$work/lepton.prop"
+grep -q '; output copyback$' "$work/log" || { echo 'FAIL: copyback override'; exit 1; }
+for bad in vpp bogus; do
+    LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_OUTPUT=$bad LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+    grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"
+    grep -q "OUTPUT=$bad is not direct or copyback; using copyback" "$work/log" || { echo "FAIL: output value $bad"; exit 1; }
+done
 rm -- "$svc"
 # Off: no output properties at all.
 LEPTON_VIDEO_HWACCEL_OUTPUT=direct LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"

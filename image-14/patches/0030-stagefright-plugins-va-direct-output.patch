@@ -1,36 +1,40 @@
-Lepton: VA-API direct output and GPU copy-back conversion (test-25, experimental)
+Lepton: VA-API direct output (the GPU converts into Android's buffer)
 
-Three ways to deliver hardware-decoded frames, chosen per decoder session:
+With debug.ffmpeg-codec2.hwaccel.drm=true and
+debug.ffmpeg-codec2.pixel_format=YUV_420_PLANER (upstream's "VPP mode"),
+FFmpeg decodes into its own VA surfaces and the GPU's video processor
+converts each frame into the Android YV12 buffer, imported as a VA
+surface. No readback, no CPU conversion. The launcher selects this by
+default when hardware decoding is on (LEPTON_VIDEO_HWACCEL_OUTPUT=direct).
 
-- Copy-back (default, patches 0023-0029): download and convert on the CPU.
-- debug.ffmpeg-codec2.copyback-vpp=true: for BT.709 limited-range P010, the
-  GPU converts to NV12 (scale_vaapi) before the download; CPU converts NV12.
-- Direct output: debug.ffmpeg-codec2.hwaccel.drm=true with
-  debug.ffmpeg-codec2.pixel_format=YUV_420_PLANER (upstream's "VPP mode").
-  FFmpeg decodes into its own VA surfaces; the GPU converts each frame into
-  the Android YV12 buffer itself, imported as a VA surface. No readback and
-  no CPU conversion. Fixes to upstream's VPP mode:
-  * no 64-alignment of the advertised picture size; the buffer is aligned,
-    the blit covers the picture only and the output is cropped to it;
-  * same matrix in and out (as copy-back), from the frame's tags, and both
-    sides declared full range so no driver remaps values (Mesa 26.0's VA
-    post-processing otherwise squeezes limited range again);
-  * wait for the decode before the blit and for the blit before the buffer
-    reaches the framework; keep the decoded surface until the blit is done;
-  * request the same buffers as copy-back (CPU-mappable YV12): minigbm
-    refuses YV12 for decoder-only usage;
-  * describe Android's YV12 as I420 with the U plane first: Mesa writes a
-    YV12 import's chroma in I420 order;
-  * imports of ByteBuffer-mode buffers (no BufferQueue slot) are destroyed
-    when their frame is released;
-  * any failure, and interlaced frames, fall back to copy-back for the rest
-    of the session (LEPTON_VA_DIRECT fallback=...).
+Fixes to upstream's VPP mode:
+- no 64-alignment of the advertised picture size; the buffer is aligned,
+  the conversion covers the picture only and the output is cropped to it;
+- same matrix in and out (as copy-back), from the frame's tags, both sides
+  declared full range so that no driver remaps values (Mesa 26.0's VA
+  post-processing otherwise squeezes limited range a second time);
+- wait for the decode before the conversion and for the conversion before
+  the buffer reaches the framework; keep the decoded surface until then;
+- request the same buffers as copy-back (CPU-mappable YV12): minigbm
+  refuses YV12 for decoder-only usage;
+- describe Android's YV12 as I420 with the U plane first: Mesa writes a
+  YV12 import's chroma in I420 order;
+- drop the imports of ByteBuffer-mode buffers (no BufferQueue slot) when
+  their frame is released, so they do not keep every buffer alive;
+- read minigbm handle fields only after the size check of patch 0021;
+- any failure (no video processor, import refused, GPU error), and
+  interlaced frames, switch the session to copy-back
+  (LEPTON_VA_DIRECT fallback=...); the failed frame's buffer is released.
 
-Diagnostics: LEPTON_VA_SESSION output=, LEPTON_VA_DIRECT, LEPTON_VA_DIRECT_END,
-LEPTON_VA_VPP_END, LEPTON_VA_SLOW, LEPTON_VA_PERCENTILES, LEPTON_VA_DEADLINE.
-Test hooks: debug.ffmpeg-codec2.vpp-validation=pixels|timestamps|init-error|frame-error;
-with direct output, pixels compares two frames of each session with the
-decoded surface (LEPTON_VA_DIRECT_PIXELS).
+Diagnostics: LEPTON_VA_SESSION output=, LEPTON_VA_DIRECT,
+LEPTON_VA_DIRECT_END (copyback_frames=0 means no CPU readback),
+LEPTON_VA_SLOW, LEPTON_VA_PERCENTILES and LEPTON_VA_DEADLINE (process()
+includes waits for the app's output queue, so long calls are not dropped
+frames).
+Test switch: debug.ffmpeg-codec2.direct-validation=pixels compares two
+output buffers per session with the decoded surface
+(LEPTON_VA_DIRECT_PIXELS); =fallback fails the fourth frame to exercise
+the fallback.
 
 --- a/codec2/C2FFMPEGVideoDecodeComponent.cpp
 +++ b/codec2/C2FFMPEGVideoDecodeComponent.cpp
@@ -55,31 +59,30 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
  
      mCtx->codec_type = AVMEDIA_TYPE_VIDEO;
      mCtx->codec_id = mCodecID;
-@@ -259,6 +251,14 @@
+@@ -259,6 +251,16 @@
          mConvertThreadsSetting = std::clamp(base::GetIntProperty("debug.ffmpeg-codec2.convert-threads", 0), 0, 8);
      }
  
 +#if CONFIG_VAAPI
-+    mCopyBackVppEnabled = base::GetBoolProperty("debug.ffmpeg-codec2.copyback-vpp", false);
-+    const auto test = base::GetProperty("debug.ffmpeg-codec2.vpp-validation", "");
-+    mVppValidation = test == "pixels" ? VppValidation::Pixels :
-+            test == "timestamps" ? VppValidation::Timestamps :
-+            test == "init-error" ? VppValidation::InitError :
-+            test == "frame-error" ? VppValidation::FrameError : VppValidation::None;
++    // Lepton: direct-output test switch (diagnosis only): "pixels" compares two
++    // output buffers per session with the decoded surface; "fallback" fails the
++    // fourth frame to exercise the copy-back fallback.
++    {
++        const std::string test = base::GetProperty("debug.ffmpeg-codec2.direct-validation", "");
++        mDirectValidation = test == "pixels" ? DirectValidation::Pixels :
++                test == "fallback" ? DirectValidation::Fallback : DirectValidation::None;
++    }
 +#endif
      return C2_OK;
  }
  
-@@ -300,10 +300,15 @@
+@@ -300,10 +302,12 @@
      if (hw && mFrame->hw_frames_ctx) {
          swFormat = av_get_pix_fmt_name(((AVHWFramesContext*)mFrame->hw_frames_ctx->data)->sw_format);
      }
 -    ALOGI("LEPTON_VA_SESSION codec=%s profile=%s size=%dx%d decode=%s%s%s sw_format=%s zero_copy=%d",
 +    const char* output = !hw ? "software" : mUtils->isVPPMode() ? "direct" :
 +            mUtils->mUseDrmPrime ? "zero-copy" : "copy-back";
-+#if CONFIG_VAAPI
-+    if (hw && !mUtils->mUseDrmPrime && mCopyBackVppEnabled) output = "copy-back-vpp";
-+#endif
 +    ALOGI("LEPTON_VA_SESSION codec=%s profile=%s size=%dx%d decode=%s%s%s sw_format=%s zero_copy=%d output=%s",
            avcodec_get_name(mCtx->codec_id), profile ? profile : "?", mFrame->width, mFrame->height,
            hw ? "vaapi" : "software", hw ? "" : " reason=", reason, swFormat ? swFormat : "?",
@@ -88,7 +91,7 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
  }
  
  void C2FFMPEGVideoDecodeComponent::logSessionEnd() {
-@@ -328,6 +333,52 @@
+@@ -328,6 +332,43 @@
                mTimes.send / n, mTimes.receive / n, mTimes.sync / n, mTimes.download / n,
                mTimes.fetch / n, mTimes.map / n, mTimes.convert / n, mTimes.process / n);
      }
@@ -97,15 +100,6 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
 +              mTimes.processMax, mTimes.processOver42ms);
 +    }
 +#if CONFIG_VAAPI
-+    if (mCopyBackVppEnabled) {
-+        const double n = mCopyBackVppFrames ? mCopyBackVppFrames : 1;
-+        ALOGI("LEPTON_VA_VPP_END frames=%" PRIu64 " fallback=%d submit_us=%.0f sync_us=%.0f read_us=%.0f",
-+              mCopyBackVppFrames, mCopyBackVppFailed, mCopyBackVppSubmitUs / n,
-+              mCopyBackVppSyncUs / n, mCopyBackVppReadUs / n);
-+    }
-+    mCopyBackVppFrames = 0;
-+    mCopyBackVppSubmitUs = mCopyBackVppSyncUs = mCopyBackVppReadUs = 0;
-+    mCopyBackVppFailed = false;
 +    if (mUtils->isVPPMode() && (mDirectFrames || mDirectCopyBackFrames)) {
 +        const double n = mDirectFrames ? mDirectFrames : 1;
 +        ALOGI("LEPTON_VA_DIRECT_END frames=%" PRIu64 " copyback_frames=%" PRIu64 " fallback=%d"
@@ -141,17 +135,7 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
      mTimes = StepTimes();
      mDeriveDecided = false;
      mHwFrames = mSwFrames = mTransferFailures = 0;
-@@ -337,6 +388,9 @@
- void C2FFMPEGVideoDecodeComponent::deInitDecoder() {
-     ALOGD("%p deInitDecoder: %p", this, mCtx);
-     logSessionEnd();
-+#if CONFIG_VAAPI
-+    clearCopyBackVpp();
-+#endif
-     if (mFilterGraph) {
-         av_freep(&mFilterGraph->opaque);
-         avfilter_graph_free(&mFilterGraph);
-@@ -678,8 +732,25 @@
+@@ -678,8 +719,25 @@
      VASurfaceID src_surface = (VASurfaceID)(uintptr_t)src->data[3];
      VASurfaceID dst_surface = (VASurfaceID)(uintptr_t)dst->data[3];
  
@@ -178,7 +162,7 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
  
      // 4. Setup Pipeline Parameters
      VAProcPipelineParameterBuffer params = {};
-@@ -688,9 +759,10 @@
+@@ -688,9 +746,10 @@
      params.output_region = &dst_rect;
      params.output_background_color = 0xFF000000;
      params.filter_flags = VA_FILTER_SCALING_DEFAULT;
@@ -192,7 +176,7 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
  
      VABufferID pipeline_buf = VA_INVALID_ID;
      vas = vaCreateBuffer(display, mVppContextId, VAProcPipelineParameterBufferType,
-@@ -719,6 +791,108 @@
+@@ -719,6 +778,112 @@
      return 0;
  }
  
@@ -232,7 +216,11 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
 +        }
 +    }
 +    if (ret >= 0) ret = av_frame_copy_props(out, decoded);
-+    if (ret >= 0 && mVppValidation == VppValidation::Pixels &&
++    if (ret >= 0 && mDirectValidation == DirectValidation::Fallback && mDirectFrames == 3) {
++        ALOGI("LEPTON_VA_DIRECT_TEST forced failure (direct-validation=fallback)");
++        ret = AVERROR(EIO);
++    }
++    if (ret >= 0 && mDirectValidation == DirectValidation::Pixels &&
 +            (mDirectFrames == 5 || mDirectFrames == 30)) {
 +        compareDirectPlanes(decoded, (VASurfaceID)(uintptr_t)out->data[3]);
 +    }
@@ -254,7 +242,7 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
 +    return ret;
 +}
 +
-+// Lepton (vpp-validation=pixels): compare a direct-output buffer, read on the
++// Lepton (direct-validation=pixels): compare a direct-output buffer, read on the
 +// CPU, with the decoded surface downloaded by FFmpeg.
 +void C2FFMPEGVideoDecodeComponent::compareDirectPlanes(AVFrame* decoded, VASurfaceID surface) {
 +    auto held = mHeldSurfaces.find(surface);
@@ -301,7 +289,7 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
  void C2FFMPEGVideoDecodeComponent::destroyVppContext() {
      if (!mCtx || !mCtx->hw_frames_ctx) return;
  
-@@ -746,49 +920,47 @@
+@@ -746,49 +911,47 @@
  #if CONFIG_VAAPI
      if (mCtx->hw_frames_ctx && mUtils->isVPPMode()) {
          AVFrame* tempFrame = av_frame_alloc();
@@ -385,298 +373,7 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
                  } else {
                      // Move tempFrame to mFrame efficiently
                      av_frame_move_ref(mFrame, tempFrame);
-@@ -955,12 +1127,21 @@
- #if CONFIG_VAAPI
-     if (mFrame->format == AV_PIX_FMT_VAAPI) {
-         if (!mDeriveDecided) decideCopyBack();
-+        AVHWFramesContext* hwfc = (AVHWFramesContext*)mFrame->hw_frames_ctx->data;
-+        VADisplay display = ((AVVAAPIDeviceContext*)hwfc->device_ctx->hwctx)->display;
-+        VAStatus syncStatus;
-         {
-             // Wait for the GPU decode separately from the download.
--            AVHWFramesContext* hwfc = (AVHWFramesContext*)mFrame->hw_frames_ctx->data;
-             ScopedStepTime t(mTimes.sync);
--            vaSyncSurface(((AVVAAPIDeviceContext*)hwfc->device_ctx->hwctx)->display,
--                          (VASurfaceID)(uintptr_t)mFrame->data[3]);
-+            syncStatus = vaSyncSurface(display, (VASurfaceID)(uintptr_t)mFrame->data[3]);
-+        }
-+        if (syncStatus == VA_STATUS_SUCCESS && mCopyBackVppEnabled && !mCopyBackVppFailed &&
-+                !mUtils->mUseDrmPrime && hwfc->sw_format == AV_PIX_FMT_P010 &&
-+                !(mFrame->flags & AV_FRAME_FLAG_INTERLACED) &&
-+                mFrame->color_trc == AVCOL_TRC_BT709 && mFrame->colorspace == AVCOL_SPC_BT709 &&
-+                mFrame->color_primaries == AVCOL_PRI_BT709 && mFrame->color_range == AVCOL_RANGE_MPEG &&
-+                tryCopyBackVpp(display)) {
-+            return C2_OK;
-         }
-         if (mDeriveDownload) {
-             ScopedStepTime t(mTimes.download);
-@@ -1048,6 +1229,16 @@
-         return NULL;
-     }
- 
-+#if CONFIG_VAAPI
-+    if ((mVppValidation == VppValidation::Pixels || mVppValidation == VppValidation::Timestamps) && mTimes.frames == 0) {
-+        ALOGI("LEPTON_VA_OUTPUT_LAYOUT size=%dx%d format=%#x YVU_row=%d,%d,%d YVU_col=%d,%d,%d",
-+              mFrame->width, mFrame->height, mUtils->getPixelFormat(false),
-+              linesize[0], linesize[2], linesize[1],
-+              layout.planes[C2PlanarLayout::PLANE_Y].colInc,
-+              layout.planes[C2PlanarLayout::PLANE_V].colInc,
-+              layout.planes[C2PlanarLayout::PLANE_U].colInc);
-+    }
-+#endif
-     return createGraphicBuffer(std::move(block), C2Rect(mFrame->width, mFrame->height));
- }
- 
-@@ -1135,6 +1326,197 @@
-           vendor ? vendor : "?");
- }
- 
-+void C2FFMPEGVideoDecodeComponent::clearCopyBackVpp() {
-+    avfilter_graph_free(&mCopyBackVppGraph);
-+    av_buffer_unref(&mCopyBackVppInput);
-+    mCopyBackVppSource = mCopyBackVppSink = nullptr;
-+}
-+
-+int C2FFMPEGVideoDecodeComponent::initCopyBackVpp() {
-+    clearCopyBackVpp();
-+    if (mVppValidation == VppValidation::InitError) {
-+        ALOGI("LEPTON_VA_VPP_INJECT init");
-+        return AVERROR(ENOSYS);
-+    }
-+    const AVFilter* buffer = avfilter_get_by_name("buffer");
-+    const AVFilter* scale = avfilter_get_by_name("scale_vaapi");
-+    const AVFilter* sink = avfilter_get_by_name("buffersink");
-+    if (!buffer || !scale || !sink) return AVERROR(ENOSYS);
-+
-+    mCopyBackVppGraph = avfilter_graph_alloc();
-+    if (!mCopyBackVppGraph) return AVERROR(ENOMEM);
-+    mCopyBackVppGraph->nb_threads = 1;
-+    mCopyBackVppSource = avfilter_graph_alloc_filter(mCopyBackVppGraph, buffer, "p010");
-+    if (!mCopyBackVppSource) return AVERROR(ENOMEM);
-+
-+    AVBufferSrcParameters* params = av_buffersrc_parameters_alloc();
-+    if (!params) return AVERROR(ENOMEM);
-+    params->format = AV_PIX_FMT_VAAPI;
-+    params->hw_frames_ctx = mFrame->hw_frames_ctx;
-+    params->width = mFrame->width;
-+    params->height = mFrame->height;
-+    params->sample_aspect_ratio = mFrame->sample_aspect_ratio;
-+    params->time_base = AVRational{1, 1000000};
-+    params->color_space = mFrame->colorspace;
-+    params->color_range = mFrame->color_range;
-+
-+    int err = av_buffersrc_parameters_set(mCopyBackVppSource, params);
-+    av_free(params);
-+    if (err < 0) return err;
-+    err = avfilter_init_str(mCopyBackVppSource, nullptr);
-+    if (err < 0) return err;
-+    AVFilterContext* scaler = nullptr;
-+    err = avfilter_graph_create_filter(&scaler, scale, "vpp", "format=nv12",
-+                                      nullptr, mCopyBackVppGraph);
-+    if (err < 0) return err;
-+    err = avfilter_graph_create_filter(&mCopyBackVppSink, sink, "nv12", nullptr,
-+                                      nullptr, mCopyBackVppGraph);
-+    if (err < 0) return err;
-+    err = avfilter_link(mCopyBackVppSource, 0, scaler, 0);
-+    if (err < 0) return err;
-+    err = avfilter_link(scaler, 0, mCopyBackVppSink, 0);
-+    if (err < 0) return err;
-+    err = avfilter_graph_config(mCopyBackVppGraph, nullptr);
-+    if (err < 0) return err;
-+
-+    mCopyBackVppInput = av_buffer_ref(mFrame->hw_frames_ctx);
-+    if (!mCopyBackVppInput) return AVERROR(ENOMEM);
-+    mCopyBackVppWidth = mFrame->width;
-+    mCopyBackVppHeight = mFrame->height;
-+    ALOGI("LEPTON_VA_VPP input=p010 output=nv12 size=%dx%d", mFrame->width, mFrame->height);
-+    return 0;
-+}
-+
-+bool C2FFMPEGVideoDecodeComponent::tryCopyBackVpp(VADisplay display) {
-+    int err = 0;
-+    if (!mCopyBackVppInput || mCopyBackVppInput->data != mFrame->hw_frames_ctx->data ||
-+            mCopyBackVppWidth != mFrame->width || mCopyBackVppHeight != mFrame->height) {
-+        err = initCopyBackVpp();
-+    }
-+    AVFrame* surface = err >= 0 ? av_frame_alloc() : nullptr;
-+    AVFrame* output = err >= 0 ? av_frame_alloc() : nullptr;
-+    if (err >= 0 && (!surface || !output)) err = AVERROR(ENOMEM);
-+    if (err >= 0) {
-+        ScopedStepTime t(mCopyBackVppSubmitUs);
-+        err = av_buffersrc_add_frame_flags(mCopyBackVppSource, mFrame, AV_BUFFERSRC_FLAG_KEEP_REF);
-+        if (err >= 0) err = av_buffersink_get_frame(mCopyBackVppSink, surface);
-+    }
-+    if (err >= 0 && (surface->format != AV_PIX_FMT_VAAPI ||
-+            surface->width != mFrame->width || surface->height != mFrame->height)) {
-+        err = AVERROR(EINVAL);
-+    }
-+    if (err >= 0) {
-+        ScopedStepTime t(mCopyBackVppSyncUs);
-+        if (vaSyncSurface(display, (VASurfaceID)(uintptr_t)surface->data[3]) != VA_STATUS_SUCCESS) {
-+            err = AVERROR(EIO);
-+        }
-+    }
-+    if (err >= 0 && mVppValidation == VppValidation::FrameError && mCopyBackVppFrames == 3) {
-+        ALOGI("LEPTON_VA_VPP_INJECT frame");
-+        err = AVERROR(EIO);
-+    }
-+    if (err >= 0) {
-+        const int64_t start = leptonNowUs();
-+        output->format = AV_PIX_FMT_NV12;
-+        if (mDeriveDownload) {
-+            err = av_hwframe_map(output, surface, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_DIRECT);
-+        } else {
-+            err = AVERROR(ENOSYS);
-+        }
-+        if (err < 0) {
-+            av_frame_unref(output);
-+            output->format = AV_PIX_FMT_NV12;
-+            err = av_hwframe_transfer_data(output, surface, 0);
-+        }
-+        const int64_t elapsed = leptonNowUs() - start;
-+        mTimes.download += elapsed;
-+        mCopyBackVppReadUs += elapsed;
-+        if (err >= 0) err = av_frame_copy_props(output, mFrame);
-+    }
-+    if (err >= 0) {
-+        if (mVppValidation == VppValidation::Pixels) compareVppPlanes(output);
-+        av_frame_unref(mFrame);
-+        av_frame_move_ref(mFrame, output);
-+        ++mCopyBackVppFrames;
-+    } else {
-+        // The original decode frame stayed referenced throughout submission and readback.
-+        ALOGW("LEPTON_VA_VPP fallback=%s", av_err2str(err));
-+        clearCopyBackVpp();
-+        mCopyBackVppFailed = true;
-+    }
-+    av_frame_free(&output);
-+    av_frame_free(&surface);
-+    return err >= 0;
-+}
-+
-+void C2FFMPEGVideoDecodeComponent::compareVppPlanes(const AVFrame* nv12) {
-+    switch (mCopyBackVppFrames) {
-+        case 10: case 119: case 120: case 263: case 264: case 315: break;
-+        default: return;
-+    }
-+
-+    AVFrame* p010 = av_frame_alloc();
-+    if (!p010) return;
-+    p010->format = AV_PIX_FMT_P010;
-+    const int err = av_hwframe_transfer_data(p010, mFrame, 0);
-+    if (err < 0) {
-+        ALOGE("LEPTON_VA_VPP_PIXELS reference download failed: %s", av_err2str(err));
-+        av_frame_free(&p010);
-+        return;
-+    }
-+
-+    ALOGI("LEPTON_VA_VPP_LAYOUT frame=%" PRIu64 " pts=%" PRId64 " size=%dx%d crop=%zu,%zu,%zu,%zu"
-+          " p010_strides=%d,%d nv12_strides=%d,%d",
-+          mCopyBackVppFrames, nv12->best_effort_timestamp, nv12->width, nv12->height,
-+          nv12->crop_left, nv12->crop_top, nv12->crop_right, nv12->crop_bottom,
-+          p010->linesize[0], p010->linesize[1], nv12->linesize[0], nv12->linesize[1]);
-+
-+    for (int component = 0; component < 3; ++component) {
-+        const int plane = component > 0;
-+        const int width = nv12->width >> plane;
-+        const int height = nv12->height >> plane;
-+        const int pitch = plane ? 2 : 1;
-+        const int offset = component == 2;
-+        int maxError = 0, peakX = 0, peakY = 0;
-+        int64_t absoluteSum = 0, signedSum = 0, outsideOne = 0, locallyFlat = 0;
-+        for (int y = 0; y < height; ++y) {
-+            const auto* in = reinterpret_cast<const uint16_t*>(p010->data[plane] + y * p010->linesize[plane]);
-+            const auto* out = nv12->data[plane] + y * nv12->linesize[plane];
-+            for (int x = 0; x < width; ++x) {
-+                const int index = x * pitch + offset;
-+                const int expected = std::min(255, (in[index] + 128) >> 8);
-+                const int diff = out[index] - expected;
-+                const int magnitude = std::abs(diff);
-+                if (magnitude > maxError) {
-+                    maxError = magnitude;
-+                    peakX = x;
-+                    peakY = y;
-+                }
-+                absoluteSum += magnitude;
-+                signedSum += diff;
-+                if (magnitude > 1) {
-+                    ++outsideOne;
-+                    const auto* above = reinterpret_cast<const uint16_t*>(
-+                        p010->data[plane] + std::max(0, y - 1) * p010->linesize[plane]);
-+                    const auto* below = reinterpret_cast<const uint16_t*>(
-+                        p010->data[plane] + std::min(height - 1, y + 1) * p010->linesize[plane]);
-+                    const uint16_t left = in[std::max(0, x - 1) * pitch + offset];
-+                    const uint16_t right = in[std::min(width - 1, x + 1) * pitch + offset];
-+                    const int spread = std::max({in[index], left, right, above[index], below[index]}) -
-+                                       std::min({in[index], left, right, above[index], below[index]});
-+                    locallyFlat += spread <= 256;
-+                }
-+            }
-+        }
-+        const double count = static_cast<double>(width) * height;
-+        ALOGI("LEPTON_VA_VPP_PIXELS frame=%" PRIu64 " plane=%c max=%d mae=%.5f bias=%+.5f"
-+              " gt1=%" PRId64 " gt1_flat=%" PRId64 " peak=%d,%d",
-+              mCopyBackVppFrames, "YUV"[component], maxError, absoluteSum / count,
-+              signedSum / count, outsideOne, locallyFlat, peakX, peakY);
-+    }
-+    av_frame_free(&p010);
-+}
-+
- int C2FFMPEGVideoDecodeComponent::downloadFrameDerived() {
-     AVFrame* out = av_frame_alloc();
-     if (!out) return AVERROR(ENOMEM);
-@@ -1272,6 +1654,10 @@
- 
- c2_status_t C2FFMPEGVideoDecodeComponent::onStop() {
-     ALOGD("onStop");
-+#if CONFIG_VAAPI
-+    clearCopyBackVpp();
-+#endif
-+
-     return C2_OK;
- }
- 
-@@ -1288,6 +1674,10 @@
- 
- c2_status_t C2FFMPEGVideoDecodeComponent::onFlush_sm() {
-     ALOGD("onFlush_sm");
-+#if CONFIG_VAAPI
-+    clearCopyBackVpp();
-+#endif
-+
-     if (mCtx && avcodec_is_open(mCtx)) {
-         // Make sure that the next buffer output does not still
-         // depend on fragments from the last one decoded.
-@@ -1367,8 +1757,17 @@
-         mTimes.lastUs = now;
-     }
- 
-+    auto traceOutput = [this, buffer](const std::unique_ptr<C2Work>& work) {
-+#if CONFIG_VAAPI
-+        if (buffer && (mVppValidation == VppValidation::Pixels || mVppValidation == VppValidation::Timestamps)) {
-+            ALOGI("LEPTON_VA_OUTPUT_PTS id=%" PRIu64 " pts_us=%" PRIu64,
-+                  work->input.ordinal.frameIndex.peeku(), work->input.ordinal.timestamp.peeku());
-+        }
-+#endif
-+    };
-     if (work && c2_cntr64_t(mFrame->best_effort_timestamp) == work->input.ordinal.frameIndex) {
-         prunePendingWorksUntil(work);
-+        traceOutput(work);
-         work->worklets.front()->output.configUpdate = std::move(configUpdate);
-         work->worklets.front()->output.buffers.clear();
-         if (buffer) {
-@@ -1378,8 +1777,9 @@
-         work->workletsProcessed = 1u;
-         work->result = C2_OK;
-     } else {
--        auto fillWork = [buffer, &configUpdate, this](const std::unique_ptr<C2Work>& work) {
-+        auto fillWork = [buffer, &configUpdate, this, traceOutput](const std::unique_ptr<C2Work>& work) {
-             popPendingWork(work);
-+            traceOutput(work);
-             work->worklets.front()->output.configUpdate = std::move(configUpdate);
-             work->worklets.front()->output.flags = (C2FrameData::flags_t)0;
-             work->worklets.front()->output.buffers.clear();
-@@ -1405,7 +1805,24 @@
+@@ -1405,7 +1568,24 @@
      const std::unique_ptr<C2Work> &work,
      const std::shared_ptr<C2BlockPool> &pool
  ) {
@@ -702,7 +399,7 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
      size_t inSize = 0u;
      bool eos = (work->input.flags & C2FrameData::FLAG_END_OF_STREAM);
      C2ReadView rView = mDummyReadView;
-@@ -1670,8 +2087,15 @@
+@@ -1683,8 +1863,15 @@
  
      while (!block) {
          if (mAvailableSurfaces.empty()) {
@@ -719,7 +416,30 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
              if (err != C2_OK) {
                  ALOGE("getBufferVAAPI[%p]: failed to fetch graphic block %d x %d (%#x) err = %d",
                        hwfc, mSurfaceWidth, mSurfaceHeight, mUtils->getPixelFormat(true), err);
-@@ -1769,10 +2193,26 @@
+@@ -1748,6 +1935,10 @@
+     }
+ 
+     if (s_it == mSurfaces.end()) {
++        if (block->handle()->numFds < 1) {
++            ALOGE("getBufferVAAPI[%p]: buffer %d has no file descriptor.", hwfc, desc.getId());
++            return AVERROR(EINVAL);
++        }
+         int bufferPrimeFd = static_cast<int>(block->handle()->data[0]);
+ 
+         VADRMPRIMESurfaceDescriptor descriptor;
+@@ -1775,17 +1966,37 @@
+         descriptor.objects[0].fd = bufferPrimeFd;
+ 
+         if (mUtils->isGrallocMinigbm()) {
+-            cros_gralloc_handle_t crosHandle = reinterpret_cast<cros_gralloc_handle_t>(block->handle());
++            cros_gralloc_handle_t crosHandle = leptonCrosHandle(block->handle());
++            if (!crosHandle) {
++                ALOGE("getBufferVAAPI[%p]: buffer %d is not a minigbm handle.", hwfc, desc.getId());
++                return AVERROR(EINVAL);
++            }
+ 
+             descriptor.objects[0].fd = bufferPrimeFd;
+             descriptor.objects[0].size = crosHandle->total_size;
              descriptor.objects[0].drm_format_modifier = crosHandle->format_modifier;
  
              descriptor.layers[0].drm_format = crosHandle->format;
@@ -746,7 +466,7 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
          } else {
              // Determine Bytes Per Pixel (BPP)
              int bpp = 1;
-@@ -1810,12 +2250,12 @@
+@@ -1823,12 +2034,12 @@
          // Lepton: one line per imported buffer, to compare gralloc's layout
          // with what the VA driver expects.
          ALOGI("getBufferVAAPI: import buffer %d: %ux%u fourcc %#x drm %#x modifier %#" PRIx64
@@ -762,7 +482,7 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
          vas = vaCreateSurfaces(hwctx->display, mUtils->getVAFormat(),
                                 mSurfaceWidth, mSurfaceHeight, &surfaceId, 1, attributes, 2);
  
-@@ -1875,6 +2315,21 @@
+@@ -1888,6 +2099,21 @@
  
      auto p_it = mPendingSurfaces.find(surfaceId);
  
@@ -821,26 +541,12 @@ decoded surface (LEPTON_VA_DIRECT_PIXELS).
          int width = 0, height = 0;
      } mTimes;
      // Lepton: copy-back download and conversion (patch 0029).
-@@ -144,6 +158,22 @@
+@@ -144,6 +158,8 @@
  #if CONFIG_VAAPI
      void decideCopyBack();
      int downloadFrameDerived();
-+    void clearCopyBackVpp();
-+    int initCopyBackVpp();
-+    bool tryCopyBackVpp(VADisplay display);
-+
-+    enum class VppValidation { None, Pixels, Timestamps, InitError, FrameError };
-+    VppValidation mVppValidation = VppValidation::None;
-+    void compareVppPlanes(const AVFrame* nv12);
-+    bool mCopyBackVppEnabled = false;
-+    bool mCopyBackVppFailed = false;
-+    AVFilterGraph* mCopyBackVppGraph = nullptr;
-+    AVFilterContext* mCopyBackVppSource = nullptr;
-+    AVFilterContext* mCopyBackVppSink = nullptr;
-+    AVBufferRef* mCopyBackVppInput = nullptr;
-+    int mCopyBackVppWidth = 0, mCopyBackVppHeight = 0;
-+    uint64_t mCopyBackVppFrames = 0;
-+    int64_t mCopyBackVppSubmitUs = 0, mCopyBackVppSyncUs = 0, mCopyBackVppReadUs = 0;
++    enum class DirectValidation { None, Pixels, Fallback };
++    DirectValidation mDirectValidation = DirectValidation::None;
  #endif
      void noteDecodedFrame();
      void logSessionEnd();
