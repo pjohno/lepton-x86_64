@@ -12,12 +12,22 @@ that it carries at least one fd and is large enough for that layout, and
 that its magic number matches; otherwise the id is 0 (Surface output still
 works by slot).
 
-Log each buffer imported as a VA surface (format, modifier, pitches,
-offsets), one line per buffer, to diagnose layout mismatches.
+Log only the first four VA surface imports per decoder session (format,
+modifier, pitches, offsets) at debug level to diagnose layout mismatches
+without logging every frame during ByteBuffer direct output.
 
 --- a/codec2/C2FFMPEGVideoDecodeComponent.cpp
 +++ b/codec2/C2FFMPEGVideoDecodeComponent.cpp
-@@ -1399,9 +1399,26 @@
+@@ -258,5 +258,8 @@
+ void C2FFMPEGVideoDecodeComponent::deInitDecoder() {
+     ALOGD("%p deInitDecoder: %p", this, mCtx);
++#if CONFIG_VAAPI
++    mVaImportsLogged = 0;
++#endif
+     if (mFilterGraph) {
+         av_freep(&mFilterGraph->opaque);
+         avfilter_graph_free(&mFilterGraph);
+@@ -1399,9 +1402,26 @@
  // uses a margin of 7~8 buffers on top of configured output delay, so it's unlikely the
  // codec will stall.
  
@@ -44,25 +54,27 @@ offsets), one line per buffer, to diagnose layout mismatches.
  }
  
  int C2FFMPEGVideoDecodeComponent::getBufferVAAPI(AVHWFramesContext* hwfc, AVFrame* frame, bool forceAllocator) {
-@@ -1581,6 +1598,15 @@
+@@ -1581,6 +1601,17 @@
              descriptor.layers[0].offset[3] = 0;
          }
  
-+        // Lepton: one line per imported buffer, to compare gralloc's layout
-+        // with what the VA driver expects.
-+        ALOGI("getBufferVAAPI: import buffer %d: %ux%u fourcc %#x drm %#x modifier %#" PRIx64
-+              " size %u planes %u pitch %u/%u offset %u/%u",
-+              desc.getId(), descriptor.width, descriptor.height, descriptor.fourcc,
-+              descriptor.layers[0].drm_format, descriptor.objects[0].drm_format_modifier,
-+              descriptor.objects[0].size, descriptor.layers[0].num_planes,
-+              descriptor.layers[0].pitch[0], descriptor.layers[0].pitch[1],
-+              descriptor.layers[0].offset[0], descriptor.layers[0].offset[1]);
++        // Lepton: sample gralloc layouts once per session, not once per frame.
++        if (mVaImportsLogged < 4) {
++            ++mVaImportsLogged;
++            ALOGD("getBufferVAAPI: import buffer %d: %ux%u fourcc %#x drm %#x modifier %#" PRIx64
++                  " size %u planes %u pitch %u/%u offset %u/%u",
++                  desc.getId(), descriptor.width, descriptor.height, descriptor.fourcc,
++                  descriptor.layers[0].drm_format, descriptor.objects[0].drm_format_modifier,
++                  descriptor.objects[0].size, descriptor.layers[0].num_planes,
++                  descriptor.layers[0].pitch[0], descriptor.layers[0].pitch[1],
++                  descriptor.layers[0].offset[0], descriptor.layers[0].offset[1]);
++        }
          vas = vaCreateSurfaces(hwctx->display, mUtils->getVAFormat(),
                                 mSurfaceWidth, mSurfaceHeight, &surfaceId, 1, attributes, 2);
  
 --- a/codec2/C2FFMPEGVideoDecodeComponent.h
 +++ b/codec2/C2FFMPEGVideoDecodeComponent.h
-@@ -130,8 +130,11 @@
+@@ -130,8 +130,12 @@
          uint32_t igbpSlot;
          uint64_t igbpId;
          VASurfaceID surfaceId;
@@ -74,4 +86,5 @@ offsets), one line per buffer, to diagnose layout mismatches.
 +        int getId() const { return igbpId ? static_cast<int>(igbpSlot) : static_cast<int>(bufferId); }
          void set(const std::shared_ptr<C2GraphicBlock>& block);
      };
++    unsigned mVaImportsLogged = 0;
  

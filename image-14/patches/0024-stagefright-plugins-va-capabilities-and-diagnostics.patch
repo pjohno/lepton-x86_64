@@ -19,7 +19,7 @@ the GPU cannot decode) is not mistaken for hardware decoding.
 diff --git a/codec2/C2FFMPEGVideoDecodeComponent.cpp b/codec2/C2FFMPEGVideoDecodeComponent.cpp
 --- a/codec2/C2FFMPEGVideoDecodeComponent.cpp
 +++ b/codec2/C2FFMPEGVideoDecodeComponent.cpp
-@@ -255,8 +255,47 @@
+@@ -255,11 +255,50 @@
      return C2_OK;
  }
  
@@ -64,6 +64,9 @@ diff --git a/codec2/C2FFMPEGVideoDecodeComponent.cpp b/codec2/C2FFMPEGVideoDecod
  void C2FFMPEGVideoDecodeComponent::deInitDecoder() {
      ALOGD("%p deInitDecoder: %p", this, mCtx);
 +    logSessionEnd();
+ #if CONFIG_VAAPI
+     mVaImportsLogged = 0;
+ #endif
      if (mFilterGraph) {
          av_freep(&mFilterGraph->opaque);
          avfilter_graph_free(&mFilterGraph);

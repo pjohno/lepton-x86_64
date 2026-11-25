@@ -375,8 +375,9 @@ What each step does:
    first time) and applies Lepton's changes: Valve's projects and patches, then
    the x86_64 patches in `image-14/patches/`.
    - If the download is interrupted, rerun with `--resume`.
-   - `--reset` puts an existing checkout back to exactly the downloaded sources
-     and then patches it again, with no new download. It also removes
+   - `--reset` restores an existing checkout, installs the current local
+     manifests and synchronizes their pinned projects, then patches it again.
+     New or changed projects are downloaded automatically. It also removes
      previously installed build outputs. Use it when the checkout needs to be
      re-prepared for changed Android sources or patches, or when you want a
      build that is known to come only from this repository. For an already
@@ -580,7 +581,13 @@ python3 tests/test-build-integration.py
 Use this when the prepared Android sources no longer match the required
 patches/vendor content. `--reset` discards checkout edits and runs
 `m installclean`; it keeps the downloaded checkout and compiled intermediates,
-but removes installed build outputs. It is not the ordinary incremental path.
+but removes installed build outputs. It then installs the repository's current
+local manifests and synchronizes sources before vendoring and patching, so
+new projects such as FFmpeg are downloaded automatically. Network access is
+required; you do not need to run `--add-projects` first. If synchronization is
+interrupted, rerun `--reset` to retry it. This also recovers a previous reset
+that failed during patching with `No Git project`. It is not the ordinary
+incremental path.
 
 ```bash
 bash image-14/scripts/preflight-x86_64.sh existing
@@ -798,9 +805,10 @@ source compatibility check, not hardware validation.
   start the patching from clean sources. An interrupted **reset** must also
   be retried with `--reset`; resume and build refuse its `reset.started`
   checkpoint. Existing vendor/patch checkpoints remain as evidence until
-  project reset and `m installclean` both succeed. Reset then vendors and
-  patches again. It keeps the pinned manifest and compiled intermediates;
-  it neither downloads sources nor recreates the Android checkout.
+  project reset and `m installclean` both succeed. Reset then synchronizes
+  the current local manifests before vendoring and patching again. It downloads new or changed projects while reusing the
+  checkout and compiled intermediates. An interrupted sync is retried by
+  `--reset` without repeating the completed source reset.
 - **Git index locks after an interrupted prepare.** `--reset` inventories
   managed projects using `.repo/project.list` and resolves their actual
   `index.lock` locations through Git, including gitfiles and repo worktrees.

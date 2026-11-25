@@ -14,9 +14,10 @@ Usage: prepare-x86_64.sh --check | --sync-only | --resume-sync | --vendor-only |
   --execute      Create new checkout, sync, vendor sources, and apply patches.
   --resume       Resume an interrupted download/copy; never replay interrupted patches.
   --reset        Existing synced checkout: discard every change to the Android
-                 sources (back to the pinned manifest; no download), remove
-                 installed build outputs (m installclean), then vendor and
-                 patch again. Retry --reset after any interrupted reset.
+                 sources, remove installed build outputs (m installclean),
+                 install current local manifests and sync pinned projects
+                 (downloading new/changed sources), then vendor and patch again.
+                 Retry --reset after any interrupted reset.
                  Recovers old, verified-idle Git index locks automatically;
                  active/ambiguous locks stop with manual recovery guidance.
                  Keep other Git/repo operations stopped during reset.
@@ -109,6 +110,7 @@ for name in 00-remotes 01-removes 02-waydroid 10-valve-remotes 11-removes 12-val
 done
 for name in \
   "$IMAGE/android_device_valve_lepton/ubpf/ubpf_syscall.h" \
+  "$IMAGE/scripts/internal/sync-sources.sh" \
   "$IMAGE/.buildscripts/copy_vendored_projects.sh" \
   "$IMAGE/android_vendor_valve/patches/apply-patches.sh" \
   "$IMAGE/patches/0001-mesa-android-sdk34-link-libzstd.patch" \
@@ -174,7 +176,7 @@ if [[ "$ACTION" == --execute || "$ACTION" == --sync-only ]]; then
   [[ ! -e "$TARGET" && ! -L "$TARGET" ]] || err 'Fresh target exists; use --resume only for a marked checkout'
 elif [[ "$ACTION" == --reset ]]; then
   [[ -f "$MARKER" && -d "$STATE" ]] || err 'No checkout prepared by this workflow to reset'
-  [[ -f "$STATE/sync.done" ]] || err 'Source synchronization incomplete: use --resume first'
+  [[ -f "$STATE/sync.done" || -f "$STATE/reset-sources.done" ]] || err 'Source synchronization incomplete: use --resume first'
 elif [[ "$ACTION" == --add-projects ]]; then
   # The owner marker may name an older repository commit: adding projects is
   # how a prepared checkout follows new manifests without a reset.
@@ -335,15 +337,18 @@ if [[ "$ACTION" == --reset ]]; then
   # Keep old stage evidence until reset AND installclean succeed. All source
   # consumers reject reset.started, including after SIGKILL/power loss.
   touch "$STATE/reset.started"
-  python3 -B "$IMAGE/scripts/internal/recover-source-locks.py" "$TARGET"
-  run_in_builder <<'INNER'
+  if [[ ! -f "$STATE/reset-sources.done" ]]; then
+    python3 -B "$IMAGE/scripts/internal/recover-source-locks.py" "$TARGET"
+    run_in_builder <<'INNER'
 set -Eeuo pipefail
 bash /workspace/scripts/internal/reset-sources.sh
 INNER
-  rm -f -- "$STATE/vendor.done" "$STATE/patches.done" "$STATE/patches.started"
-  rm -- "$STATE/reset.started"
-  info "[$(date -u +%H:%M:%SZ)] [PASS] Reset complete; vendoring and patching again"
-  printf '%s\n' "$owner_content" > "$MARKER"
+    # Once manifests change, an interrupted sync may have missing worktrees.
+    # Retry synchronization directly instead of resetting those partial trees.
+    touch "$STATE/reset-sources.done"
+  fi
+  rm -f -- "$STATE/sync.done" "$STATE/vendor.done" "$STATE/patches.done" "$STATE/patches.started"
+  info "[$(date -u +%H:%M:%SZ)] [PASS] Sources reset; synchronizing current manifests"
 fi
 
 # Detect whether repo synced completely before doing any vendored copies.
@@ -351,31 +356,19 @@ if [[ ! -f "$STATE/sync.done" ]]; then
   info "[$(date -u +%H:%M:%SZ)] [START] Stage 1: Android repo init and synchronization"
   run_in_builder <<'INNER'
 set -Eeuo pipefail
-cd /workspace/output
-[[ -f /run/.containerenv || -f /.dockerenv ]] || { echo 'Not in container'; exit 1; }
 [[ "$(readlink -f /workspace/output)" == /workspace/output ]] || { echo 'Unexpected output path'; exit 1; }
-if [[ ! -f .repo/manifest.xml ]]; then
-  echo "[$(date -u +%H:%M:%SZ)] [INFO] Initializing Android 14 manifest (android-14.0.0_r75)"
-  repo init -u https://android.googlesource.com/platform/manifest \
-    -b android-14.0.0_r75 -g default,-trusty --git-lfs
-fi
-echo "[$(date -u +%H:%M:%SZ)] [INFO] repo initialized; installing local manifests"
-mkdir -p .repo/local_manifests
-for source in /workspace/android_vendor_valve/manifest_scripts/manifests-34/*.xml; do
-  destination=".repo/local_manifests/${source##*/}"
-  if [[ -e "$destination" ]]; then
-    cmp -s "$source" "$destination" || { echo "Changed local manifest: $destination"; exit 1; }
-  else
-    cp "$source" "$destination"
-  fi
-done
-echo "[$(date -u +%H:%M:%SZ)] [START] Synchronizing Android repositories (4 jobs)"
-.repo/repo/repo sync -j4
-echo "[$(date -u +%H:%M:%SZ)] [PASS] Android source synchronization finished"
-.repo/repo/repo manifest -r -o .lepton-resolved-manifest.xml
+bash /workspace/scripts/internal/sync-sources.sh \
+  /workspace/output /workspace/android_vendor_valve/manifest_scripts/manifests-34
 INNER
   touch "$STATE/sync.done"
   info "[$(date -u +%H:%M:%SZ)] [PASS] Stage 1 complete; resolved manifest recorded"
+fi
+
+if [[ "$ACTION" == --reset ]]; then
+  printf '%s\n' "$owner_content" > "$MARKER"
+  rm -- "$STATE/reset-sources.done"
+  rm -- "$STATE/reset.started"
+  info "[$(date -u +%H:%M:%SZ)] [PASS] Reset and synchronization complete; vendoring and patching again"
 fi
 
 if [[ "$ACTION" == --sync-only || "$ACTION" == --resume-sync ]]; then

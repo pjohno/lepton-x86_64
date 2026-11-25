@@ -102,6 +102,15 @@ if sys.argv[1] == 'forall':
             env['REPO_LREV'] = 'missing-revision'
         result = subprocess.run(['bash', '-c', command], cwd=root / name, env=env)
         if result.returncode: sys.exit(result.returncode)
+elif sys.argv[1] == 'sync':
+    with open(os.environ['RESET_TRACE'], 'a') as trace: trace.write('sync ' + ' '.join(sys.argv[2:]) + '\\n')
+    assert not (root / '.lepton-clean14-state/patches.started').exists()
+    for manifest in (root / '.repo/local_manifests').glob('*.xml'):
+        if 'external/ffmpeg' in manifest.read_text():
+            (root / 'external/ffmpeg').mkdir(parents=True, exist_ok=True)
+    if (root / '.lepton-clean14-state/fail-sync').exists(): sys.exit(23)
+elif sys.argv[1] == 'manifest':
+    assert (root / '.lepton-resolved-manifest.xml').exists()
 else:
     raise SystemExit('Unexpected repo operation (no downloads allowed): ' + repr(sys.argv))
 ''', True)
@@ -135,11 +144,14 @@ else:
 
     def prepare_fixture(self):
         fake = self.base / 'source'
-        for name in ('prepare-x86_64.sh', 'lib/workspace.sh', 'internal/recover-source-locks.py', 'internal/reset-sources.sh'):
+        for name in ('prepare-x86_64.sh', 'lib/workspace.sh', 'internal/recover-source-locks.py', 'internal/reset-sources.sh', 'internal/sync-sources.sh'):
             dest = fake / 'image-14/scripts' / name
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(SCRIPTS / name, dest)
         write(fake / 'image-14/scripts/internal/recover-source-locks.py', self.checker_source())
+        sync = fake / 'image-14/scripts/internal/sync-sources.sh'
+        sync.write_text('\n'.join(line for line in sync.read_text().splitlines()
+                                  if not line.startswith('[[ -f /run/.containerenv')) + '\n')
         # Required local inputs, without copying any Android source.
         source = (SCRIPTS / 'prepare-x86_64.sh').read_text()
         import re
@@ -169,6 +181,9 @@ set -eu
 input=$(cat)
 if [[ "$input" == *reset-sources.sh* ]]; then
   bash "$FAKE_SOURCE/image-14/scripts/internal/reset-sources.sh" "$FAKE_AOSP"
+elif [[ "$input" == *sync-sources.sh* ]]; then
+  bash "$FAKE_SOURCE/image-14/scripts/internal/sync-sources.sh" "$FAKE_AOSP" \
+    "$FAKE_SOURCE/image-14/android_vendor_valve/manifest_scripts/manifests-34"
 elif [[ "$input" == *copy_vendored_projects.sh* ]]; then
   [[ ! -e "$FAKE_AOSP/.lepton-clean14-state/fail-vendor" ]]
 else
@@ -182,6 +197,45 @@ fi
         result = subprocess.run(['bash', str(script), action], env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
         return result.stdout + result.stderr
+
+    def test_reset_downloads_added_projects_and_retries_failed_sync(self):
+        script = self.prepare_fixture()
+        manifests = script.parents[1] / 'android_vendor_valve/manifest_scripts/manifests-34'
+        write(manifests / '20-codecs.xml',
+              '<manifest><project path="external/ffmpeg" name="ffmpeg" revision="pinned"/></manifest>')
+        write(self.root / '.repo/local_manifests/12-valve-replacements.xml', 'old manifest')
+        write(self.state / 'fail-sync')
+        self.prepare(script, success=False)
+        self.assertTrue((self.root / 'external/ffmpeg').is_dir())
+        self.assertTrue((self.state / 'reset.started').exists())
+        self.assertTrue((self.state / 'reset-sources.done').exists())
+        self.assertFalse((self.state / 'sync.done').exists())
+        self.assertFalse((self.state / 'vendor.done').exists())
+        self.assertIn('Reset was interrupted', self.prepare(script, '--resume', False))
+        (self.state / 'fail-sync').unlink()
+        self.prepare(script)
+        self.assertEqual((self.base / 'trace').read_text().splitlines(),
+                         ['installclean', 'sync -j4 -d', 'sync -j4 -d'])
+        self.assertFalse((self.state / 'reset.started').exists())
+        self.assertFalse((self.state / 'reset-sources.done').exists())
+        self.assertTrue((self.state / 'patches.done').exists())
+        self.assertEqual((self.root / '.repo/local_manifests/12-valve-replacements.xml').read_text(),
+                         (manifests / '12-valve-replacements.xml').read_text())
+
+    def test_fresh_sync_installs_new_manifests_and_resume_refuses_changes(self):
+        script = self.prepare_fixture()
+        helper = script.parent / 'internal/sync-sources.sh'
+        manifests = script.parents[1] / 'android_vendor_valve/manifest_scripts/manifests-34'
+        write(manifests / '20-codecs.xml', '<manifest><project path="external/ffmpeg"/></manifest>')
+        (self.state / 'patches.started').unlink()
+        command = ['bash', str(helper), str(self.root), str(manifests)]
+        result = subprocess.run(command, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.root / 'external/ffmpeg').is_dir())
+        write(manifests / '20-codecs.xml', 'changed')
+        result = subprocess.run(command, env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('use --reset', result.stdout)
 
     def test_stale_gitfile_worktree_and_unrelated_files(self):
         locks = [self.lock(p) for p in self.projects]

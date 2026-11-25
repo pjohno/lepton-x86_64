@@ -466,19 +466,21 @@ the fallback.
          } else {
              // Determine Bytes Per Pixel (BPP)
              int bpp = 1;
-@@ -1823,12 +2034,12 @@
-         // Lepton: one line per imported buffer, to compare gralloc's layout
-         // with what the VA driver expects.
-         ALOGI("getBufferVAAPI: import buffer %d: %ux%u fourcc %#x drm %#x modifier %#" PRIx64
--              " size %u planes %u pitch %u/%u offset %u/%u",
-+              " size %u planes %u pitch %u/%u/%u offset %u/%u/%u",
-               desc.getId(), descriptor.width, descriptor.height, descriptor.fourcc,
-               descriptor.layers[0].drm_format, descriptor.objects[0].drm_format_modifier,
-               descriptor.objects[0].size, descriptor.layers[0].num_planes,
--              descriptor.layers[0].pitch[0], descriptor.layers[0].pitch[1],
--              descriptor.layers[0].offset[0], descriptor.layers[0].offset[1]);
-+              descriptor.layers[0].pitch[0], descriptor.layers[0].pitch[1], descriptor.layers[0].pitch[2],
-+              descriptor.layers[0].offset[0], descriptor.layers[0].offset[1], descriptor.layers[0].offset[2]);
+@@ -1823,14 +2034,14 @@
+         // Lepton: sample gralloc layouts once per session, not once per frame.
+         if (mVaImportsLogged < 4) {
+             ++mVaImportsLogged;
+             ALOGD("getBufferVAAPI: import buffer %d: %ux%u fourcc %#x drm %#x modifier %#" PRIx64
+-                  " size %u planes %u pitch %u/%u offset %u/%u",
++                  " size %u planes %u pitch %u/%u/%u offset %u/%u/%u",
+                   desc.getId(), descriptor.width, descriptor.height, descriptor.fourcc,
+                   descriptor.layers[0].drm_format, descriptor.objects[0].drm_format_modifier,
+                   descriptor.objects[0].size, descriptor.layers[0].num_planes,
+-                  descriptor.layers[0].pitch[0], descriptor.layers[0].pitch[1],
+-                  descriptor.layers[0].offset[0], descriptor.layers[0].offset[1]);
++                  descriptor.layers[0].pitch[0], descriptor.layers[0].pitch[1], descriptor.layers[0].pitch[2],
++                  descriptor.layers[0].offset[0], descriptor.layers[0].offset[1], descriptor.layers[0].offset[2]);
+         }
          vas = vaCreateSurfaces(hwctx->display, mUtils->getVAFormat(),
                                 mSurfaceWidth, mSurfaceHeight, &surfaceId, 1, attributes, 2);
  
