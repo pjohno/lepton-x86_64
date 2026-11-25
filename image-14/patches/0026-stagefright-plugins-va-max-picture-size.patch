@@ -1,0 +1,378 @@
+Lepton: take the decoders' largest picture size from VA-API
+
+The interface accepted pictures up to 4080x4080, so an 8K stream failed to
+configure (BAD_VALUE) although the GPU decodes it; VLC then fell back to
+software. Query each decodable VA profile's VASurfaceAttribMaxWidth and
+MaxHeight once (logged in LEPTON_VA_CAPS as max=TOKEN:WxH). When hardware
+decoding is on and VA decodes the codec, the picture-size range is the VA
+maximum, otherwise 4080 as before (LEPTON_VA_LIMITS per component).
+
+When that maximum is larger than level 5.x allows (H.264 36864 macroblocks;
+HEVC, VP9, AV1 8912896 luma samples), list level 6 as well, so Android's
+codec list does not cap the size through the level. Not 6.1 or 6.2: VA
+reports no frame rate.
+
+diff --git a/codec2/C2FFMPEGVideoUtils.h b/codec2/C2FFMPEGVideoUtils.h
+index fd286d6..028c32c 100644
+--- a/codec2/C2FFMPEGVideoUtils.h
++++ b/codec2/C2FFMPEGVideoUtils.h
+@@ -51,6 +51,12 @@ public:
+     // MPG4 H263). Queried once per process when media.sf.hwaccel is set and
+     // ro.waydroid.hwcodecs is empty; empty when VA-API is unavailable.
+     static const std::string& detectedHwCodecs();
++
++    // Lepton: largest picture the VA-API driver decodes for a token above
++    // (VASurfaceAttribMaxWidth/MaxHeight, the largest over the token's VA
++    // profiles). False when unknown: VA-API unavailable, the token not
++    // decodable, or the driver reports no maximum.
++    static bool detectedHwMaxSize(const std::string& token, uint32_t* width, uint32_t* height);
+     bool isPixelFormatYUV420() const;
+     bool isVPPMode() const;
+     uint32_t getPixelFormat(bool flexible) const;
+diff --git a/codec2/C2FFMPEGVideoUtils.cpp b/codec2/C2FFMPEGVideoUtils.cpp
+index 75888c0..8ada03f 100644
+--- a/codec2/C2FFMPEGVideoUtils.cpp
++++ b/codec2/C2FFMPEGVideoUtils.cpp
+@@ -17,6 +17,7 @@
+ #include "C2FFMPEGVideoUtils.h"
+ #include <android-base/properties.h>
+ #include <log/log.h>
++#include <algorithm>
+ #include <mutex>
+ #include <vector>
+ 
+@@ -42,21 +43,52 @@ bool C2FFMPEGVideoUtils::isGrallocMinigbm() const {
+     return (mGrallocName.find("minigbm") != std::string::npos);
+ }
+ 
++struct VaCaps {
++    std::string tokens;
++    std::map<std::string, std::pair<uint32_t, uint32_t>> maxSize;
++};
++
++#if CONFIG_VAAPI
++// Largest surface the driver decodes for profile (0x0 when not reported).
++static std::pair<uint32_t, uint32_t> queryVaMaxSize(VADisplay display, VAProfile profile) {
++    std::pair<uint32_t, uint32_t> size(0, 0);
++    VAConfigID config;
++    if (vaCreateConfig(display, profile, VAEntrypointVLD, nullptr, 0, &config) != VA_STATUS_SUCCESS) {
++        return size;
++    }
++    unsigned int count = 0;
++    if (vaQuerySurfaceAttributes(display, config, nullptr, &count) == VA_STATUS_SUCCESS && count > 0) {
++        std::vector<VASurfaceAttrib> attribs(count);
++        if (vaQuerySurfaceAttributes(display, config, attribs.data(), &count) == VA_STATUS_SUCCESS) {
++            for (unsigned int i = 0; i < count; i++) {
++                if (attribs[i].value.type != VAGenericValueTypeInteger) continue;
++                if (attribs[i].type == VASurfaceAttribMaxWidth) {
++                    size.first = attribs[i].value.value.i;
++                } else if (attribs[i].type == VASurfaceAttribMaxHeight) {
++                    size.second = attribs[i].value.value.i;
++                }
++            }
++        }
++    }
++    vaDestroyConfig(display, config);
++    return size;
++}
++#endif
++
+ // Lepton: ask the VA-API driver (the device FFmpeg would use) which profiles
+-// it can decode. Logged once as LEPTON_VA_CAPS.
+-static std::string queryVaCodecs() {
+-#if !CONFIG_VAAPI
+-    return "";
+-#else
++// it can decode, and their largest picture. Logged once as LEPTON_VA_CAPS.
++static VaCaps queryVaCodecs() {
++    VaCaps caps;
++#if CONFIG_VAAPI
+     using namespace ::android;
+     if (!base::GetBoolProperty("media.sf.hwaccel", false)) {
+-        return "";
++        return caps;
+     }
+     AVBufferRef* device = nullptr;
+     if (av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_VAAPI, "android", nullptr, 0) < 0) {
+         ALOGW("LEPTON_VA_CAPS driver=none node=%s codecs= (VA-API device could not be opened)",
+               base::GetProperty("gralloc.gbm.device", "?").c_str());
+-        return "";
++        return caps;
+     }
+     VADisplay display = ((AVVAAPIDeviceContext*)((AVHWDeviceContext*)device->data)->hwctx)->display;
+     std::vector<VAProfile> profiles(vaMaxNumProfiles(display));
+@@ -96,21 +128,48 @@ static std::string queryVaCodecs() {
+             if (token && (" " + tokens + " ").find(std::string(" ") + token + " ") == std::string::npos) {
+                 tokens += std::string(tokens.empty() ? "" : " ") + token;
+             }
++            if (token) {
++                std::pair<uint32_t, uint32_t> size = queryVaMaxSize(display, profiles[i]);
++                std::pair<uint32_t, uint32_t>& known = caps.maxSize[token];
++                known.first = std::max(known.first, size.first);
++                known.second = std::max(known.second, size.second);
++            }
+         }
+     }
+-    ALOGI("LEPTON_VA_CAPS driver=\"%s\" node=%s codecs=%s profiles=%s",
++    std::string sizes;
++    for (const auto& entry : caps.maxSize) {
++        sizes += (sizes.empty() ? "" : ",") + entry.first + ":" +
++                std::to_string(entry.second.first) + "x" + std::to_string(entry.second.second);
++    }
++    ALOGI("LEPTON_VA_CAPS driver=\"%s\" node=%s codecs=%s max=%s profiles=%s",
+           vaQueryVendorString(display), base::GetProperty("gralloc.gbm.device", "?").c_str(),
+-          tokens.c_str(), decodable.c_str());
++          tokens.c_str(), sizes.c_str(), decodable.c_str());
+     av_buffer_unref(&device);
+-    return tokens;
++    caps.tokens = tokens;
+ #endif
++    return caps;
+ }
+ 
+-const std::string& C2FFMPEGVideoUtils::detectedHwCodecs() {
++static const VaCaps& detectedVaCaps() {
+     static std::once_flag once;
+-    static std::string codecs;
+-    std::call_once(once, [] { codecs = queryVaCodecs(); });
+-    return codecs;
++    static VaCaps caps;
++    std::call_once(once, [] { caps = queryVaCodecs(); });
++    return caps;
++}
++
++const std::string& C2FFMPEGVideoUtils::detectedHwCodecs() {
++    return detectedVaCaps().tokens;
++}
++
++bool C2FFMPEGVideoUtils::detectedHwMaxSize(const std::string& token, uint32_t* width, uint32_t* height) {
++    const VaCaps& caps = detectedVaCaps();
++    auto it = caps.maxSize.find(token);
++    if (it == caps.maxSize.end() || it->second.first == 0 || it->second.second == 0) {
++        return false;
++    }
++    *width = it->second.first;
++    *height = it->second.second;
++    return true;
+ }
+ 
+ bool C2FFMPEGVideoUtils::shouldEnableCodec(const std::string codec, bool hwonly) const {
+diff --git a/codec2/C2FFMPEGVideoDecodeInterface.cpp b/codec2/C2FFMPEGVideoDecodeInterface.cpp
+index ca21401..935db96 100644
+--- a/codec2/C2FFMPEGVideoDecodeInterface.cpp
++++ b/codec2/C2FFMPEGVideoDecodeInterface.cpp
+@@ -43,6 +43,48 @@ static bool vaDecodesHevcMain10() {
+     return (" " + codecs + " ").find(" HEVC10 ") != std::string::npos;
+ }
+ 
++// Lepton: the ro.waydroid.hwcodecs token for a media type ("" if none).
++static std::string vaToken(const char* mediaType) {
++    static const std::pair<const char*, const char*> kTokens[] = {
++        { MEDIA_MIMETYPE_VIDEO_AVC, "H264" }, { MEDIA_MIMETYPE_VIDEO_HEVC, "HEVC" },
++        { MEDIA_MIMETYPE_VIDEO_VP8, "VP80" }, { MEDIA_MIMETYPE_VIDEO_VP9, "VP90" },
++        { MEDIA_MIMETYPE_VIDEO_AV1, "AV10" }, { MEDIA_MIMETYPE_VIDEO_MPEG2, "MPG2" },
++        { MEDIA_MIMETYPE_VIDEO_MPEG4, "MPG4" }, { MEDIA_MIMETYPE_VIDEO_H263, "H263" },
++    };
++    for (const auto& t : kTokens) {
++        if (strcasecmp(mediaType, t.first) == 0) return t.second;
++    }
++    return "";
++}
++
++// Lepton: the largest picture this decoder takes. With hardware decoding on
++// and the codec decoded by VA, that is the VA driver's maximum (up to 8K on
++// current GPUs); otherwise kMaxDimension, as before.
++static void maxPictureSize(const char* mediaType, uint32_t* width, uint32_t* height) {
++    *width = *height = kMaxDimension;
++    if (!base::GetBoolProperty("media.sf.hwaccel", false)) {
++        return;
++    }
++    const std::string token = vaToken(mediaType);
++    std::string codecs = base::GetProperty("ro.waydroid.hwcodecs", "");
++    if (codecs.empty()) {
++        codecs = C2FFMPEGVideoUtils::detectedHwCodecs();
++    }
++    uint32_t w, h;
++    if (!token.empty() && (" " + codecs + " ").find(" " + token + " ") != std::string::npos
++            && C2FFMPEGVideoUtils::detectedHwMaxSize(token, &w, &h)) {
++        *width = w;
++        *height = h;
++    }
++}
++
++// Lepton: level 5.x allows at most this many luma samples per picture
++// (H.264: 36864 macroblocks; HEVC, VP9 and AV1: 8912896). A larger maximum
++// from VA adds level 6. Not 6.1/6.2: VA reports no frame rate.
++static bool beyondLevel5(uint32_t width, uint32_t height, uint64_t level5Samples) {
++    return (uint64_t)width * height > level5Samples;
++}
++
+ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+         const C2FFMPEGComponentInfo* componentInfo,
+         const std::shared_ptr<C2ReflectorHelper>& helper)
+@@ -53,6 +95,10 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+         C2Component::DOMAIN_VIDEO,
+         componentInfo->mediaType),
+         mUtils(std::make_unique<C2FFMPEGVideoUtils>()) {
++    uint32_t maxWidth, maxHeight;
++    maxPictureSize(componentInfo->mediaType, &maxWidth, &maxHeight);
++    ALOGI("LEPTON_VA_LIMITS %s max=%ux%u", componentInfo->name, maxWidth, maxHeight);
++
+     noPrivateBuffers();
+     noInputReferences();
+     noOutputReferences();
+@@ -69,8 +115,8 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+             DefineParam(mSize, C2_PARAMKEY_PICTURE_SIZE)
+             .withDefault(new C2StreamPictureSizeInfo::output(0u, 320, 240))
+             .withFields({
+-                C2F(mSize, width).inRange(2, kMaxDimension),
+-                C2F(mSize, height).inRange(2, kMaxDimension),
++                C2F(mSize, width).inRange(2, maxWidth),
++                C2F(mSize, height).inRange(2, maxHeight),
+             })
+             .withSetter(SizeSetter)
+             .build());
+@@ -100,6 +146,17 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+     }
+ 
+     else if (strcasecmp(componentInfo->mediaType, MEDIA_MIMETYPE_VIDEO_AVC) == 0) {
++        std::vector<uint32_t> avcLevels = {
++                C2Config::LEVEL_AVC_1, C2Config::LEVEL_AVC_1B, C2Config::LEVEL_AVC_1_1,
++                C2Config::LEVEL_AVC_1_2, C2Config::LEVEL_AVC_1_3,
++                C2Config::LEVEL_AVC_2, C2Config::LEVEL_AVC_2_1, C2Config::LEVEL_AVC_2_2,
++                C2Config::LEVEL_AVC_3, C2Config::LEVEL_AVC_3_1, C2Config::LEVEL_AVC_3_2,
++                C2Config::LEVEL_AVC_4, C2Config::LEVEL_AVC_4_1, C2Config::LEVEL_AVC_4_2,
++                C2Config::LEVEL_AVC_5, C2Config::LEVEL_AVC_5_1, C2Config::LEVEL_AVC_5_2};
++        if (beyondLevel5(maxWidth, maxHeight, 9437184)) {
++            avcLevels.push_back(C2Config::LEVEL_AVC_6);
++        }
++
+         addParameter(
+                 DefineParam(mActualOutputDelay, C2_PARAMKEY_OUTPUT_DELAY)
+                 .withDefault(new C2PortActualDelayTuning::output(8u))
+@@ -119,14 +176,7 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+                             C2Config::PROFILE_AVC_CONSTRAINED_HIGH,
+                             C2Config::PROFILE_AVC_PROGRESSIVE_HIGH,
+                             C2Config::PROFILE_AVC_HIGH}),
+-                    C2F(mProfileLevel, level).oneOf({
+-                            C2Config::LEVEL_AVC_1, C2Config::LEVEL_AVC_1B, C2Config::LEVEL_AVC_1_1,
+-                            C2Config::LEVEL_AVC_1_2, C2Config::LEVEL_AVC_1_3,
+-                            C2Config::LEVEL_AVC_2, C2Config::LEVEL_AVC_2_1, C2Config::LEVEL_AVC_2_2,
+-                            C2Config::LEVEL_AVC_3, C2Config::LEVEL_AVC_3_1, C2Config::LEVEL_AVC_3_2,
+-                            C2Config::LEVEL_AVC_4, C2Config::LEVEL_AVC_4_1, C2Config::LEVEL_AVC_4_2,
+-                            C2Config::LEVEL_AVC_5, C2Config::LEVEL_AVC_5_1, C2Config::LEVEL_AVC_5_2
+-                    })
++                    C2F(mProfileLevel, level).oneOf(avcLevels)
+                 })
+                 .withSetter(ProfileLevelSetter, mSize)
+                 .build());
+@@ -138,6 +188,19 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+         if (vaDecodesHevcMain10()) {
+             hevcProfiles.push_back(C2Config::PROFILE_HEVC_MAIN_10);
+         }
++        std::vector<uint32_t> hevcLevels = {
++                C2Config::LEVEL_HEVC_MAIN_1,
++                C2Config::LEVEL_HEVC_MAIN_2, C2Config::LEVEL_HEVC_MAIN_2_1,
++                C2Config::LEVEL_HEVC_MAIN_3, C2Config::LEVEL_HEVC_MAIN_3_1,
++                C2Config::LEVEL_HEVC_MAIN_4, C2Config::LEVEL_HEVC_MAIN_4_1,
++                C2Config::LEVEL_HEVC_MAIN_5, C2Config::LEVEL_HEVC_MAIN_5_1,
++                C2Config::LEVEL_HEVC_MAIN_5_2, C2Config::LEVEL_HEVC_HIGH_4,
++                C2Config::LEVEL_HEVC_HIGH_4_1, C2Config::LEVEL_HEVC_HIGH_5,
++                C2Config::LEVEL_HEVC_HIGH_5_1, C2Config::LEVEL_HEVC_HIGH_5_2};
++        if (beyondLevel5(maxWidth, maxHeight, 8912896)) {
++            hevcLevels.push_back(C2Config::LEVEL_HEVC_MAIN_6);
++            hevcLevels.push_back(C2Config::LEVEL_HEVC_HIGH_6);
++        }
+ 
+         addParameter(
+                 DefineParam(mActualOutputDelay, C2_PARAMKEY_OUTPUT_DELAY)
+@@ -152,22 +215,26 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+                         C2Config::PROFILE_HEVC_MAIN, C2Config::LEVEL_HEVC_MAIN_5_1))
+                 .withFields({
+                     C2F(mProfileLevel, profile).oneOf(hevcProfiles),
+-                    C2F(mProfileLevel, level).oneOf({
+-                            C2Config::LEVEL_HEVC_MAIN_1,
+-                            C2Config::LEVEL_HEVC_MAIN_2, C2Config::LEVEL_HEVC_MAIN_2_1,
+-                            C2Config::LEVEL_HEVC_MAIN_3, C2Config::LEVEL_HEVC_MAIN_3_1,
+-                            C2Config::LEVEL_HEVC_MAIN_4, C2Config::LEVEL_HEVC_MAIN_4_1,
+-                            C2Config::LEVEL_HEVC_MAIN_5, C2Config::LEVEL_HEVC_MAIN_5_1,
+-                            C2Config::LEVEL_HEVC_MAIN_5_2, C2Config::LEVEL_HEVC_HIGH_4,
+-                            C2Config::LEVEL_HEVC_HIGH_4_1, C2Config::LEVEL_HEVC_HIGH_5,
+-                            C2Config::LEVEL_HEVC_HIGH_5_1, C2Config::LEVEL_HEVC_HIGH_5_2
+-                    })
++                    C2F(mProfileLevel, level).oneOf(hevcLevels)
+                 })
+                 .withSetter(ProfileLevelSetter, mSize)
+                 .build());
+     }
+ 
+     else if (strcasecmp(componentInfo->mediaType, MEDIA_MIMETYPE_VIDEO_AV1) == 0) {
++        std::vector<uint32_t> av1Levels = {
++                C2Config::LEVEL_AV1_2, C2Config::LEVEL_AV1_2_1,
++                C2Config::LEVEL_AV1_2_2, C2Config::LEVEL_AV1_2_3,
++                C2Config::LEVEL_AV1_3, C2Config::LEVEL_AV1_3_1,
++                C2Config::LEVEL_AV1_3_2, C2Config::LEVEL_AV1_3_3,
++                C2Config::LEVEL_AV1_4, C2Config::LEVEL_AV1_4_1,
++                C2Config::LEVEL_AV1_4_2, C2Config::LEVEL_AV1_4_3,
++                C2Config::LEVEL_AV1_5, C2Config::LEVEL_AV1_5_1,
++                C2Config::LEVEL_AV1_5_2, C2Config::LEVEL_AV1_5_3};
++        if (beyondLevel5(maxWidth, maxHeight, 8912896)) {
++            av1Levels.push_back(C2Config::LEVEL_AV1_6);
++        }
++
+         addParameter(
+                 DefineParam(mActualOutputDelay, C2_PARAMKEY_OUTPUT_DELAY)
+                 .withDefault(new C2PortActualDelayTuning::output(8u))
+@@ -183,16 +250,7 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+                     C2F(mProfileLevel, profile).oneOf({
+                             C2Config::PROFILE_AV1_0,
+                             C2Config::PROFILE_AV1_1}),
+-                    C2F(mProfileLevel, level).oneOf({
+-                            C2Config::LEVEL_AV1_2, C2Config::LEVEL_AV1_2_1,
+-                            C2Config::LEVEL_AV1_2_2, C2Config::LEVEL_AV1_2_3,
+-                            C2Config::LEVEL_AV1_3, C2Config::LEVEL_AV1_3_1,
+-                            C2Config::LEVEL_AV1_3_2, C2Config::LEVEL_AV1_3_3,
+-                            C2Config::LEVEL_AV1_4, C2Config::LEVEL_AV1_4_1,
+-                            C2Config::LEVEL_AV1_4_2, C2Config::LEVEL_AV1_4_3,
+-                            C2Config::LEVEL_AV1_5, C2Config::LEVEL_AV1_5_1,
+-                            C2Config::LEVEL_AV1_5_2, C2Config::LEVEL_AV1_5_3
+-                    })
++                    C2F(mProfileLevel, level).oneOf(av1Levels)
+                 })
+                 .withSetter(ProfileLevelSetter, mSize)
+                 .build());
+@@ -211,6 +269,15 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+                 .build());
+ 
+         if (strcasecmp(componentInfo->mediaType, MEDIA_MIMETYPE_VIDEO_VP9) == 0) {
++            std::vector<uint32_t> vp9Levels = {
++                    C2Config::LEVEL_VP9_1, C2Config::LEVEL_VP9_1_1,
++                    C2Config::LEVEL_VP9_2, C2Config::LEVEL_VP9_2_1,
++                    C2Config::LEVEL_VP9_3, C2Config::LEVEL_VP9_3_1,
++                    C2Config::LEVEL_VP9_4, C2Config::LEVEL_VP9_4_1,
++                    C2Config::LEVEL_VP9_5};
++            if (beyondLevel5(maxWidth, maxHeight, 8912896)) {
++                vp9Levels.push_back(C2Config::LEVEL_VP9_6);
++            }
+             addParameter(
+                     DefineParam(mProfileLevel, C2_PARAMKEY_PROFILE_LEVEL)
+                     .withDefault(new C2StreamProfileLevelInfo::input(0u,
+@@ -219,17 +286,7 @@ C2FFMPEGVideoDecodeInterface::C2FFMPEGVideoDecodeInterface(
+                         C2F(mProfileLevel, profile).oneOf({
+                                 C2Config::PROFILE_VP9_0,
+                                 C2Config::PROFILE_VP9_2}),
+-                        C2F(mProfileLevel, level).oneOf({
+-                                C2Config::LEVEL_VP9_1,
+-                                C2Config::LEVEL_VP9_1_1,
+-                                C2Config::LEVEL_VP9_2,
+-                                C2Config::LEVEL_VP9_2_1,
+-                                C2Config::LEVEL_VP9_3,
+-                                C2Config::LEVEL_VP9_3_1,
+-                                C2Config::LEVEL_VP9_4,
+-                                C2Config::LEVEL_VP9_4_1,
+-                                C2Config::LEVEL_VP9_5,
+-                        })
++                        C2F(mProfileLevel, level).oneOf(vp9Levels)
+                     })
+                     .withSetter(ProfileLevelSetter, mSize)
+                     .build());

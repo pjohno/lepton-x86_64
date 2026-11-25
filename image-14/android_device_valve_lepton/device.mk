@@ -137,15 +137,22 @@ PRODUCT_COPY_FILES += \
     frameworks/av/media/libstagefright/data/media_codecs_google_telephony.xml:$(TARGET_COPY_OUT_VENDOR)/etc/media_codecs_google_telephony.xml \
     frameworks/av/media/libstagefright/data/media_codecs_google_video.xml:$(TARGET_COPY_OUT_VENDOR)/etc/media_codecs_google_video.xml
 
-# Media - Stagefright FFMPEG plugin
-ifneq ($(filter %_waydroid_x86 %_waydroid_x86_64,$(TARGET_PRODUCT)),)
+# Media - Codec2 FFmpeg service with VA-API (experimental, off by default).
+# The waydroid OMX plugin block this replaces never matched Lepton's product
+# (aosp_lepton_x86_64), and Android 14 x86_64 runs no OMX HAL. The service
+# (external/stagefright-plugins, manifests-34/20-video-vaapi.xml) lists no
+# components while debug.ffmpeg-codec2.rank is 0xFFFFFFFF, so Android's own
+# codecs are unchanged unless the launcher enables it (LEPTON_VIDEO_HWACCEL).
+# The off defaults are in lepton_x86_64/video-defaults.prop, not vendor
+# properties: the launcher's values must be able to override them.
+# libva finds its render node through gralloc.gbm.device, as gralloc does.
+ifeq ($(TARGET_PRODUCT),aosp_lepton_x86_64)
 PRODUCT_PACKAGES += \
-    libffmpeg_omx \
-    media_codecs_ffmpeg.xml
-
-PRODUCT_PROPERTY_OVERRIDES += \
-    media.sf.omx-plugin=libffmpeg_omx.so \
-    media.sf.hwaccel=1
+    android.hardware.media.c2-ffmpeg-service \
+    libva \
+    libva-android \
+    i965_drv_video \
+    iHD_drv_video
 endif
 
 # Memtrack

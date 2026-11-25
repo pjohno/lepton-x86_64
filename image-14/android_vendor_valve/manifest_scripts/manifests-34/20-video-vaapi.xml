@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Hardware video decoding (VA-API) prototype: Codec2 FFmpeg service and its
+     dependencies from WayDroid-ATV's Android 14 branches, pinned to commits.
+
+     Added to prepared checkouts by the prepare-x86_64.sh add-projects action; new
+     paths only. The Android 11 libva pinned at hardware/intel/common/libva
+     (system partition, VA-API 1.16, fixed renderD128) defines the same module
+     names as the Android 14 one, so it is removed here and retired out of the
+     tree. Nothing in the image used it.
+
+     Licences: stagefright-plugins Apache-2.0; FFmpeg LGPL-2.1-or-later as
+     configured (CONFIG_GPL/NONFREE/VERSION3 0); libva and intel-vaapi-driver
+     MIT. See image-14/docs/video-vaapi.md. -->
+<manifest>
+  <remove-project name="WayDroid/android_hardware_intel_common_libva" />
+
+  <project path="external/libva" name="WayDroid-ATV/android_external_libva" remote="ghub"
+           revision="e575c67c1d3e9502be39d41a54d4da1b91477e63" upstream="14-x86" />
+  <project path="external/ffmpeg" name="WayDroid-ATV/android_external_ffmpeg" remote="ghub"
+           revision="0b23ebd27a384f9223335359e2304dbdf878fc64" upstream="release/7.1/14-x86" />
+  <project path="external/stagefright-plugins" name="WayDroid-ATV/android_external_stagefright-plugins" remote="ghub"
+           revision="1bc14018bd637bdd7f0869edf72cfaec6de10c76" upstream="14-x86/ffmpeg-7.1" />
+  <project path="external/intel-vaapi-driver" name="WayDroid-ATV/android_vendor_intel_vaapi-driver" remote="ghub"
+           revision="8dd6659c53e66f787e92d38852393c28ba4e0360" upstream="14-x86" />
+</manifest>

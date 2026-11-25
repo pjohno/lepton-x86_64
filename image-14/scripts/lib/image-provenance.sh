@@ -44,6 +44,19 @@ LEPTON_CUSTOM_PATCHES=(
     "external/minigbm|0014-minigbm-gbm-mesa-blob-cpu-surface.patch"
     "external/libopus|0015-libopus-float-decode-x86_64.patch"
     "external/minigbm|0016-minigbm-gbm-mesa-blob-direct-map.patch"
+    "external/ffmpeg|0017-ffmpeg-x86_64-without-vulkan.patch"
+    "external/stagefright-plugins|0018-stagefright-plugins-without-raw-codec-data.patch"
+    "external/mesa|0019-mesa-android-gallium-va.patch"
+    "external/intel-media-driver|0020-intel-media-driver-android14-clang.patch"
+    "external/stagefright-plugins|0021-stagefright-plugins-drm-prime-buffer-id.patch"
+    "external/stagefright-plugins|0023-stagefright-plugins-hw-download-native-format.patch"
+    "external/stagefright-plugins|0024-stagefright-plugins-va-capabilities-and-diagnostics.patch"
+    "external/stagefright-plugins|0025-stagefright-plugins-hevc-main10-profile.patch"
+    "external/stagefright-plugins|0026-stagefright-plugins-va-max-picture-size.patch"
+    "frameworks/av|0027-frameworks-av-codec2-ffmpeg-size-limits.patch"
+    "external/stagefright-plugins|0028-stagefright-plugins-copy-back-step-timing.patch"
+    "external/stagefright-plugins|0029-stagefright-plugins-copy-back-download.patch"
+    "external/stagefright-plugins|0030-stagefright-plugins-va-direct-output.patch"
 )
 
 # image_source_status REPO AOSP: verify copied source content and every patch.

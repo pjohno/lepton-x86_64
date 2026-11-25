@@ -1,0 +1,97 @@
+Lepton: size limits of c2.ffmpeg.* video decoders from the component
+
+Android takes a codec's size limits from media_codecs XML only. The FFmpeg
+service's video decoders decode through VA-API, whose largest picture is
+known only at run time (patch 0026), so the static limits (HEVC 4096x4096,
+VP9 and AV1 2048x2048) hide 8K from players that check the codec list.
+
+For c2.ffmpeg.* video decoders, replace the XML size-range with the
+component's picture-size range and scale block-count-range and
+blocks-per-second-range by the same block count, keeping the XML frame rate
+at the largest size. Logged as LEPTON_CODEC_LIMITS. Other codecs keep their
+XML limits.
+
+diff --git a/media/codec2/sfplugin/Codec2InfoBuilder.cpp b/media/codec2/sfplugin/Codec2InfoBuilder.cpp
+index 8dce789..12bdab0 100644
+--- a/media/codec2/sfplugin/Codec2InfoBuilder.cpp
++++ b/media/codec2/sfplugin/Codec2InfoBuilder.cpp
+@@ -393,6 +393,69 @@ Switch isDomainEnabled(
+     return isSettingEnabled("domain-" + domain, settings);
+ }
+ 
++// Lepton: the c2.ffmpeg.* video decoders decode on the GPU through VA-API,
++// whose largest picture is known only at run time (up to 8K). Their XML is
++// static, so take the size limit from the component's own picture-size range,
++// which the service sets from VA, and scale the XML block limits with it.
++// Every other codec keeps its XML limits.
++void applyComponentSizeLimits(
++        const std::shared_ptr<Codec2Client::Interface> &intf, const Traits &trait,
++        MediaCodecsXmlParser::AttributeMap *attrs) {
++    if (trait.kind != C2Component::KIND_DECODER || trait.domain != C2Component::DOMAIN_VIDEO
++            || !hasPrefix(trait.name, "c2.ffmpeg.")) {
++        return;
++    }
++    auto sizeIt = attrs->find("size-range");
++    unsigned minW, minH, xmlW, xmlH;
++    if (sizeIt == attrs->end() || sscanf(sizeIt->second.c_str(), "%ux%u-%ux%u",
++            &minW, &minH, &xmlW, &xmlH) != 4 || xmlW == 0 || xmlH == 0) {
++        return;
++    }
++    C2StreamPictureSizeInfo::output size(0u, 0u, 0u);
++    std::vector<C2FieldSupportedValuesQuery> query = {
++        C2FieldSupportedValuesQuery::Possible(C2ParamField::Make(size, size.width)),
++        C2FieldSupportedValuesQuery::Possible(C2ParamField::Make(size, size.height)),
++    };
++    if (intf->querySupportedValues(query, C2_DONT_BLOCK) != C2_OK
++            || query[0].status != C2_OK || query[1].status != C2_OK
++            || query[0].values.type != C2FieldSupportedValues::RANGE
++            || query[1].values.type != C2FieldSupportedValues::RANGE) {
++        return;
++    }
++    const unsigned maxW = query[0].values.range.max.u32;
++    const unsigned maxH = query[1].values.range.max.u32;
++    if (maxW == 0 || maxH == 0 || (maxW == xmlW && maxH == xmlH)) {
++        return;
++    }
++    unsigned blockW = 16, blockH = 16;
++    auto blockIt = attrs->find("block-size");
++    if (blockIt != attrs->end()
++            && (sscanf(blockIt->second.c_str(), "%ux%u", &blockW, &blockH) != 2
++                    || blockW == 0 || blockH == 0)) {
++        return;
++    }
++    const uint64_t oldBlocks =
++            uint64_t((xmlW + blockW - 1) / blockW) * ((xmlH + blockH - 1) / blockH);
++    const uint64_t newBlocks =
++            uint64_t((maxW + blockW - 1) / blockW) * ((maxH + blockH - 1) / blockH);
++    sizeIt->second = std::to_string(minW) + "x" + std::to_string(minH) + "-" +
++            std::to_string(maxW) + "x" + std::to_string(maxH);
++    // Same frame rate at the largest size as the XML gave at its own.
++    for (const char *key : { "block-count-range", "blocks-per-second-range" }) {
++        auto it = attrs->find(key);
++        unsigned long long low, high;
++        if (it != attrs->end()
++                && sscanf(it->second.c_str(), "%llu-%llu", &low, &high) == 2) {
++            high = high * newBlocks / oldBlocks;
++            it->second = std::to_string(low) + "-" + std::to_string(std::max(low, high));
++        }
++    }
++    ALOGI("LEPTON_CODEC_LIMITS %s size-range=%s blocks-per-second-range=%s",
++            trait.name.c_str(), sizeIt->second.c_str(),
++            attrs->count("blocks-per-second-range")
++                    ? attrs->at("blocks-per-second-range").c_str() : "-");
++}
++
+ } // unnamed namespace
+ 
+ status_t Codec2InfoBuilder::buildMediaCodecList(MediaCodecListWriter* writer) {
+@@ -683,7 +746,8 @@ status_t Codec2InfoBuilder::buildMediaCodecList(MediaCodecListWriter* writer) {
+                 }
+ 
+                 ALOGI("adding type '%s'", typeIt->first.c_str());
+-                const MediaCodecsXmlParser::AttributeMap &attrMap = typeIt->second;
++                MediaCodecsXmlParser::AttributeMap attrMap = typeIt->second;
++                applyComponentSizeLimits(intf, trait, &attrMap);
+                 std::unique_ptr<MediaCodecInfo::CapabilitiesWriter> caps =
+                     codecInfo->addMediaType(mediaType.c_str());
+                 for (const auto &v : attrMap) {

@@ -82,7 +82,7 @@ class BlobDirectMapTests(unittest.TestCase):
         self.assertIn(f'"external/minigbm|{FIX.name}"', provenance)
         applies = re.findall(r'^apply_custom \S+ /workspace/patches/(\S+)', prepare, flags=re.M)
         self.assertLess(applies.index(SURFACE.name), applies.index(FIX.name))
-        self.assertEqual(applies[-1], FIX.name)
+        self.assertLess(applies.index('0015-libopus-float-decode-x86_64.patch'), applies.index(FIX.name))
 
 
 if __name__ == '__main__':

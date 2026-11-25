@@ -5,7 +5,7 @@ set -Eeuo pipefail
 
 usage() {
   cat <<'HELP'
-Usage: prepare-x86_64.sh --check | --sync-only | --resume-sync | --vendor-only | --patch-only | --execute | --resume | --reset
+Usage: prepare-x86_64.sh --check | --sync-only | --resume-sync | --vendor-only | --patch-only | --execute | --resume | --reset | --add-projects
   --check    Read-only inspection; no downloads or filesystem changes.
   --sync-only    Create fresh checkout and sync Android sources only.
   --resume-sync  Resume source synchronization, without copying or patching.
@@ -14,18 +14,25 @@ Usage: prepare-x86_64.sh --check | --sync-only | --resume-sync | --vendor-only |
   --execute      Create new checkout, sync, vendor sources, and apply patches.
   --resume       Resume an interrupted download/copy; never replay interrupted patches.
   --reset        Existing synced checkout: discard every change to the Android
-                 sources (back to the pinned manifest; no download), remove
-                 installed build outputs (m installclean), then vendor and
-                 patch again. Retry --reset after any interrupted reset.
+                 sources, remove installed build outputs (m installclean),
+                 install current local manifests and sync pinned projects
+                 (downloading new/changed sources), then vendor and patch again.
+                 Retry --reset after any interrupted reset.
                  Recovers old, verified-idle Git index locks automatically;
                  active/ambiguous locks stop with manual recovery guidance.
                  Keep other Git/repo operations stopped during reset.
+  --add-projects Fully prepared checkout: install NEW local manifest files and
+                 sync only the projects they add (no reset, no rebuild of
+                 existing outputs). Installed manifests must be unchanged. A
+                 <remove-project> is retired by moving its clean, unpatched
+                 worktree to <workspace>/aosp-retired/<UTC time>/ (never
+                 deleted); replacements must use a new path.
 Configuration: repository-root .build-env (copy .build-env.example and customize).
 HELP
 }
 [[ $# == 1 ]] || { usage >&2; exit 2; }
 ACTION=$1
-case "$ACTION" in --check|--sync-only|--resume-sync|--vendor-only|--patch-only|--execute|--resume|--reset) ;; *) usage >&2; exit 2;; esac
+case "$ACTION" in --check|--sync-only|--resume-sync|--vendor-only|--patch-only|--execute|--resume|--reset|--add-projects) ;; *) usage >&2; exit 2;; esac
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 IMAGE="$ROOT/image-14"
@@ -103,6 +110,7 @@ for name in 00-remotes 01-removes 02-waydroid 10-valve-remotes 11-removes 12-val
 done
 for name in \
   "$IMAGE/android_device_valve_lepton/ubpf/ubpf_syscall.h" \
+  "$IMAGE/scripts/internal/sync-sources.sh" \
   "$IMAGE/.buildscripts/copy_vendored_projects.sh" \
   "$IMAGE/android_vendor_valve/patches/apply-patches.sh" \
   "$IMAGE/patches/0001-mesa-android-sdk34-link-libzstd.patch" \
@@ -117,7 +125,20 @@ for name in \
   "$IMAGE/patches/0013-minigbm-gbm-mesa-no-allocator-map.patch" \
   "$IMAGE/patches/0014-minigbm-gbm-mesa-blob-cpu-surface.patch" \
   "$IMAGE/patches/0015-libopus-float-decode-x86_64.patch" \
-  "$IMAGE/patches/0016-minigbm-gbm-mesa-blob-direct-map.patch"; do
+  "$IMAGE/patches/0016-minigbm-gbm-mesa-blob-direct-map.patch" \
+  "$IMAGE/patches/0017-ffmpeg-x86_64-without-vulkan.patch" \
+  "$IMAGE/patches/0018-stagefright-plugins-without-raw-codec-data.patch" \
+  "$IMAGE/patches/0019-mesa-android-gallium-va.patch" \
+  "$IMAGE/patches/0020-intel-media-driver-android14-clang.patch" \
+  "$IMAGE/patches/0021-stagefright-plugins-drm-prime-buffer-id.patch" \
+  "$IMAGE/patches/0023-stagefright-plugins-hw-download-native-format.patch" \
+  "$IMAGE/patches/0024-stagefright-plugins-va-capabilities-and-diagnostics.patch" \
+  "$IMAGE/patches/0025-stagefright-plugins-hevc-main10-profile.patch" \
+  "$IMAGE/patches/0026-stagefright-plugins-va-max-picture-size.patch" \
+  "$IMAGE/patches/0027-frameworks-av-codec2-ffmpeg-size-limits.patch" \
+  "$IMAGE/patches/0028-stagefright-plugins-copy-back-step-timing.patch" \
+  "$IMAGE/patches/0029-stagefright-plugins-copy-back-download.patch" \
+  "$IMAGE/patches/0030-stagefright-plugins-va-direct-output.patch"; do
   [[ -f "$name" ]] || err "Missing required file: $name"
 done
 podman image exists "$BUILDER" || err "Missing builder image: $BUILDER"
@@ -155,7 +176,17 @@ if [[ "$ACTION" == --execute || "$ACTION" == --sync-only ]]; then
   [[ ! -e "$TARGET" && ! -L "$TARGET" ]] || err 'Fresh target exists; use --resume only for a marked checkout'
 elif [[ "$ACTION" == --reset ]]; then
   [[ -f "$MARKER" && -d "$STATE" ]] || err 'No checkout prepared by this workflow to reset'
-  [[ -f "$STATE/sync.done" ]] || err 'Source synchronization incomplete: use --resume first'
+  [[ -f "$STATE/sync.done" || -f "$STATE/reset-sources.done" ]] || err 'Source synchronization incomplete: use --resume first'
+elif [[ "$ACTION" == --add-projects ]]; then
+  # The owner marker may name an older repository commit: adding projects is
+  # how a prepared checkout follows new manifests without a reset.
+  [[ -f "$MARKER" && -d "$STATE" ]] || err 'No checkout prepared by this workflow'
+  for marker in sync.done vendor.done patches.done; do
+    [[ -f "$STATE/$marker" ]] || err "Checkout is not fully prepared (missing $marker)"
+  done
+  [[ ! -e "$STATE/reset.started" ]] || err 'Reset was interrupted: rerun --reset first'
+  [[ ! -e "$STATE/patches.started" ]] || err 'Patching was interrupted: inspect manually'
+  [[ ! -e "$STATE/build.running" ]] || err 'An image build is running or was interrupted; resolve it first'
 elif [[ "$ACTION" == --resume || "$ACTION" == --resume-sync || "$ACTION" == --vendor-only || "$ACTION" == --patch-only ]]; then
   [[ -f "$MARKER" && -d "$STATE" ]] || err 'No owned checkout state to resume'
   [[ "$(cat "$MARKER")" == "$owner_content" ]] || err 'Checkout belongs to a different repository commit'
@@ -255,20 +286,69 @@ run_in_builder() {
   return "$result"
 }
 
+if [[ "$ACTION" == --add-projects ]]; then
+  info "[$(date -u +%H:%M:%SZ)] [START] Add projects from new local manifests"
+  PLAN="$STATE/add-projects.plan"
+  RETIRE_ROOT="$LEPTON_WORKSPACE/aosp-retired"
+  ! under "$RETIRE_ROOT" "$TARGET" || err 'Retired projects would stay inside the checkout'
+  # Rerunning after an interruption is safe: retired worktrees and installed
+  # manifests are recognised. Image builds refuse to start meanwhile.
+  touch "$STATE/add-projects.started"
+  python3 -B "$IMAGE/scripts/internal/add-projects.py" --manifests "$MANIFESTS" \
+    --checkout "$TARGET" --provenance "$IMAGE/scripts/lib/image-provenance.sh" \
+    --retire-root "$RETIRE_ROOT" --plan "$PLAN" --execute
+  if [[ ! -s "$PLAN" ]]; then
+    rm -- "$STATE/add-projects.started"
+    info '[PASS] No new manifests; checkout unchanged'
+    exit 0
+  fi
+  run_in_builder <<'INNER'
+set -Eeuo pipefail
+cd /workspace/output
+plan=.lepton-clean14-state/add-projects.plan
+mapfile -t manifests < <(awk '$1 == "manifest" {print $2}' "$plan")
+mapfile -t projects < <(awk '$1 == "project" {print $2}' "$plan")
+mapfile -t mirrors < <(awk '$1 == "mirror" {print $2}' "$plan")
+for name in "${mirrors[@]}"; do
+  cp "/workspace/android_vendor_valve/manifest_scripts/manifests-34/$name" \
+    "vendor/extra/manifest_scripts/manifests-34/$name"
+  echo "[INFO] Mirrored $name into vendor/extra (copied tree)"
+done
+for name in "${manifests[@]}"; do
+  [[ ! -e ".repo/local_manifests/$name" ]] || { echo "Manifest appeared meanwhile: $name"; exit 1; }
+  cp "/workspace/android_vendor_valve/manifest_scripts/manifests-34/$name" ".repo/local_manifests/$name"
+  echo "[INFO] Installed local manifest $name"
+done
+if (( ${#projects[@]} )); then
+  echo "[$(date -u +%H:%M:%SZ)] [START] Synchronizing ${#projects[@]} new project(s)"
+  .repo/repo/repo sync -j4 "${projects[@]}"
+fi
+.repo/repo/repo manifest -r -o .lepton-resolved-manifest.xml
+echo "[$(date -u +%H:%M:%SZ)] [PASS] New projects synchronized; resolved manifest updated"
+INNER
+  mv -- "$PLAN" "$STATE/add-projects-$(date -u +%Y%m%dT%H%M%SZ).done"
+  rm -- "$STATE/add-projects.started"
+  info "[$(date -u +%H:%M:%SZ)] [PASS] Projects added; existing sources and build outputs untouched"
+  exit 0
+fi
+
 if [[ "$ACTION" == --reset ]]; then
   info "[$(date -u +%H:%M:%SZ)] [START] Reset: Android sources back to the pinned manifest"
   # Keep old stage evidence until reset AND installclean succeed. All source
   # consumers reject reset.started, including after SIGKILL/power loss.
   touch "$STATE/reset.started"
-  python3 -B "$IMAGE/scripts/internal/recover-source-locks.py" "$TARGET"
-  run_in_builder <<'INNER'
+  if [[ ! -f "$STATE/reset-sources.done" ]]; then
+    python3 -B "$IMAGE/scripts/internal/recover-source-locks.py" "$TARGET"
+    run_in_builder <<'INNER'
 set -Eeuo pipefail
 bash /workspace/scripts/internal/reset-sources.sh
 INNER
-  rm -f -- "$STATE/vendor.done" "$STATE/patches.done" "$STATE/patches.started"
-  rm -- "$STATE/reset.started"
-  info "[$(date -u +%H:%M:%SZ)] [PASS] Reset complete; vendoring and patching again"
-  printf '%s\n' "$owner_content" > "$MARKER"
+    # Once manifests change, an interrupted sync may have missing worktrees.
+    # Retry synchronization directly instead of resetting those partial trees.
+    touch "$STATE/reset-sources.done"
+  fi
+  rm -f -- "$STATE/sync.done" "$STATE/vendor.done" "$STATE/patches.done" "$STATE/patches.started"
+  info "[$(date -u +%H:%M:%SZ)] [PASS] Sources reset; synchronizing current manifests"
 fi
 
 # Detect whether repo synced completely before doing any vendored copies.
@@ -276,31 +356,19 @@ if [[ ! -f "$STATE/sync.done" ]]; then
   info "[$(date -u +%H:%M:%SZ)] [START] Stage 1: Android repo init and synchronization"
   run_in_builder <<'INNER'
 set -Eeuo pipefail
-cd /workspace/output
-[[ -f /run/.containerenv || -f /.dockerenv ]] || { echo 'Not in container'; exit 1; }
 [[ "$(readlink -f /workspace/output)" == /workspace/output ]] || { echo 'Unexpected output path'; exit 1; }
-if [[ ! -f .repo/manifest.xml ]]; then
-  echo "[$(date -u +%H:%M:%SZ)] [INFO] Initializing Android 14 manifest (android-14.0.0_r75)"
-  repo init -u https://android.googlesource.com/platform/manifest \
-    -b android-14.0.0_r75 -g default,-trusty --git-lfs
-fi
-echo "[$(date -u +%H:%M:%SZ)] [INFO] repo initialized; installing local manifests"
-mkdir -p .repo/local_manifests
-for source in /workspace/android_vendor_valve/manifest_scripts/manifests-34/*.xml; do
-  destination=".repo/local_manifests/${source##*/}"
-  if [[ -e "$destination" ]]; then
-    cmp -s "$source" "$destination" || { echo "Changed local manifest: $destination"; exit 1; }
-  else
-    cp "$source" "$destination"
-  fi
-done
-echo "[$(date -u +%H:%M:%SZ)] [START] Synchronizing Android repositories (4 jobs)"
-.repo/repo/repo sync -j4
-echo "[$(date -u +%H:%M:%SZ)] [PASS] Android source synchronization finished"
-.repo/repo/repo manifest -r -o .lepton-resolved-manifest.xml
+bash /workspace/scripts/internal/sync-sources.sh \
+  /workspace/output /workspace/android_vendor_valve/manifest_scripts/manifests-34
 INNER
   touch "$STATE/sync.done"
   info "[$(date -u +%H:%M:%SZ)] [PASS] Stage 1 complete; resolved manifest recorded"
+fi
+
+if [[ "$ACTION" == --reset ]]; then
+  printf '%s\n' "$owner_content" > "$MARKER"
+  rm -- "$STATE/reset-sources.done"
+  rm -- "$STATE/reset.started"
+  info "[$(date -u +%H:%M:%SZ)] [PASS] Reset and synchronization complete; vendoring and patching again"
 fi
 
 if [[ "$ACTION" == --sync-only || "$ACTION" == --resume-sync ]]; then
@@ -376,6 +444,19 @@ apply_custom /workspace/output/external/minigbm /workspace/patches/0013-minigbm-
 apply_custom /workspace/output/external/minigbm /workspace/patches/0014-minigbm-gbm-mesa-blob-cpu-surface.patch MinigbmBlobCpuSurface
 apply_custom /workspace/output/external/libopus /workspace/patches/0015-libopus-float-decode-x86_64.patch LibopusFloatX86_64
 apply_custom /workspace/output/external/minigbm /workspace/patches/0016-minigbm-gbm-mesa-blob-direct-map.patch MinigbmBlobDirectMap
+apply_custom /workspace/output/external/ffmpeg /workspace/patches/0017-ffmpeg-x86_64-without-vulkan.patch FfmpegNoVulkan
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0018-stagefright-plugins-without-raw-codec-data.patch StagefrightNoRawCodecData
+apply_custom /workspace/output/external/mesa /workspace/patches/0019-mesa-android-gallium-va.patch MesaGalliumVA
+apply_custom /workspace/output/external/intel-media-driver /workspace/patches/0020-intel-media-driver-android14-clang.patch IntelMediaDriverClang
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0021-stagefright-plugins-drm-prime-buffer-id.patch StagefrightPrimeBufferId
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0023-stagefright-plugins-hw-download-native-format.patch StagefrightNativeDownload
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0024-stagefright-plugins-va-capabilities-and-diagnostics.patch StagefrightVaCapabilities
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0025-stagefright-plugins-hevc-main10-profile.patch StagefrightHevcMain10
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0026-stagefright-plugins-va-max-picture-size.patch StagefrightVaMaxSize
+apply_custom /workspace/output/frameworks/av /workspace/patches/0027-frameworks-av-codec2-ffmpeg-size-limits.patch Codec2FfmpegSizeLimits
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0028-stagefright-plugins-copy-back-step-timing.patch StagefrightCopyBackTiming
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0029-stagefright-plugins-copy-back-download.patch StagefrightCopyBackDownload
+apply_custom /workspace/output/external/stagefright-plugins /workspace/patches/0030-stagefright-plugins-va-direct-output.patch StagefrightVaDirectOutput
 INNER
   touch "$STATE/patches.done"
   rm -- "$STATE/patches.started"

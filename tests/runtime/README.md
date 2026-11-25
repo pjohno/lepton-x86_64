@@ -188,6 +188,17 @@ the launcher log also says when media decoders are off):
 | `LEPTON_MEDIA_WAV_PLAYBACK_FAIL` | Even PCM WAV through MediaPlayer fails: it needs Codec2's raw decoder |
 | `CodecException` / `NO_MEMORY` with `DMABUFHEAPS: Unable to allocate` | Codec2 is on but tried the DMA-BUF heap (heap mode, or no BLOB pool) |
 | `allocatorID 19` in `CCodecBufferChannel` | Buffers from gralloc BLOB (patch 0013 mode); no host heap involved |
+| `LEPTON_MEDIA_DECODERS count=N hardware=M` | Decoders Android lists, and how many it reports as hardware-accelerated (0 on current images) |
+| `LEPTON_MEDIA_AVC_CANDIDATE rank=R name=...` | H.264 decoders in the order `createDecoderByType` tries them, with `hw`, `sw_only`, `vendor` and canonical name |
+| `LEPTON_MEDIA_HEVC_PROFILES name=... main10=` / `LEPTON_MEDIA_HEVC_MAIN10 decoder=` | HEVC profiles each decoder lists (Android's numbers; Main10 is 2), and what `findDecoderForFormat` picks for a 1080p Main10 stream, as profile-checking players do. With patch 0025, `c2.ffmpeg.hevc.decoder` lists Main10 only when hardware decoding is on and VA reports `HEVC10` |
+| `LEPTON_MEDIA_SIZE_LIMIT name=... width=... height=... 8k24=` / `LEPTON_MEDIA_8K mime=... decoder=` | Size ranges Android lists for each H.264/HEVC/VP9/AV1 decoder, whether 7680×4320 at 24 fps fits, and which decoder `findDecoderForFormat` picks for it. With patches 0026/0027 the `c2.ffmpeg.*` limits follow VA (`LEPTON_VA_CAPS max=`) when hardware decoding is on |
+| `LEPTON_MEDIA_AVC_DECODE mode=buffer\|surface decoder=... fps=...` | 5 s 720p H.264 High decoded by the selected decoder to CPU buffers or to an ImageReader Surface; diagnostic only, never fails the probe |
+| `LEPTON_MEDIA_CODEC clip=... selected=... reference=... crc_match=... result=...` | Codec matrix (H.264 1080p, HEVC Main/Main10, VP9, AV1, H.264 resolution change, H.264 4:4:4; HEVC Main10 1080p; H.264, HEVC Main/Main10, VP9 and AV1 at 4K): per-frame luma CRCs of the selected decoder against Android's `c2.android.*` decoder, then Surface output. `result=PASS`, `MISMATCH` (with `differing_frames` and `LEPTON_MEDIA_CODEC_CRCS`), `INCOMPLETE` (stalled), `UNSUPPORTED`, `NO_REFERENCE`, `NOT_COMPARED` (10-bit) or `SURFACE_FAIL`; diagnostic only |
+| `LEPTON_MEDIA_REPEAT ... result=` / `LEPTON_MEDIA_SEEK ... result=` | H.264 1080p decoded three times, and with a flush and seek to the 1 s key frame, compared with the reference |
+| `LEPTON_VA_CAPS` / `LEPTON_VA_SESSION` / `LEPTON_VA_SESSION_END` | From the FFmpeg Codec2 service with `LEPTON_VIDEO_HWACCEL=true`: VA driver and decodable codecs; per decoder session `decode=vaapi` or `software` with the reason; frame counts (see `image-14/docs/video-vaapi.md`) |
+| `LEPTON_MEDIA_THROUGHPUT clip=... mode=buffer\|surface decoder=... fps=...` | The 1080p and 4K clips decoded as fast as possible (no CRCs) by the selected decoder, to ByteBuffers and to a Surface; diagnostic only. Started with the intent extra `--ez lepton.throughput true`, the probe runs only this and ends with `LEPTON_MEDIA_THROUGHPUT_DONE` |
+| `LEPTON_VA_COPYBACK` / `LEPTON_VA_TIMING` | From the FFmpeg service (patches 0028/0029): copy-back mode per hardware session (`derive` on Mesa, `map` otherwise), and average microseconds per frame for each step when a session ends |
+| `LEPTON_VA_DIRECT` / `LEPTON_VA_DIRECT_END` / `LEPTON_VA_DIRECT_PIXELS` | Direct output (patch 0030, the default with `--video-hwaccel`): first converted frame, per-session totals (`copyback_frames=0` means no CPU readback), and with `setprop debug.ffmpeg-codec2.direct-validation pixels` before playback, per-plane differences between the Android buffer and the decoded surface |
 | `C2AllocatorGralloc: failed transaction: lock(BLOB)` after `GBM-MESA-WRAPPER: Failed to map the buffer` | Intel image without patch 0014: gralloc imports BLOB buffers with a row wider than their stride, which iris rejects |
 
 `gbm-blob-probe.c` checks the host's Mesa driver directly, without Android: it
@@ -202,6 +213,16 @@ cc -O1 -o /tmp/gbm-blob-probe tests/runtime/gbm-blob-probe.c /usr/lib64/libgbm.s
 
 On Intel (iris) the `current` rows report `IMPORT FAILED` above 4 KiB; on AMD
 (radeonsi) both geometries map. `fixed` rows must map on every driver.
+
+`va-vpp-import-probe.c` checks, without Android, whether the host's VA-API
+driver can do direct output: convert a P010 or NV12 surface into an imported
+linear buffer laid out like Android's YV12, exactly. Build and usage are in the
+file's header; `i420` is the description the service uses:
+
+```bash
+cc -O2 -o /tmp/va-vpp-import-probe tests/runtime/va-vpp-import-probe.c -lva -lva-drm -lgbm
+/tmp/va-vpp-import-probe i420 1024
+```
 
 ### Opus clipping (patch 0015)
 
@@ -233,3 +254,18 @@ cc -O1 -o /tmp/gbm-blob-coherence tests/runtime/gbm-blob-coherence.c /usr/lib64/
 /tmp/gbm-blob-coherence            # gbm_bo_map: stale reads expected (20/20)
 DIRECT=1 /tmp/gbm-blob-coherence   # dma-buf mmap, as 0016 maps BLOBs: 0/20
 ```
+
+### Proving hardware video decoding
+
+A decoder's name, Android's `hw` flag or a playback that works prove nothing
+about the GPU being used: software fallbacks succeed silently (Fedora's
+`ffmpeg -hwaccel vaapi` decodes H.264 in software, for example). Measure the
+video engine instead. The kernel reports per-process engine time in DRM
+fdinfo (`drm-engine-video` on i915); sum it over a process's DRM fds while it
+decodes. On the Intel test host, GStreamer `vah264dec` kept the video engine
+46% busy while `openh264dec` left it at 0. Android's codec processes are host
+processes in Lepton, so the same counters apply to `media.swcodec` or a vendor
+Codec2 service. With hardware decoding off, every media process shows 0 ns
+during the probe. `sample-video-engine.sh` samples the counters and CPU of the
+media processes during a run and totals them (`--summary`); see
+`image-14/docs/video-vaapi.md` for the full validation procedure.

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Intel iHD VA-API driver (intel-media-driver 24.3.4, Gen 8 Broadwell and
+     newer) and its gmmlib, from Intel's Celadon Android project, pinned to
+     commits. Built with the free kernels only (ENABLE_KERNELS, no non-free
+     kernels). libva tries iHD before i965 on Intel GPUs; i965 stays for Gen 4
+     to 7.5. Licences: MIT (see each LICENSE.md). Added by the
+     prepare-x86_64.sh add-projects action; new paths only. -->
+<manifest>
+  <project path="external/gmmlib" name="projectceladon/gmmlib" remote="ghub"
+           revision="e258e57a2a05cff3bc32d427f61753e31c304130" upstream="master" />
+  <project path="external/intel-media-driver" name="projectceladon/media-driver" remote="ghub"
+           revision="d9f397e0bc5729435137629060fbbe0d9c0de1b1" upstream="master" />
+</manifest>

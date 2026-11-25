@@ -25,3 +25,14 @@ BOARD_MESA3D_VULKAN_DRIVERS := amd intel
 # mesa_clc and vtn_bindgen2 for that; build-images-x86_64.sh builds them from
 # this checkout's Mesa in the Ubuntu 26 builder and puts them on the PATH.
 BOARD_MESA3D_MESON_ARGS += -Dmesa-clc=system
+
+# Hardware video decoding off by default, ahead of system.prop so the
+# launcher's /vendor/waydroid.prop import overrides it (video-defaults.prop).
+TARGET_SYSTEM_PROP := $(DEVICE_PATH)/lepton_x86_64/video-defaults.prop $(TARGET_SYSTEM_PROP)
+
+# Mesa's VA-API driver for AMD (patch 0019, inside libgallium_dri.so). Decoders
+# only: H.264 and H.265 (patent-encumbered, off by default since Mesa 22.2),
+# VP9, AV1, MPEG-1/2 and VC-1. Lepton needs no hardware encoders.
+# -Dvideo-codecs also applies to Vulkan video (RADV, ANV).
+BOARD_MESA3D_GALLIUM_VA := true
+BOARD_MESA3D_MESON_ARGS += -Dvideo-codecs=h264dec,h265dec,vp9dec,av1dec,mpeg12dec,vc1dec

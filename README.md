@@ -145,6 +145,10 @@ Properties > Launch Options, followed by `%command%`:
   otherwise Codec2 stays off.
   Software rendering can use BLOB buffers. AVC/video output problems remain;
   YouTube video playback is not established ([media details](GAPPS.md#media-decoder-selection)).
+- Optional hardware video decoding (VA-API), off by default:
+  `LEPTON_VIDEO_HWACCEL=true` in an app's launch options decodes H.264, HEVC
+  (including Main10), VP9 and, on AMD, AV1 on the GPU
+  ([video-vaapi.md](image-14/docs/video-vaapi.md)). HDR video is shown as SDR.
 - Optional, in bundles you build yourself: Google Play services, ARM64
   translation for ARM-only games, and Widevine L3 DRM support
   ([GAPPS.md](GAPPS.md)).
@@ -219,6 +223,7 @@ and resets Podman.
 | `0014-minigbm-gbm-mesa-blob-cpu-surface.patch` | The same on Intel: gralloc imports and maps Codec2 BLOB buffers as the 4096-wide surface they were allocated as, which iris accepts (issue #30) |
 | `0016-minigbm-gbm-mesa-blob-direct-map.patch` | Media audio no longer drops out every few seconds on Intel: gralloc maps Codec2's byte buffers directly, so the decoder process always reads the bytes the app wrote (Mesa's staging maps delivered them only at unmap) |
 | `0015-libopus-float-decode-x86_64.patch` | Loud music decoded by Android's Opus decoder no longer crackles: libopus is built floating-point on x86_64, so peaks above full scale are soft-clipped instead of flattened (apps such as Metrolist fall back to this decoder when their own is ARM-only) |
+| `0017`–`0030` (video) | Optional hardware video decoding through VA-API (`LEPTON_VIDEO_HWACCEL=true`, off by default): FFmpeg's Codec2 service with Intel and Mesa VA drivers, HEVC Main10 for profile-checking apps, size limits from the driver, and direct GPU output into Android's buffers (4K60 10-bit on the tested Intel, AMD and Steam Deck GPUs). See [image-14/docs/video-vaapi.md](image-14/docs/video-vaapi.md) |
 
 Patches 0012 (window close), 0013 (AMD allocator), 0014 (Intel BLOB mapping), 0015 (float Opus decoding) and 0016 (direct BLOB mapping) change Android components.
 They require images containing those fixes; updating only the launcher cannot

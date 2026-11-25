@@ -26,6 +26,7 @@ APK_PREFLIGHT_DIR=''
 APKM=false
 NETWORK_SYSCTLS=false
 CODEC2=false
+VIDEO_HWACCEL=false
 PROFILE=''
 SETUP_ONLY=false
 FRESH_PROFILE=true
@@ -55,6 +56,7 @@ For a regular game APK, add --app. Optional game/debug settings:
   --services-jar FILE        Overlay experimental services.jar without changing the stage
   --runtime-dir DIR          Test updated compat_tool scripts with stage images/sysbake
   --codec2                  Force Codec2 with gralloc buffers (default on images with patch 0013)
+  --video-hwaccel            Experimental VA-API video decoding (LEPTON_VIDEO_HWACCEL=true)
   --network-sysctls          Allow netd sysctl writes in the private network namespace
   --profile NAME             Reuse private Android data; install only changed APKs
   --setup-only               Boot a profile for registration/sign-in; no APK required
@@ -87,6 +89,7 @@ while (($#)); do
         --media-smoke) APP_MODE=true; MEDIA_SMOKE=true; shift ;;
         --network-sysctls) NETWORK_SYSCTLS=true; shift ;;
         --codec2) CODEC2=true; shift ;;
+        --video-hwaccel) VIDEO_HWACCEL=true; shift ;;
         --profile) PROFILE="${2:?}"; shift 2 ;;
         --setup-only) SETUP_ONLY=true; shift ;;
         --gpu-check) GPU_CHECK=true; shift ;;
@@ -444,6 +447,7 @@ export LEPTON_NO_DEBUG_PORTS=true
 export LEPTON_NETWORK_SYSCTLS="$NETWORK_SYSCTLS"
 # Default: Lepton decides (Codec2 for audio when the DMA heap is usable).
 if [[ "$CODEC2" == true ]]; then export LEPTON_CODEC2=true; else unset LEPTON_CODEC2; fi
+if [[ "$VIDEO_HWACCEL" == true ]]; then export LEPTON_VIDEO_HWACCEL=true; else unset LEPTON_VIDEO_HWACCEL; fi
 if [[ -n "$PROFILE" ]]; then export LEPTON_NO_CLEANUP=true; fi
 unset SteamAppId STEAM_COMPAT_INSTALL_PATH STEAM_COMPAT_DATA_PATH
 if [[ -n "$PROFILE" ]]; then

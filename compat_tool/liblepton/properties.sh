@@ -82,6 +82,111 @@ function lepton_dma_heap_problem()
     fi
 }
 
+# Hardware video decoding (experimental): the image's Codec2 FFmpeg service
+# decodes video with VA-API on the GPU gralloc uses (gralloc.gbm.device).
+# Off by default: the service then lists no components and Android's own
+# codecs are unchanged. LEPTON_VIDEO_HWACCEL=true ranks FFmpeg's video
+# decoders (256) ahead of Android's software ones (512); FFmpeg's audio
+# decoders stay off. Needs hardware rendering and Codec2 (not mode off).
+LEPTON_FFMPEG_RANK_DISABLED=4294967295
+# lepton_video_va_driver: the image's VA-API drivers for the selected GPU, in
+# the order libva tries them (vendor/lib64, overlay first), or nothing.
+# Intel: iHD (Gen 8 and newer), then i965 (Gen 4 to 9.5). AMD: Mesa links its
+# VA driver into libgallium_dri.so when built with VA (__vaDriverInit_*).
+LEPTON_MESA_VA_MARKER='__vaDriverInit_'
+function lepton_video_va_driver()
+{
+    local LIB FILE FOUND=()
+    case "$(lepton_vulkan_hal)" in
+        intel)
+            for LIB in iHD_drv_video.so i965_drv_video.so; do
+                for FILE in "${LEPTON_DIR}/../images/rootfs_overlay/vendor/lib64/${LIB}" \
+                            "${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}/vendor/lib64/${LIB}"; do
+                    [[ -f "${FILE}" ]] && { FOUND+=("${LIB}"); break; }
+                done
+            done ;;
+        radeon)
+            lepton_image_has_marker vendor/lib64/libgallium_dri.so "${LEPTON_MESA_VA_MARKER}" &&
+                FOUND+=("Mesa (libgallium_dri.so)") ;;
+        *) return 1 ;;
+    esac
+    ((${#FOUND[@]})) || return 1
+    print "${FOUND[*]}"
+}
+function lepton_video_hwaccel_mode()
+{
+    if [[ "${LEPTON_VIDEO_HWACCEL:-false}" != true ]]; then
+        print off
+    elif [[ "$(uname -m)" != x86_64 || "$(android_sdk_version)" -lt 34 ]]; then
+        print unsupported
+    elif [[ "${LEPTON_FORCE_SOFTWARE:-}" == true ]]; then
+        print no-gpu
+    elif [[ "$(lepton_codec2_mode)" == off ]]; then
+        print no-codec2
+    elif ! lepton_video_va_driver >/dev/null; then
+        # FFmpeg would decode in software instead of Android's decoders.
+        print no-driver
+    else
+        print vaapi
+    fi
+}
+# How hardware-decoded frames reach Android: LEPTON_VIDEO_HWACCEL_OUTPUT=direct
+# (default) or copyback. Direct output needs the image's FFmpeg Codec2 service
+# to have it (patch 0030); older images use copyback.
+LEPTON_FFMPEG_SERVICE=vendor/bin/hw/android.hardware.media.c2-ffmpeg-service
+function lepton_video_hwaccel_output()
+{
+    case "${LEPTON_VIDEO_HWACCEL_OUTPUT:-direct}" in
+        copyback) print copyback ;;
+        direct) if lepton_image_has_marker "${LEPTON_FFMPEG_SERVICE}" 'LEPTON_VA_DIRECT_END'; then
+                    print direct
+                else
+                    print copyback
+                fi ;;
+        *) print copyback ;;
+    esac
+}
+function lepton_video_hwaccel_props()
+{
+    local MODE
+    MODE="$(lepton_video_hwaccel_mode)"
+    if [[ "${MODE}" == vaapi ]]; then
+        props_echo "debug.ffmpeg-codec2.rank=256"
+        props_echo "debug.ffmpeg-codec2.rank.video=256"
+        props_echo "debug.ffmpeg-codec2.rank.audio=${LEPTON_FFMPEG_RANK_DISABLED}"
+        props_echo "media.sf.hwaccel=1"
+        # List only the video codecs the VA-API driver can decode (the service
+        # queries the driver); the others stay on Android's software decoders.
+        props_echo "debug.ffmpeg-codec2.hwaccel.force=true"
+        # How decoded frames reach Android's buffers (FFmpeg always decodes
+        # into its own VA surfaces):
+        #   direct    the GPU converts each frame into Android's buffer itself
+        #             (the service's DRM PRIME "VPP mode", YV12; no readback).
+        #             The service falls back to copyback per session if the
+        #             driver cannot (logged as LEPTON_VA_DIRECT fallback=).
+        #   copyback  the CPU downloads and converts each frame.
+        local OUTPUT REQUESTED="${LEPTON_VIDEO_HWACCEL_OUTPUT:-direct}"
+        OUTPUT="$(lepton_video_hwaccel_output)"
+        if [[ "${REQUESTED}" != direct && "${REQUESTED}" != copyback ]]; then
+            println "Hardware video decoding: LEPTON_VIDEO_HWACCEL_OUTPUT=${REQUESTED} is not direct or copyback; using copyback"
+        elif [[ "${OUTPUT}" != "${REQUESTED}" ]]; then
+            println "Hardware video decoding: this image has no direct output; using copyback"
+        fi
+        props_echo "debug.ffmpeg-codec2.hwaccel.drm=$([[ "${OUTPUT}" == direct ]] && print true || print false)"
+        props_echo "debug.ffmpeg-codec2.pixel_format=$([[ "${OUTPUT}" == direct ]] && print YUV_420_PLANER || print YUV_420)"
+        println "Hardware video decoding (VA-API, experimental): on, $(lepton_video_va_driver) using $(lepton_gpu_render_node 2>/dev/null || print 'the default render node'); output ${OUTPUT}"
+    else
+        props_echo "debug.ffmpeg-codec2.rank=${LEPTON_FFMPEG_RANK_DISABLED}"
+        props_echo "media.sf.hwaccel=0"
+        case "${MODE}" in
+            unsupported) println "Hardware video decoding: LEPTON_VIDEO_HWACCEL needs Android 14 x86_64; off" ;;
+            no-gpu) println "Hardware video decoding: off with software rendering (LEPTON_FORCE_SOFTWARE)" ;;
+            no-codec2) println "Hardware video decoding: off because Android's media decoders (Codec2) are off" ;;
+            no-driver) println "Hardware video decoding: off; this image has no VA-API driver for the $(lepton_vulkan_hal) GPU" ;;
+        esac
+    fi
+}
+
 function setup_props()
 {
     local CONTEXT="${1:-${LEPTON_CONTEXT}}"
@@ -162,6 +267,8 @@ function setup_props()
             fi
             ;;
     esac
+    lepton_video_hwaccel_props
+
     props_echo "ro.opengles.version=196609"
     props_echo "ro.hardware.camera=v4l2"
 

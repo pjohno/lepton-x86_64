@@ -1,0 +1,243 @@
+Lepton: list only codecs the VA-API driver decodes; log the decode path
+
+ro.waydroid.hwcodecs (which video codecs the GPU decodes) is set by
+WayDroid's container manager; Lepton has none, so the service either listed
+every FFmpeg video decoder as "hardware" or, with
+debug.ffmpeg-codec2.hwaccel.force, none of the checked ones. When the
+property is empty and media.sf.hwaccel is set, query the VA-API driver once
+(profiles with a VLD entry point) and use that list; log it as
+LEPTON_VA_CAPS. With force, also hide the other FFmpeg video decoders
+(MPEG-2/4, H.263, DivX, WMV...) unless the GPU decodes them, so FFmpeg
+software decoders do not replace Android's own.
+
+Log each decode session once (LEPTON_VA_SESSION: codec, profile, size,
+decode=vaapi or software with the reason) and its frame counts when it ends
+(LEPTON_VA_SESSION_END: hardware frames, software frames, failed hardware
+frame downloads), so FFmpeg's internal software fallback (e.g. a profile
+the GPU cannot decode) is not mistaken for hardware decoding.
+
+diff --git a/codec2/C2FFMPEGVideoDecodeComponent.cpp b/codec2/C2FFMPEGVideoDecodeComponent.cpp
+--- a/codec2/C2FFMPEGVideoDecodeComponent.cpp
++++ b/codec2/C2FFMPEGVideoDecodeComponent.cpp
+@@ -255,11 +255,50 @@
+     return C2_OK;
+ }
+ 
++// Lepton: one line when a session's first frame arrives, saying whether
++// frames come from VA-API or FFmpeg decodes in software, and why.
++void C2FFMPEGVideoDecodeComponent::noteDecodedFrame() {
++    const bool hw = mFrame->format == AV_PIX_FMT_VAAPI;
++    if (hw) mHwFrames++; else mSwFrames++;
++    if (mSessionLogged) return;
++    mSessionLogged = true;
++    const char* reason = "";
++    if (!hw) {
++        if (!base::GetBoolProperty("media.sf.hwaccel", false)) {
++            reason = "hwaccel-off";
++        } else if (!mCtx->hw_device_ctx) {
++            reason = "no-va-device-or-codec";
++        } else {
++            reason = "va-cannot-decode-stream";  // e.g. unsupported profile or bit depth
++        }
++    }
++    const char* profile = avcodec_profile_name(mCtx->codec_id, mCtx->profile);
++    const char* swFormat = "-";
++    if (hw && mFrame->hw_frames_ctx) {
++        swFormat = av_get_pix_fmt_name(((AVHWFramesContext*)mFrame->hw_frames_ctx->data)->sw_format);
++    }
++    ALOGI("LEPTON_VA_SESSION codec=%s profile=%s size=%dx%d decode=%s%s%s sw_format=%s zero_copy=%d",
++          avcodec_get_name(mCtx->codec_id), profile ? profile : "?", mFrame->width, mFrame->height,
++          hw ? "vaapi" : "software", hw ? "" : " reason=", reason, swFormat ? swFormat : "?",
++          hw && mUtils->mUseDrmPrime ? 1 : 0);
++}
++
++void C2FFMPEGVideoDecodeComponent::logSessionEnd() {
++    if (mHwFrames || mSwFrames || mTransferFailures) {
++        ALOGI("LEPTON_VA_SESSION_END codec=%s hw_frames=%" PRIu64 " sw_frames=%" PRIu64
++              " transfer_failures=%" PRIu64,
++              mCtx ? avcodec_get_name(mCtx->codec_id) : "?", mHwFrames, mSwFrames, mTransferFailures);
++    }
++    mHwFrames = mSwFrames = mTransferFailures = 0;
++    mSessionLogged = false;
++}
++
+ void C2FFMPEGVideoDecodeComponent::deInitDecoder() {
+     ALOGD("%p deInitDecoder: %p", this, mCtx);
++    logSessionEnd();
+ #if CONFIG_VAAPI
+     mVaImportsLogged = 0;
+ #endif
+     if (mFilterGraph) {
+         av_freep(&mFilterGraph->opaque);
+         avfilter_graph_free(&mFilterGraph);
+@@ -765,6 +804,7 @@
+ #endif //CONFIG_VAAPI
+         int err = avcodec_receive_frame(mCtx, mFrame);
+         if (err == 0) {
++            noteDecodedFrame();
+ #if DEBUG_FRAMES && CONFIG_VAAPI
+             if (mFrame->format == AV_PIX_FMT_VAAPI) {
+                 ALOGD("receiveFrame: VASurfaceID = %p", mFrame->data[3]);
+@@ -863,6 +903,7 @@
+ 
+     int err = ffmpeg_hwaccel_get_frame(mCtx, mFrame);
+     if (err < 0) {
++        mTransferFailures++;
+         ALOGE("downloadFrame: failed to receive frame from HW decoder: %s (%08x)",
+               av_err2str(err), err);
+         return C2_CORRUPTED;
+diff --git a/codec2/C2FFMPEGVideoDecodeComponent.h b/codec2/C2FFMPEGVideoDecodeComponent.h
+--- a/codec2/C2FFMPEGVideoDecodeComponent.h
++++ b/codec2/C2FFMPEGVideoDecodeComponent.h
+@@ -118,6 +118,13 @@
+     int mDeinterlaceIndicator;
+     std::deque<PendingWork> mPendingWorkQueue;
+     std::unique_ptr<C2FFMPEGVideoUtils> mUtils;
++    // Lepton: per-session decode path diagnostics (LEPTON_VA_SESSION).
++    uint64_t mHwFrames = 0;
++    uint64_t mSwFrames = 0;
++    uint64_t mTransferFailures = 0;
++    bool mSessionLogged = false;
++    void noteDecodedFrame();
++    void logSessionEnd();
+ 
+ #if CONFIG_VAAPI
+     struct SurfaceDescriptor {
+diff --git a/codec2/C2FFMPEGVideoUtils.cpp b/codec2/C2FFMPEGVideoUtils.cpp
+--- a/codec2/C2FFMPEGVideoUtils.cpp
++++ b/codec2/C2FFMPEGVideoUtils.cpp
+@@ -16,6 +16,17 @@
+ 
+ #include "C2FFMPEGVideoUtils.h"
+ #include <android-base/properties.h>
++#include <log/log.h>
++#include <mutex>
++#include <vector>
++
++#if CONFIG_VAAPI
++extern "C" {
++#include <libavutil/hwcontext.h>
++#include <libavutil/hwcontext_vaapi.h>
++}
++#include <va/va_str.h>
++#endif
+ #include <system/graphics.h>
+ 
+ namespace android {
+@@ -31,10 +42,84 @@
+     return (mGrallocName.find("minigbm") != std::string::npos);
+ }
+ 
++// Lepton: ask the VA-API driver (the device FFmpeg would use) which profiles
++// it can decode. Logged once as LEPTON_VA_CAPS.
++static std::string queryVaCodecs() {
++#if !CONFIG_VAAPI
++    return "";
++#else
++    using namespace ::android;
++    if (!base::GetBoolProperty("media.sf.hwaccel", false)) {
++        return "";
++    }
++    AVBufferRef* device = nullptr;
++    if (av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_VAAPI, "android", nullptr, 0) < 0) {
++        ALOGW("LEPTON_VA_CAPS driver=none node=%s codecs= (VA-API device could not be opened)",
++              base::GetProperty("gralloc.gbm.device", "?").c_str());
++        return "";
++    }
++    VADisplay display = ((AVVAAPIDeviceContext*)((AVHWDeviceContext*)device->data)->hwctx)->display;
++    std::vector<VAProfile> profiles(vaMaxNumProfiles(display));
++    int numProfiles = 0;
++    std::string tokens, decodable;
++    if (vaQueryConfigProfiles(display, profiles.data(), &numProfiles) == VA_STATUS_SUCCESS) {
++        std::vector<VAEntrypoint> entrypoints(vaMaxNumEntrypoints(display));
++        for (int i = 0; i < numProfiles; i++) {
++            int numEntrypoints = 0;
++            if (vaQueryConfigEntrypoints(display, profiles[i], entrypoints.data(), &numEntrypoints)
++                    != VA_STATUS_SUCCESS) {
++                continue;
++            }
++            bool vld = false;
++            for (int e = 0; e < numEntrypoints; e++) vld |= entrypoints[e] == VAEntrypointVLD;
++            if (!vld) continue;
++            const char* token = nullptr;
++            switch (profiles[i]) {
++                case VAProfileH264ConstrainedBaseline:
++                case VAProfileH264Main:
++                case VAProfileH264High: token = "H264"; break;
++                case VAProfileHEVCMain: token = "HEVC"; break;
++                case VAProfileHEVCMain10: token = "HEVC10"; break;
++                case VAProfileVP8Version0_3: token = "VP80"; break;
++                case VAProfileVP9Profile0: token = "VP90"; break;
++                case VAProfileVP9Profile2: token = "VP92"; break;
++                case VAProfileAV1Profile0: token = "AV10"; break;
++                case VAProfileMPEG2Simple:
++                case VAProfileMPEG2Main: token = "MPG2"; break;
++                case VAProfileMPEG4Simple:
++                case VAProfileMPEG4AdvancedSimple:
++                case VAProfileMPEG4Main: token = "MPG4"; break;
++                case VAProfileH263Baseline: token = "H263"; break;
++                default: break;
++            }
++            decodable += std::string(decodable.empty() ? "" : ",") + vaProfileStr(profiles[i]);
++            if (token && (" " + tokens + " ").find(std::string(" ") + token + " ") == std::string::npos) {
++                tokens += std::string(tokens.empty() ? "" : " ") + token;
++            }
++        }
++    }
++    ALOGI("LEPTON_VA_CAPS driver=\"%s\" node=%s codecs=%s profiles=%s",
++          vaQueryVendorString(display), base::GetProperty("gralloc.gbm.device", "?").c_str(),
++          tokens.c_str(), decodable.c_str());
++    av_buffer_unref(&device);
++    return tokens;
++#endif
++}
++
++const std::string& C2FFMPEGVideoUtils::detectedHwCodecs() {
++    static std::once_flag once;
++    static std::string codecs;
++    std::call_once(once, [] { codecs = queryVaCodecs(); });
++    return codecs;
++}
++
+ bool C2FFMPEGVideoUtils::shouldEnableCodec(const std::string codec, bool hwonly) const {
+     using namespace ::android;
+ 
+-    const std::string supported_codecs = base::GetProperty("ro.waydroid.hwcodecs", "");
++    std::string supported_codecs = base::GetProperty("ro.waydroid.hwcodecs", "");
++    if (supported_codecs.empty()) {
++        supported_codecs = detectedHwCodecs();
++    }
+ 
+     // For MPEG-2/MPEG-4/H.263, always enable them unless hwonly is true
+     if (codec.find("mpeg2") != std::string::npos) {
+diff --git a/codec2/C2FFMPEGVideoUtils.h b/codec2/C2FFMPEGVideoUtils.h
+--- a/codec2/C2FFMPEGVideoUtils.h
++++ b/codec2/C2FFMPEGVideoUtils.h
+@@ -46,6 +46,11 @@
+ 
+     bool isGrallocMinigbm() const;
+     bool shouldEnableCodec(const std::string codec, bool hwonly) const;
++    // Lepton: codecs the VA-API driver can decode (VLD entry point), as
++    // ro.waydroid.hwcodecs tokens (H264 HEVC HEVC10 VP80 VP90 VP92 AV10 MPG2
++    // MPG4 H263). Queried once per process when media.sf.hwaccel is set and
++    // ro.waydroid.hwcodecs is empty; empty when VA-API is unavailable.
++    static const std::string& detectedHwCodecs();
+     bool isPixelFormatYUV420() const;
+     bool isVPPMode() const;
+     uint32_t getPixelFormat(bool flexible) const;
+diff --git a/codec2/service.cpp b/codec2/service.cpp
+--- a/codec2/service.cpp
++++ b/codec2/service.cpp
+@@ -129,6 +129,12 @@
+     if (std::find(std::begin(kCheckVaapiCodecs), std::end(kCheckVaapiCodecs), codec) != std::end(kCheckVaapiCodecs) && force_hwaccel_codec) {
+         return codec_supported_by_gpu;
+     }
++    // Lepton: with force, other codecs (MPEG-2/4, H.263, DivX, WMV...) are
++    // listed only when the GPU decodes them too; otherwise these FFmpeg
++    // software decoders would replace Android's own while marked hardware.
++    if (force_hwaccel_codec) {
++        return C2FFMPEGVideoUtils().shouldEnableCodec(codec, true);
++    }
+ 
+     return true;
+ }

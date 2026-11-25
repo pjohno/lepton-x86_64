@@ -126,6 +126,78 @@ grep -q 'if \[\[ "$(lepton_codec2_mode)" == heap \]\]; then' "$ROOT/compat_tool/
 grep -q 'podman_mount_entry "$(lepton_dma_heap_device)" "/dev/dma_heap/system" rw' "$ROOT/compat_tool/liblepton/mounting.sh"
 printf 'PASS: Android URL routing default, explicit Steam opt-in, Codec2 modes (gralloc on fixed AMD/Intel images, heap or off on older ones, overlay first, software, opt-out/opt-in, Android 11), so replacements\n'
 
+# Hardware video decoding (VA-API): off unless LEPTON_VIDEO_HWACCEL=true.
+LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'debug.ffmpeg-codec2.rank=4294967295' "$work/lepton.prop"
+grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"
+if grep -q 'hwaccel.drm=true\|hwaccel.force' "$work/lepton.prop"; then echo 'FAIL: hwaccel options set while off'; exit 1; fi
+if grep -q 'Hardware video decoding' "$work/log"; then echo 'FAIL: video decoding reported when not requested'; exit 1; fi
+# Without a VA driver for the GPU in the image, FFmpeg would decode in software.
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'debug.ffmpeg-codec2.rank=4294967295' "$work/lepton.prop"
+grep -q 'off; this image has no VA-API driver for the intel GPU' "$work/log" || { echo 'FAIL: no-driver message'; exit 1; }
+: > "$work/rootfs-intel/vendor/lib64/i965_drv_video.so"
+mkdir -p "$work/drm-amd/renderD128/device"; echo 0x1002 > "$work/drm-amd/renderD128/device/vendor"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-amd" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"
+grep -q 'no VA-API driver for the radeon GPU' "$work/log" || { echo 'FAIL: AMD without radeonsi VA driver'; exit 1; }
+printf 'ELF...\0__vaDriverInit_1_23\0...' > "$work/rootfs-intel/vendor/lib64/libgallium_dri.so"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-amd" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'media.sf.hwaccel=1' "$work/lepton.prop"
+grep -q 'on, Mesa (libgallium_dri.so) using' "$work/log" || { echo 'FAIL: AMD with Mesa VA'; exit 1; }
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'debug.ffmpeg-codec2.rank=256' "$work/lepton.prop"
+grep -qx 'debug.ffmpeg-codec2.rank.video=256' "$work/lepton.prop"
+grep -qx 'debug.ffmpeg-codec2.rank.audio=4294967295' "$work/lepton.prop"   # audio stays on Android's decoders
+grep -qx 'media.sf.hwaccel=1' "$work/lepton.prop"
+grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"   # this image has no direct output
+grep -qx 'debug.ffmpeg-codec2.pixel_format=YUV_420' "$work/lepton.prop"
+grep -qx 'debug.ffmpeg-codec2.hwaccel.force=true' "$work/lepton.prop"   # only codecs the driver decodes
+grep -q 'this image has no direct output; using copyback' "$work/log" || { echo 'FAIL: older image falls back to copyback'; exit 1; }
+grep -q '; output copyback$' "$work/log" || { echo 'FAIL: copy-back output message'; exit 1; }
+if grep -q 'copyback-vpp' "$work/lepton.prop"; then echo 'FAIL: removed vpp property set'; exit 1; fi
+# Direct output is the default when the image's service has it (patch 0030).
+mkdir -p "$work/rootfs-intel/vendor/bin/hw"
+svc="$work/rootfs-intel/vendor/bin/hw/android.hardware.media.c2-ffmpeg-service"
+printf 'ELF...\0LEPTON_VA_DIRECT_END\0' > "$svc"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=true' "$work/lepton.prop"
+grep -qx 'debug.ffmpeg-codec2.pixel_format=YUV_420_PLANER' "$work/lepton.prop"
+grep -q '; output direct$' "$work/log" || { echo 'FAIL: direct by default'; exit 1; }
+if grep -q 'using copyback' "$work/log"; then echo 'FAIL: fallback note with direct available'; exit 1; fi
+LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_OUTPUT=copyback LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"
+grep -qx 'debug.ffmpeg-codec2.pixel_format=YUV_420' "$work/lepton.prop"
+grep -q '; output copyback$' "$work/log" || { echo 'FAIL: copyback override'; exit 1; }
+for bad in vpp bogus; do
+    LEPTON_VIDEO_HWACCEL=true LEPTON_VIDEO_HWACCEL_OUTPUT=$bad LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+    grep -qx 'debug.ffmpeg-codec2.hwaccel.drm=false' "$work/lepton.prop"
+    grep -q "OUTPUT=$bad is not direct or copyback; using copyback" "$work/log" || { echo "FAIL: output value $bad"; exit 1; }
+done
+rm -- "$svc"
+# Off: no output properties at all.
+LEPTON_VIDEO_HWACCEL_OUTPUT=direct LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+if grep -q 'hwaccel.drm\|pixel_format\|copyback-vpp' "$work/lepton.prop"; then echo 'FAIL: output properties while off'; exit 1; fi
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -q 'Hardware video decoding (VA-API, experimental): on, i965_drv_video.so using /dev/dri/renderD129' "$work/log" || { echo 'FAIL: video decoding on message'; exit 1; }
+: > "$work/rootfs-intel/vendor/lib64/iHD_drv_video.so"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -q 'on, iHD_drv_video.so i965_drv_video.so using' "$work/log" || { echo 'FAIL: iHD listed before i965'; exit 1; }
+rm -- "$work/rootfs-intel/vendor/lib64/i965_drv_video.so"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-intel" setup_props > "$work/log"
+grep -qx 'media.sf.hwaccel=1' "$work/lepton.prop"   # iHD alone is enough
+LEPTON_VIDEO_HWACCEL=true LEPTON_FORCE_SOFTWARE=true setup_props > "$work/log"
+grep -qx 'media.sf.hwaccel=0' "$work/lepton.prop"
+grep -q 'off with software rendering' "$work/log"
+LEPTON_VIDEO_HWACCEL=true LEPTON_SYSFS_DRM="$work/drm-intel" LEPTON_TEST_ROOTFS="$work/rootfs-new" setup_props > "$work/log"
+grep -qx 'debug.ffmpeg-codec2.rank=4294967295' "$work/lepton.prop"
+grep -q "off because Android's media decoders (Codec2) are off" "$work/log"
+probe_sdk=30
+LEPTON_VIDEO_HWACCEL=true setup_props > "$work/log"
+grep -q 'needs Android 14 x86_64' "$work/log"
+probe_sdk=34
+echo 'PASS: hardware video decoding off by default; opt-in ranks FFmpeg video only; refused without GPU rendering, Codec2, a VA driver for the GPU or Android 14'
+
 # Local window policy crosses Podman via the generated property file, not env.
 LEPTON_LOCAL_DISPLAY_ACTIVE=1 setup_props
 if grep -q '^ro.lepton.local_' "$work/lepton.prop"; then echo 'FAIL: sysbake received local display policy'; exit 1; fi

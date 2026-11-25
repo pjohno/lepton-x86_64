@@ -1,0 +1,50 @@
+Lepton: download hardware frames in the surface's own format
+
+In copy-back mode the service asked FFmpeg for YUV420P frames. Mesa's VA
+driver serves a format other than the surface's (NV12) through its video
+compositor, which changed every luma row but the first: AMD output was not
+bit-exact (probe luma CRCs differed on all 150 frames). Map or transfer in
+the frames context's sw_format first; the service's swscale step converts
+NV12 to YV12 without changing luma. YUV420P stays as the fallback.
+
+diff --git a/utils/ffmpeg_hwaccel.c b/utils/ffmpeg_hwaccel.c
+--- a/utils/ffmpeg_hwaccel.c
++++ b/utils/ffmpeg_hwaccel.c
+@@ -5,6 +5,7 @@
+ 
+ #include "config.h"
+ #include "ffmpeg_hwaccel.h"
++#include "libavutil/hwcontext.h"
+ #include "libavutil/opt.h"
+ 
+ int ffmpeg_hwaccel_init(AVCodecContext *avctx) {
+@@ -83,6 +84,29 @@
+         return AVERROR(ENOMEM);
+     }
+ 
++    // Lepton: try the surface's own format (NV12) first. Asking for another
++    // format makes Mesa's VA driver convert through its video compositor,
++    // which changes pixel values (luma no longer bit-exact); the caller
++    // converts NV12 with swscale, which copies luma unchanged.
++    {
++        const AVHWFramesContext *hwfc = (const AVHWFramesContext *)frame->hw_frames_ctx->data;
++        if (hwfc->sw_format != AV_PIX_FMT_NONE && hwfc->sw_format != AV_PIX_FMT_YUV420P) {
++            output->format = hwfc->sw_format;
++            err = av_hwframe_map(output, frame, AV_HWFRAME_MAP_READ);
++            if (err == 0) {
++                goto finish;
++            }
++            av_frame_unref(output);
++
++            output->format = hwfc->sw_format;
++            err = av_hwframe_transfer_data(output, frame, 0);
++            if (err == 0) {
++                goto finish;
++            }
++            av_frame_unref(output);
++        }
++    }
++
+     // The frame transfer from GPU uses 2 different methods:
+     // 1. Map hw-frame to YV12
+     //    This method maps the GPU buffer into a linear buffer in system

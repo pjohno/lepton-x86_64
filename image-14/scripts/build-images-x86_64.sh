@@ -167,6 +167,9 @@ MESA_CLC_MOUNT=(
 [[ ! -e "$STATE/reset.started" ]] ||
   fail "Interrupted source reset detected; run prepare-x86_64.sh --reset"
 
+[[ ! -e "$STATE/add-projects.started" ]] ||
+  fail "Adding projects was interrupted; rerun prepare-x86_64.sh --add-projects"
+
 for marker in sync.done vendor.done patches.done; do
   [[ -f "$STATE/$marker" ]] ||
     fail "Missing preparation checkpoint: $marker"
