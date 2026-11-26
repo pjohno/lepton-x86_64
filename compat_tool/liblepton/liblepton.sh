@@ -854,10 +854,10 @@ function install_app()
             # x86_64 port: split-APK bundle (.apkm): install base and splits
             # together; the post-install hook keeps every installed file.
             timeout "${INSTALL_TIMEOUT}" "$ADB" -P "${TEMP_PORT}" -s localhost:"${ADB_PORT}" install-multiple -g "${APK_PATH}" "${SPLITS[@]}" || INSTALL_RET=$?
-        elif is_steamlaunch && apk_path_in_container "${APK_PATH}"; then
-            # If it's a steamlaunch we can use a shortcut:
-            # Since we mount the apk folder into the container,
-            # there is no streaming via adb needed.
+        elif is_steamlaunch && apk_path_in_container "${APK_PATH}" &&
+                podman_attach --no-term /system/bin/test -r "${APK_PATH}"; then
+            # Android can hide some host mounts during boot (for example /mnt).
+            # Only use the shortcut if the running guest can read the APK.
             timeout "${INSTALL_TIMEOUT}" "$ADB" -P "${TEMP_PORT}" -s localhost:"${ADB_PORT}" shell pm install -g "\"${APK_PATH}\"" || INSTALL_RET=$?
         else
             timeout "${INSTALL_TIMEOUT}" "$ADB" -P "${TEMP_PORT}" -s localhost:"${ADB_PORT}" install -g "${APK_PATH}" || INSTALL_RET=$?

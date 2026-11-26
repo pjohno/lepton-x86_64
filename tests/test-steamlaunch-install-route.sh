@@ -24,7 +24,8 @@ apk_path_in_container "$work/link-lib/common/G3/game.apk"              # visible
 ! STEAM_COMPAT_CLIENT_INSTALL_PATH='' STEAM_COMPAT_LIBRARY_PATHS='' apk_path_in_container "$work/Steam/x.apk"
 
 # install_app gates Valve's shortcut on it; the adb fallback remains.
-grep -q 'if is_steamlaunch && apk_path_in_container "${APK_PATH}"; then' "$lib"
+grep -Fq 'elif is_steamlaunch && apk_path_in_container "${APK_PATH}" &&' "$lib"
+grep -Fq 'podman_attach --no-term /system/bin/test -r "${APK_PATH}"; then' "$lib"
 grep -q 'install -g "${APK_PATH}"' "$lib"
 # Runtime permissions: every install path grants them (-g); run-apk also grants
 # missing ones for apps installed earlier, parsed from dumpsys package.

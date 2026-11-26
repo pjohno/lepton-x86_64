@@ -82,7 +82,11 @@ if [ "$1" = "package" ] && { [ "$2" = "install" ] || [ "$2" = "install-commit" ]
     # to not let failing invocations show up in the output, otherwise it thinks it failed.
     # Note that the `-w` here means wait until the service is ready.  We're really just trying everything here.
     # Perform the actual operation.
-    cmd_real -w "$@"
+    cmd_real -w "$@" || {
+        result=$?
+        mount_vulkan_layers
+        exit "$result"
+    }
 
 # Allow app launch to request we mount the vulkan layers
 elif [ "$1" = "lepton" ] && [ "$2" = "mount_vulkan_layers" ]; then
