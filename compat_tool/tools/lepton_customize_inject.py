@@ -316,6 +316,7 @@ def run(args, core):
     source = safe_path(args.stage_dir, core)
     output = safe_path(args.output_stage, core, existing=False)
     output = core.destination_path(output)
+    core.require_no_inherited_acl(output)
     disjoint(source, output, core)
     google = safe_path(args.google_inputs or args.google_zip, core)
     core.require(source.is_dir() and (google.is_file() if args.google_zip else google.is_dir()),

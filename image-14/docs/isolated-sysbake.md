@@ -49,8 +49,12 @@ with errors such as `creating /etc/mtab symlink: invalid argument` or
 * The staged rootfs is Lepton's `--rootfs …:O` lower layer under
   `--userns=keep-id`, so ACLs on it break the boot as well. The runner never
   modifies the stage: `--check` fails and lists affected paths. Recreate the
-  stage under a directory without default ACLs, or remove them yourself with
-  `setfacl -R -b <stage>/compat_tool/images/rootfs`.
+  stage in a folder without a default ACL (`mkdir DIR && setfacl -k DIR`).
+  Don't strip the ACLs from an existing stage: `setfacl -b` rewrites each
+  file's group permission bits from the ACL's group entry, so the rootfs no
+  longer matches what the stage recorded and sysbake refuses it. Stage
+  creation (`lepton-customize`, `inject --output-stage`, `restore`) and
+  `make-deck-bundle-x86_64.sh` refuse such a location up front.
 
 It copies the compat tool to an isolated work directory under the stage, but
 **symlinks the staged rootfs** to avoid copying over 1 GiB of Android files.

@@ -64,7 +64,7 @@ ACL_REPORT="$(python3 -I -B "$PRIVATE_STORAGE" scan-acls "$ROOTFS" 2>&1)" || ACL
 if (( ACL_RC != 0 )); then
     printf '%s\n' "$ACL_REPORT" >&2
     (( ACL_RC == 1 )) || fail "Cannot check staged rootfs for POSIX ACLs: $ROOTFS"
-    fail "Staged rootfs carries POSIX ACLs (often inherited from a workspace parent with default ACLs); rootless Android cannot boot from it. Recreate the stage under a directory without default ACLs, or remove them from this stage yourself (setfacl -R -b \"$ROOTFS\")"
+    fail "Staged rootfs carries POSIX ACLs (often inherited from a workspace parent with default ACLs); rootless Android cannot boot from it. Recreate the stage in a folder without a default ACL (for example: mkdir DIR && setfacl -k DIR). Do not strip the ACLs from this stage: setfacl -b rewrites group permission bits, so the rootfs no longer matches what the stage recorded."
 fi
 # PATH is narrowed before Lepton runs; keep using the commands checked here.
 WESTON_BIN="$(command -v weston)"

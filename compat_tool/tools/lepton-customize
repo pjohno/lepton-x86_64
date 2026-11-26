@@ -496,6 +496,31 @@ def destination_path(value):
     return path
 
 
+def require_no_inherited_acl(stage):
+    """Refuse a stage whose files would inherit their parent's default ACL.
+
+    Rootless Android cannot boot from a rootfs carrying POSIX ACLs, so sysbake
+    would refuse it later. Stripping them afterwards (setfacl -b) rewrites
+    group permission bits from the ACL and invalidates the recorded rootfs,
+    so the only fix is a parent without a default ACL. Read-only.
+    """
+    parent = stage.parent
+    try:
+        os.getxattr(parent, 'system.posix_acl_default')
+    except OSError as exc:
+        if exc.errno in (errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP):
+            return
+        raise InvalidBundle(f'Cannot check {parent} for a default ACL: {exc.strerror}') from exc
+    folder = parent / 'lepton-stages'
+    raise InvalidBundle(
+        f'{parent} has a default ACL (often a folder shared with another account), so every file '
+        f'in the new stage would inherit it, and sysbake would refuse the stage: rootless Android '
+        f'cannot boot from files carrying ACLs. Create the stage in a folder without a default ACL, '
+        f'for example: mkdir {folder} && setfacl -k {folder}, then use --stage-dir {folder}/{stage.name} '
+        f'(setfacl -k only removes that folder\'s default ACL; it changes no permissions). '
+        f'Do not strip ACLs from a stage afterwards. Nothing was changed.')
+
+
 def publish(source, destination):
     # os.rename would replace an existing empty directory. Linux NOREPLACE
     # provides atomic publication even if a concurrent process creates it.
@@ -546,6 +571,7 @@ def run(args):
     require(hasattr(ctypes.CDLL(None), 'memfd_create') and hasattr(ctypes.CDLL(None), 'renameat2'),
             'Linux memfd and glibc renameat2 support are required')
     destination = destination_path(args.stage_dir)
+    require_no_inherited_acl(destination)
     require(args.bundle.is_file() and args.checksum.is_file(), 'Bundle and checksum must be regular files')
     temporary = None
     with args.bundle.open('rb') as archive:

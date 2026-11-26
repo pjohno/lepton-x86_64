@@ -181,7 +181,7 @@ make_private_dir "$DATA"
 make_private_dir "$SHADERS"
 for dir in "$DATA" "$SHADERS"; do
     ! has_default_acl "$dir" ||
-        fail "$dir has a default ACL, which Android cannot use. Remove it (setfacl -R -b '$dir') or choose another --data-root."
+        fail "$dir has a default ACL, which Android cannot use. Choose another --data-root, or remove only that folder's default ACL (setfacl -k '$dir'; it changes no permissions). Don't strip ACLs with setfacl -b: it narrows the permissions of Android's files."
 done
 
 info "$PACKAGE with $(basename -- "$INSTALL_ROOT")"

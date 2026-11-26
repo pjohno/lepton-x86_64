@@ -98,6 +98,24 @@ verified a signature (`trust_root`).
 Create the destination's parent first. The destination itself must not exist,
 and must be outside any installed or extracted Lepton compatibility tool.
 
+**Use a work folder without a default ACL.** If the folder holding your stages
+has a default POSIX ACL, for example because a home or workspace folder is
+shared read-only with another account (`getfacl -p DIR` shows `default:`
+lines), every staged file inherits it, and rootless Android cannot boot from
+it. Stage creation, `inject --output-stage` and `restore` refuse such a folder
+before writing anything. Give the stages their own folder and remove only that
+folder's default ACL. `setfacl -k` changes no permissions, and the shared
+parent keeps its ACL:
+
+```bash
+mkdir -p ~/lepton-work && setfacl -k ~/lepton-work
+```
+
+Don't strip ACLs from an existing stage with `setfacl -b`: it narrows each
+file's group permissions to the ACL's group entry, so the rootfs no longer
+matches what the stage recorded, and sysbake refuses it. Create a new stage
+instead.
+
 ```bash
 mkdir -p ~/lepton-work
 
@@ -334,7 +352,9 @@ of NDK/GApps/Widevine does not add Intel graphics drivers or Android patches
 0012/0013. Repackaging keeps the original Android components, so a launcher-only
 update cannot supply their window-close or AMD allocator fixes.
 The helper checks staged rootfs ACLs read-only and removes inherited ACLs
-only from its newly created empty private storage directories.
+only from its newly created empty private storage directories. A stage whose
+rootfs carries ACLs can't be repaired; create it again in a folder without a
+default ACL ([work folder](#create-a-stage)).
 
 **Fedora and other SELinux-enforcing hosts** also need Lepton's small policy
 module once. Without it, Android's service managers are denied

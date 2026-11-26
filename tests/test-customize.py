@@ -364,6 +364,31 @@ class CustomizeTests(unittest.TestCase):
         self.stage.symlink_to(self.outside, target_is_directory=True)
         self.cli(ok=False)
 
+    def test_parent_with_default_acl_refused_before_anything_is_written(self):
+        shared = self.root / 'shared'
+        shared.mkdir()
+        # posix_acl_xattr v2 default ACL: u::rwx, u:<self>:r-x, g::---, m::r-x, o::---
+        import struct
+        entries = [(0x01, 7, 0xFFFFFFFF), (0x02, 5, os.getuid()), (0x04, 0, 0xFFFFFFFF),
+                   (0x10, 5, 0xFFFFFFFF), (0x20, 0, 0xFFFFFFFF)]
+        acl = struct.pack('<I', 2) + b''.join(struct.pack('<HHI', *entry) for entry in entries)
+        try:
+            os.setxattr(shared, 'system.posix_acl_default', acl)
+        except OSError as exc:
+            self.skipTest(f'filesystem cannot hold a default ACL: {exc}')
+        self.stage = shared / 'stage'
+        for mode in ('--check', '--execute'):
+            result = self.cli(mode, '--allow-unsigned', ok=False)
+            self.assertIn('has a default ACL', result.stderr)
+            self.assertIn('setfacl -k', result.stderr)
+            self.assertEqual(list(shared.iterdir()), [])
+        # A folder whose default ACL was removed is accepted.
+        clean = shared / 'lepton-stages'
+        clean.mkdir()
+        os.removexattr(clean, 'system.posix_acl_default')
+        self.stage = clean / 'stage'
+        self.cli('--check', '--allow-unsigned')
+
     def test_installed_tool_and_symlink_parent_untouched(self):
         installed = self.root / 'installed'
         (installed / 'compat_tool').mkdir(parents=True)
