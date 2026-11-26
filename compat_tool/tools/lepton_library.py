@@ -207,10 +207,15 @@ def apk_metadata(path):
     package = fields.get("name", "")
     code = fields.get("versionCode", "")
     manifest = command([sdk_tool("aapt2"), "dump", "xmltree", str(path), "--file", "AndroidManifest.xml"])
-    major_field = re.search(r"(?m)^\s*A: android:versionCodeMajor(?:\(0x[0-9a-f]+\))?=(?:\(type 0x[0-9a-f]+\))?(0x[0-9a-f]+|[0-9]+)\s*$", manifest)
-    if "android:versionCodeMajor" in manifest and major_field is None:
-        raise ValueError(f"Cannot read versionCodeMajor in {path.name}")
-    major = int(major_field[1], 0) if major_field else 0
+    major = 0
+    major_attribute = re.search(
+        r"(?m)^[ \t]*A: (?:http://schemas\.android\.com/apk/res/)?android:versionCodeMajor(.*)$", manifest)
+    if major_attribute:
+        major_field = re.fullmatch(r"(?:\(0x[0-9a-f]+\))?=(?:\(type 0x[0-9a-f]+\))?(0x[0-9a-f]+|[0-9]+)",
+                                   major_attribute[1].strip())
+        if major_field is None:
+            raise ValueError(f"Cannot read versionCodeMajor in {path.name}")
+        major = int(major_field[1], 0)
     if not PACKAGE.fullmatch(package) or not re.fullmatch(r"[0-9]+", code):
         raise ValueError(f"Invalid package or version in {path.name}")
     if int(code) > 0xffffffff or major > 0x7fffffff:

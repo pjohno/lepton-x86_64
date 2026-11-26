@@ -44,7 +44,9 @@ class LibraryTests(unittest.TestCase):
                     raise ValueError("signature verification failed")
                 return f"Signer #1 certificate SHA-256 digest: {manifest['key'] * 64}\n"
             if args[2] == "xmltree":
-                return "E: manifest\n"
+                major = manifest["major"]
+                return ("E: manifest\n" if major is None else
+                        f"    A: http://schemas.android.com/apk/res/android:versionCodeMajor(0x01010576)={major}\n")
             return ("package: name='%s' versionCode='%s' versionName='%s' split='%s'\n"
                     "application-label:'Example Game'\n" %
                     (manifest["package"], manifest["version"], manifest["version"], manifest["split"]))
@@ -53,11 +55,11 @@ class LibraryTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def apk(self, name, version=1, key="a", split="", pkg=package):
+    def apk(self, name, version=1, key="a", split="", pkg=package, major=None):
         path = self.home / name
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr("AndroidManifest.xml", json.dumps(dict(
-                package=pkg, key=key, version=version, split=split)))
+                package=pkg, key=key, version=version, split=split, major=major)))
             archive.writestr("classes.dex", name)
         return path
 
@@ -109,6 +111,14 @@ class LibraryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "signing"):
             self.install(self.apk("wrong.apk", 3, key="b"), "update")
         self.assertEqual(apk.read_bytes(), new.read_bytes())
+
+    def test_long_version_code_orders_by_major_then_minor(self):
+        first = self.apk("v1.apk", version=23, major=2)
+        second = self.apk("v2.apk", version=1, major=3)
+        self.assertEqual(self.install(first)[1]["version_code"], (2 << 32) + 23)
+        self.assertEqual(self.install(second, "update")[1]["version_code"], (3 << 32) + 1)
+        with self.assertRaisesRegex(ValueError, "downgrade"):
+            self.install(first, "update")
 
     def test_rotation_requires_verified_lineage_and_data_capability(self):
         before = {"signers": ["a" * 64]}
