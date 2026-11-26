@@ -10,6 +10,7 @@ Run with Steam fully exited. Uses Python's standard library only.
 Refuses unknown VDF formats rather than overwriting Steam configuration.
 """
 import argparse
+import contextlib
 import importlib.machinery
 import importlib.util
 import json
@@ -20,6 +21,7 @@ import shlex
 import struct
 import sys
 import tempfile
+import zipfile
 import zlib
 
 LEGACY_TOOL = "lepton_x86_64_dev"
@@ -703,9 +705,16 @@ def add_google_play(args, registered):
 
 
 def main():
+    with contextlib.ExitStack() as locks:
+        return add_game(locks)
+
+
+def add_game(locks):
     global TOOL, INSTALL, STEAM
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("apk", type=Path, nargs="?", help="APK file to add (not with --google-play)")
+    parser.add_argument("--import", dest="import_apk", action="store_true",
+                        help="Import this APK into the configured Android Library before adding it")
     parser.add_argument("--name", help="Name displayed in Steam (default: APK stem)")
     parser.add_argument("--google-play", action="store_true",
                         help='Add "' + GOOGLE_PLAY_NAME + '" (needs a GApps tool). An existing one is '
@@ -738,6 +747,8 @@ def main():
     parser.add_argument("--expect-abi", choices=("x86_64", "arm64-v8a"), default="x86_64",
                         help="ABI for --runtime-profile (default: x86_64)")
     args = parser.parse_args()
+    if args.import_apk and (args.google_play or args.list_users or args.runtime_profile or args.print_appid):
+        fail("--import requires a normal APK shortcut")
     if args.list_users:
         STEAM = manage_module().steam_root()
         for user, label in steam_users(STEAM):
@@ -811,6 +822,16 @@ def main():
     if not args.runtime_profile and registered is None:
         fail("Lepton is not registered with Steam (no %s.vdf or self-contained %s in %s); "
              "reinstall the tool and restart Steam" % (TOOL, TOOL, STEAM / "compatibilitytools.d"))
+    if args.import_apk:
+        from lepton_library import import_app, library, load_app, lock
+        root = library()
+        if root is None:
+            fail("Run lepton-library init before using --import")
+        _, managed, apk = import_app(root, apk, mode="import", dry_run=args.dry_run)
+        if not args.dry_run:
+            locks.enter_context(lock(root, False))
+            _, managed, apk = load_app(root, managed["package"], verify=True)
+        args.name = args.name or managed["name"]
     name = args.name or apk.stem
     if not name or any(x in name for x in "\x00\r\n"):
         fail("Invalid shortcut name")
@@ -899,6 +920,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, OSError, UnicodeError) as exc:
+    except (ValueError, OSError, UnicodeError, zipfile.BadZipFile) as exc:
         print("ERROR:", exc, file=sys.stderr)
         sys.exit(1)

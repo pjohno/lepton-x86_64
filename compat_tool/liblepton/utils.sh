@@ -175,5 +175,9 @@ function unlock_lepton()
 function uninherit_lepton_lock()
 {
     exec {LEPTON_LOCKFD}>&-
+    if [[ -n "${LEPTON_LIBRARY_LOCKFD:-}" ]]; then
+        exec {LEPTON_LIBRARY_LOCKFD}>&-
+        LEPTON_LIBRARY_LOCKFD=
+    fi
 }
 

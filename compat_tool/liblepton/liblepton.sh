@@ -22,6 +22,7 @@ MDNS_PUBLISH_PATH="${LEPTON_DIR}/mdns_publisher/bin/lepton-mdns-publish"
 source "${LEPTON_DIR}/utils.sh"
 source "${LEPTON_DIR}/networking.sh"
 source "${LEPTON_DIR}/mounting.sh"
+source "${LEPTON_DIR}/android_library.sh"
 source "${LEPTON_DIR}/app_metadata.sh"
 source "${LEPTON_DIR}/google_games.sh"
 source "${LEPTON_DIR}/properties.sh"
@@ -257,6 +258,7 @@ function check_kept_app_data()
     println "Profile: Steam AppID=${SteamAppId:-unknown}; package=$(get_app_id)${LEPTON_LAUNCH_PACKAGE:+(launcher: ${LEPTON_LAUNCH_PACKAGE})}; tool=${LEPTON_ENTRYPOINT:-$LEPTON_DIR}; data=$DIR"
     [[ "${LEPTON_KEEP_APP_DATA:-true}" != false ]] || println "WARNING: LEPTON_KEEP_APP_DATA=false ignored; use an explicit per-game reset"
     if [[ "${LEPTON_RESET_APP_DATA:-false}" == true ]]; then
+        [[ -z "${LEPTON_MANAGED_APP:-}" ]] || die "Refusing LEPTON_RESET_APP_DATA for a managed launch"
         clear_baked_app_data "LEPTON_RESET_APP_DATA=true" || return 1
     fi
     CURRENT="$(lepton_runtime_fingerprint)" || return 1
@@ -269,7 +271,9 @@ function check_kept_app_data()
             return 1
         fi
         println "Runtime fingerprint match; previous fingerprint known"
-        if is_app && ! is_app_baked; then
+        if [[ -n "${LEPTON_MANAGED_APP:-}" ]]; then
+            lepton_library_helper profile "$DIR" "$(get_app_id)" existing || return 1
+        elif is_app && ! is_app_baked; then
             println "ERROR: installation validation failed; profile preserved but not mounted. Restore the original APK or diagnose the installed code/metadata after backup. Automatic repair is not yet validated for this overlay." >&2
             lepton_profile_refused installation
             return 1
@@ -280,6 +284,9 @@ function check_kept_app_data()
         println "Existing profile detected: no; creating new profile; runtime fingerprint=$CURRENT"
         mkdir -p "$DIR"
         print "$CURRENT" > "$FINGERPRINT_FILE"
+        if [[ -n "${LEPTON_MANAGED_APP:-}" ]]; then
+            lepton_library_helper profile "$DIR" "$(get_app_id)" new || return 1
+        fi
     fi
 }
 
@@ -369,6 +376,12 @@ function setup_container()
     check_host_gpu
     if google_signin_mode && ! rootfs_has_google_services; then
         die "Google sign-in needs a Lepton tool with Google services (a GApps bundle)."
+    fi
+    if ! is_sysbake; then
+        lepton_library_location
+    fi
+    if [[ -n "${LEPTON_MANAGED_APP:-}" ]] && is_context_live; then
+        die "Managed profile is already running"
     fi
     check_kept_app_data || die "Profile safety check failed; existing data preserved"
     cleanup_container
@@ -662,7 +675,7 @@ function podman_attach_no_context_check()
     fi
 
     function join_by { local IFS="$1"; shift; println "$*"; }
-    env -i PATH="$(join_by ":" "${ANDROID_PATH[@]}")" $(which podman) exec "${TERM_ARGS}" "lepton-${LEPTON_CONTEXT}" "$@"
+    podman exec "${TERM_ARGS}" --env "PATH=$(join_by ":" "${ANDROID_PATH[@]}")" "lepton-${LEPTON_CONTEXT}" "$@"
 }
 
 function podman_attach()

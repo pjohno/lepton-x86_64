@@ -22,14 +22,17 @@ Usage: lepton-play [options] GAME.apk|GAME.apkm
        lepton-play --list [--data-root DIR]
 
 Installs the game into its own Android profile on first run, then starts it.
-Later runs reuse the profile (saved games, sign-ins) and only reinstall the
-game when the file changed. Nothing is added to Steam.
+Later runs reuse the profile (saved games, sign-ins). The Android Library
+applies verified managed updates on launch. Unmanaged APKs use the original
+installation checks. Nothing is added to Steam.
 
 Options:
   --tool ID|DIR      Lepton install to use (default: the install containing
                      this command, else ~/.config/lepton-x86_64/default.env)
   --data-root DIR    Parent of the per-game folders
                      (default: ~/.local/share/lepton-compat-data)
+  --shared-folders LIST
+                     Override optional folder sharing for this launch
   --dry-run          Print the tool, package and folders; change nothing
   --list             List games that have a folder under the data root
   -h, --help         This help
@@ -54,6 +57,7 @@ while (($#)); do
     case "$1" in
         --tool) [[ $# -ge 2 ]] || fail "--tool needs a value"; TOOL_ARG="$2"; shift 2 ;;
         --data-root) [[ $# -ge 2 ]] || fail "--data-root needs a value"; DATA_ROOT="$2"; shift 2 ;;
+        --shared-folders) [[ $# -ge 2 ]] || fail "--shared-folders needs a value"; export LEPTON_SHARED_FOLDERS="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
         --list) LIST=true; shift ;;
         -h|--help) usage; exit 0 ;;

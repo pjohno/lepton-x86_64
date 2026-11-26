@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Internal bridge between the compatibility launcher and the Android Library."""
+import argparse
+from pathlib import Path, PurePosixPath
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import zipfile
+
+import lepton_library as lib
+
+
+class Android:
+    def __init__(self, context):
+        self.context = "lepton-" + context
+        self.timeout = int(os.environ.get("LEPTON_APP_INSTALL_TIMEOUT", "600"))
+        if self.timeout <= 0:
+            raise ValueError("Invalid Android install timeout")
+
+    def run(self, *args, source=None, timeout=30):
+        return subprocess.run(["podman", "exec", *(["-i"] if source else []), self.context, *args],
+                              stdin=source, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              timeout=timeout)
+
+    def checked(self, *args, source=None, timeout=30):
+        result = self.run(*args, source=source, timeout=timeout)
+        if result.returncode:
+            raise ValueError(result.stdout.strip() or result.stderr.strip() or f"Android command failed: {args[0]}")
+        return result.stdout.strip()
+
+    def pm(self, *args, **kwargs):
+        # The legacy cmd wrapper moves app code into a baked overlay after
+        # installation. Use the same Android PM directly for native code paths.
+        return self.checked("/system/bin/cmd_real", "package", *args, **kwargs)
+
+    def wait_ready(self):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            try:
+                result = self.run("/system/bin/cmd_real", "package", "path", "android", timeout=5)
+            except subprocess.TimeoutExpired:
+                continue
+            if result.returncode == 0 and result.stdout.startswith("package:"):
+                return
+            time.sleep(1)
+        raise ValueError("Android package manager did not become ready")
+
+    def installed(self, package):
+        result = self.run("/system/bin/cmd_real", "package", "path", "--user", "0", package)
+        lines = result.stdout.splitlines()
+        if result.returncode == 1 and not lines and not result.stderr.strip():
+            return None
+        if result.returncode or not lines or any(not line.startswith("package:/data/app/") for line in lines):
+            raise ValueError(f"Cannot establish the Android code paths for {package}")
+        paths = [line.removeprefix("package:") for line in lines]
+        if (len(set(paths)) != len(paths) or any(".." in PurePosixPath(path).parts or
+                not re.fullmatch(r"/data/app/(?:[A-Za-z0-9_.=~-]+/)+[A-Za-z0-9_.-]+\.apk", path)
+                for path in paths)):
+            raise ValueError("Invalid Android code paths")
+        hashes = {}
+        for path in paths:
+            digest = self.checked("/system/bin/toybox", "sha256sum", path).split()[0]
+            if not lib.DIGEST.fullmatch(digest):
+                raise ValueError(f"Cannot hash installed APK {path}")
+            hashes[PurePosixPath(path).name] = digest
+        output = self.checked("/system/bin/dumpsys", "package", package)
+        version = re.search(r"(?m)^\s*versionCode=(\d+)\b", output)
+        if not version or "base.apk" not in hashes or len(hashes) != len(paths):
+            raise ValueError(f"Cannot verify the installed version of {package}")
+        base = hashes.pop("base.apk")
+        return {"version_code": int(version[1]), "base": base, "splits": sorted(hashes.values())}
+
+    def install(self, files):
+        result = self.pm("install-create", "-r", "--user", "0", timeout=self.timeout)
+        session = re.fullmatch(r"Success: created install session \[(\d+)\]", result)
+        if not session:
+            raise ValueError(f"Cannot create package replacement session: {result}")
+        session = session[1]
+        committed = False
+        try:
+            for file in files:
+                with file.open("rb") as source:
+                    output = self.pm("install-write", "-S", str(os.fstat(source.fileno()).st_size),
+                                     session, file.name, "-", source=source, timeout=self.timeout)
+                    if not output.startswith("Success"):
+                        raise ValueError(f"Package upload failed: {output}")
+            output = self.pm("install-commit", session, timeout=self.timeout)
+            if output != "Success":
+                raise ValueError(f"Android rejected replacement: {output}")
+            committed = True
+        finally:
+            if not committed:
+                try:
+                    self.pm("install-abandon", session, timeout=5)
+                except (ValueError, subprocess.TimeoutExpired):
+                    pass
+
+    def obb(self, package):
+        self.checked("/system/bin/sh", "-c", '''
+            path="/data/media/0/Android/obb/$1"
+            target="/lepton/managed-obb"
+            if [ -L "$path" ]; then
+                [ "$(readlink "$path")" = "$target" ] || exit 1
+            elif [ -e "$path" ]; then
+                # Replace only an empty real directory created by Android.
+                rmdir "$path" || exit 1
+                ln -s "$target" "$path" || exit 1
+            else
+                mkdir -p "${path%/*}" && ln -s "$target" "$path" || exit 1
+            fi
+        ''', "lepton-obb", package)
+
+
+def target_code(config, files):
+    selected = {file.name if config["format"] == ".apkm" else "base.apk": lib.sha256(file) for file in files}
+    expected = lib.selected_apkm_names(config["apks"])[0]
+    if selected.keys() != expected or len(files) != len(selected) or any(
+            config["apks"].get(name) != digest for name, digest in selected.items()):
+        raise ValueError("Selected install files differ from verified library APKs")
+    base = selected.pop("base.apk")
+    return {"version_code": config["version_code"], "base": base, "splits": sorted(selected.values())}
+
+
+def finish_install(android, state, target, files, package, save):
+    """Journal before PM commit; verify an interrupted commit before retrying."""
+    live = android.installed(package)
+    old = state.get("installed")
+    pending = state.get("pending")
+    recovered = pending is not None and live == pending["code"]
+    if recovered:
+        old = pending
+        state.update(installed=old, pending=None)
+        save()
+    if live != (old["code"] if old else None):
+        raise ValueError("Installed Android code differs from the last verified state. Profile preserved.")
+    if old == target:
+        return
+    if old and target["code"]["version_code"] < old["code"]["version_code"]:
+        raise ValueError("Android profile is newer than the library APK")
+    state.update(pending=target)
+    save()
+    android.install(files)
+    if android.installed(package) != target["code"]:
+        raise ValueError("Android installed code or version differs from the requested replacement")
+    android.checked("/system/bin/toybox", "sync")
+    state.update(installed=target, pending=None)
+    save()
+
+
+def profile_install(root, package, baked, context, base, splits, obb):
+    directory, config, _ = lib.load_app(root, package)
+    lib.real_dir(baked)
+    receipt = baked / "lepton-managed.json"
+    state = lib.read_json(receipt)
+    if state["package"] != package:
+        raise ValueError("Managed profile belongs to another package")
+    files = [base, *splits]
+    target = {"revision": config["revision"], "code": target_code(config, files)}
+    index = directory / ".profiles"
+    index.mkdir(mode=0o700, exist_ok=True)
+    lib.real_dir(index)
+    record = index / (lib.profile_key(baked) + ".json")
+
+    def report(status, error=None):
+        installed = state.get("installed") or {}
+        lib.atomic_json(record, dict(schema_version=1, context=context, profile=str(baked.parent),
+                                     state=status, installed_revision=installed.get("revision"),
+                                     installed_version=installed.get("code", {}).get("version_code"),
+                                     attempted_version=config["version_code"], error=error))
+
+    android = Android(context)
+    try:
+        report("applying")
+        android.wait_ready()
+        finish_install(android, state, target, files, package, lambda: lib.atomic_json(receipt, state))
+        if obb:
+            android.obb(package)
+        report("applied")
+    except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+        report("failed", str(exc))
+        raise
+    print(f"Verified {package} version {config['version_code']} in {baked.parent}", file=sys.stderr)
+
+
+def unpack_apkm(path, cache):
+    with zipfile.ZipFile(path) as bundle:
+        apks = [entry.filename for entry in bundle.infolist() if entry.filename.endswith(".apk")]
+        if ("base.apk" not in apks or len(set(apks)) != len(apks) or
+                any(not re.fullmatch(r"[A-Za-z0-9_.-]+\.apk", name) for name in apks)):
+            raise ValueError("APKM needs exactly one base.apk and safe split names")
+        selected, abi = lib.selected_apkm_names(apks)
+        cache.mkdir()
+        for name in sorted(selected):
+            with bundle.open(name) as src, (cache / name).open("xb") as dst:
+                shutil.copyfileobj(src, dst)
+        (cache / "lepton-abi").write_text((abi or "none").replace("_v8a", "-v8a") + "\n")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    actions = parser.add_subparsers(dest="action", required=True)
+    actions.add_parser("location")
+    unpack = actions.add_parser("unpack")
+    unpack.add_argument("archive", type=Path)
+    unpack.add_argument("cache", type=Path)
+    app = actions.add_parser("app")
+    app.add_argument("target")
+    profile = actions.add_parser("profile")
+    profile.add_argument("baked", type=Path)
+    profile.add_argument("package")
+    profile.add_argument("mode", choices=("new", "existing"))
+    install = actions.add_parser("install")
+    install.add_argument("root", type=Path)
+    install.add_argument("package")
+    install.add_argument("baked", type=Path)
+    install.add_argument("context")
+    install.add_argument("--obb", action="store_true")
+    install.add_argument("apks", type=Path, nargs="+")
+    args = parser.parse_args()
+    if args.action == "location":
+        print(lib.library() or "")
+    elif args.action == "unpack":
+        unpack_apkm(args.archive, args.cache)
+    elif args.action == "app":
+        root = lib.library()
+        app = lib.runtime_app(root, args.target) if root is not None else None
+        if app:
+            sharing, directory, obb = app
+            print(directory)
+            print(obb)
+            print(sharing or "")
+    elif args.action == "profile":
+        baked = args.baked.resolve()
+        path = baked / "lepton-managed.json"
+        if args.mode == "new":
+            lib.atomic_json(path, dict(schema_version=1, package=args.package, installed=None, pending=None))
+        elif not path.is_file() or lib.read_json(path)["package"] != args.package:
+            raise ValueError("Existing profile uses legacy baked storage or belongs to another package. Continue launching its original APK.")
+    else:
+        profile_install(args.root, args.package, args.baked.resolve(), args.context,
+                        args.apks[0], args.apks[1:], args.obb)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, OSError, KeyError, TypeError, subprocess.TimeoutExpired, zipfile.BadZipFile) as exc:
+        sys.exit(f"Android Library: {exc}")

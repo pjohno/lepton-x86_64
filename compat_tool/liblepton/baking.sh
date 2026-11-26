@@ -128,6 +128,7 @@ function app_apk_set_matches()
 
 function is_app_baked()
 {
+    [[ -z "${LEPTON_MANAGED_APP:-}" ]] || return 1
     is_app || return 1
     local DIR="$(get_baked_app_data_dir)" CODE STORED_HASH CURRENT_HASH
     [[ -f "$(app_install_complete_path)" ]] || { println "Installation marker present: no" >&2; return 1; }

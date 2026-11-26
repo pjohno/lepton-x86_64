@@ -204,6 +204,7 @@ case "${COMMAND}" in
         }
         trap "cleanup_failed_start" EXIT
 
+        lepton_library_launch "${3:-}"
         determine_app --start "${3:-}"
 
         log_to_file
@@ -391,6 +392,14 @@ case "${COMMAND}" in
         # The Google Play launcher, like a dev container, installs no game.
         if google_play_mode || { ! is_steamlaunch && ! is_app; }; then
             continue_boot_after_bake
+        elif [[ -n "$LEPTON_MANAGED_APP" ]]; then
+            if lepton_install_managed_app; then
+                continue_boot_after_bake
+            else
+                println "ERROR: Managed Android installation failed; profile preserved. See lepton-library info $(get_app_id)."
+                teardown
+                exit 1
+            fi
         elif app_install_needed; then
             clear_app_install_complete
             if install_app; then
@@ -413,7 +422,7 @@ case "${COMMAND}" in
             fi
         fi
 
-        auto_install_apps
+        [[ -n "$LEPTON_MANAGED_APP" ]] || auto_install_apps
 
         # perfetto
         if steamos_devmode_enabled; then

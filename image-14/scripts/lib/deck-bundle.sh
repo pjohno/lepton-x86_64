@@ -145,7 +145,7 @@ done
 
 # Refresh every runtime script together: they share variables (e.g. utils.sh
 # defines STEAM_LOG_PATH for mounting.sh), so mixing old and new copies breaks.
-runtime_scripts=(app_metadata.sh baking.sh completions.sh debug.sh gdb.sh google_games.sh liblepton.sh mounting.sh
+runtime_scripts=(android_library.sh app_metadata.sh baking.sh completions.sh debug.sh gdb.sh google_games.sh liblepton.sh mounting.sh
     networking.sh perfetto.sh performance_debugging.sh properties.sh strace.sh utils.sh vulkan_layers.sh)
 [[ -f "$repo/compat_tool/liblepton/soreplacements.txt" ]] || {
     echo "ERROR: missing Fedora source compat_tool/liblepton/soreplacements.txt" >&2
@@ -308,6 +308,10 @@ install -m 755 "$repo/compat_tool/tools/lepton-in-terminal" \
     "$tmp/payload/compat_tool/tools/lepton-in-terminal"
 install -m 755 "$repo/compat_tool/tools/lepton-play" \
     "$tmp/payload/compat_tool/tools/lepton-play"
+for tool in lepton-library lepton-library-runtime; do
+    install -m 755 "$repo/compat_tool/tools/$tool" "$tmp/payload/compat_tool/tools/$tool"
+done
+install -m 644 "$repo/compat_tool/tools/lepton_library.py" "$tmp/payload/compat_tool/tools/lepton_library.py"
 install -m 755 "$repo/compat_tool/tools/lepton-manage-installs" \
     "$tmp/payload/compat_tool/tools/lepton-manage-installs"
 install -m 755 "$repo/compat_tool/tools/lepton-host-check" \
@@ -389,7 +393,8 @@ for script in "${runtime_scripts[@]}"; do
     bash -n "$tmp/payload/compat_tool/liblepton/$script"
 done
 for tool in lepton-add-game lepton-release-manager lepton-manage-installs lepton-customize lepton_customize_inject.py \
-            lepton_customize_package.py lepton_bundle_lib.py lepton-compare-bundles; do
+            lepton_customize_package.py lepton_bundle_lib.py lepton-compare-bundles \
+            lepton-library lepton-library-runtime lepton_library.py; do
     python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$tmp/payload/compat_tool/tools/$tool"
 done
 grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/google_games.sh"

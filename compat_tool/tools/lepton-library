@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Command-line access to the managed Android Library."""
+import argparse
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import uuid
+import zipfile
+
+import lepton_library as lib
+
+
+def edit_config(args, root, directory, config):
+    if args.action == "show":
+        print(json.dumps(config.get("shared_folders", {}), indent=4))
+        return
+    settings = config.setdefault("shared_folders", {})
+    if args.action == "defaults":
+        if not args.names or args.names == ["all"]:
+            settings.pop("defaults", None)
+        elif args.names == ["none"]:
+            settings["defaults"] = []
+        elif all(name in lib.DEFAULTS for name in args.names):
+            settings["defaults"] = args.names
+        else:
+            raise ValueError("Choose all, none, or one or more standard folders")
+    elif args.action == "share-add":
+        custom = settings.setdefault("custom", [])
+        custom.append(dict(name=args.name, path=str(args.path.expanduser().absolute()), read_only=args.read_only))
+    elif args.action == "share-remove":
+        custom = settings.setdefault("custom", [])
+        selected = [item for item in custom if item["name"].casefold() != args.name.casefold()]
+        if selected == custom:
+            raise ValueError(f"No custom shared folder named {args.name}")
+        settings["custom"] = selected
+    option = lib.sharing(config)
+    # Use the very same parser and protected-directory checks as a launch.
+    if option is not None:
+        subprocess.run(["bash", "-c", '''
+            source "$1/liblepton.sh"
+            LEPTON_LIBRARY_ROOT="$2"
+            LEPTON_SHARED_FOLDERS="$3"
+            LEPTON_NONINTERACTIVE=1
+            lepton_tell_player() { :; }
+            lepton_shared_folder_entries
+        ''', "lepton-library", str(lib.TOOLS.parent / "liblepton"), str(root), option], check=True)
+    if not args.dry_run:
+        lib.atomic_json(directory / "config.json", config)
+    print(json.dumps(settings, indent=4))
+
+
+def info(directory, config, apk):
+    print(json.dumps({**config, "apk": str(apk),
+                      "steam_shortcuts": list(lib.steam_shortcuts(apk)),
+                      "profiles": [
+                          dict(item, state=("applied" if item.get("installed_revision") == config["revision"]
+                                           else "pending") if item.get("state") == "applied" else item.get("state"))
+                          for item in lib.profile_receipts(directory)
+                      ]}, indent=4))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Manage sideloaded Android apps and common Container Storage.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    init = commands.add_parser("init", help="Configure the library location and create Container Storage")
+    init.add_argument("--path", type=Path)
+    init.add_argument("--dry-run", action="store_true")
+    commands.add_parser("list", help="List apps and validate their active files")
+    commands.add_parser("status", help="Show the library and Container Storage locations")
+    for name in ("import", "update"):
+        action = commands.add_parser(name, help="Copy a signed app into the library" if name == "import" else
+                                     "Stage a signed update for each profile's next launch")
+        action.add_argument("file", type=Path)
+        action.add_argument("--obb", type=Path, action="append", default=[], help="Import a versioned OBB (repeatable)")
+        action.add_argument("--dry-run", action="store_true")
+        if name == "update":
+            action.add_argument("--replace-same-version", action="store_true")
+    for name, description in {
+        "info": "Show app metadata, Steam shortcuts and profile status",
+        "recover": "Finish an interrupted library file transaction",
+        "restore-apk": "Restore the previous library file without downgrading Android profiles",
+        "reinstall": "Schedule the current APK for replacement on each profile's next launch",
+        "remove": "Remove library files while keeping Android profiles",
+        "play": "Launch in a standalone profile",
+        "add-to-steam": "Create a Steam shortcut pointing to the stable library APK",
+        "config": "Inspect and edit per-app shared folders",
+    }.items():
+        action = commands.add_parser(name, help=description)
+        action.add_argument("package")
+        if name != "info":
+            action.add_argument("--dry-run", action="store_true")
+        if name in {"remove", "restore-apk"}:
+            action.add_argument("--yes", action="store_true", help="Confirm the file operation")
+        if name == "play":
+            action.add_argument("--tool")
+            action.add_argument("--data-root", type=Path)
+            action.add_argument("--shared-folders")
+        if name == "add-to-steam":
+            action.add_argument("--name")
+            action.add_argument("--tool-id")
+            action.add_argument("--userdata", type=Path)
+        if name == "config":
+            actions = action.add_subparsers(dest="action", required=True)
+            actions.add_parser("show")
+            actions.add_parser("defaults").add_argument("names", nargs="*")
+            add = actions.add_parser("share-add")
+            add.add_argument("--name", required=True)
+            add.add_argument("--path", type=Path, required=True)
+            add.add_argument("--read-only", action="store_true")
+            actions.add_parser("share-remove").add_argument("name")
+    args = parser.parse_args()
+    cmd = args.command
+    dry_run = getattr(args, "dry_run", False)
+    root = lib.library()
+    if cmd == "init":
+        root = lib.initialize(args.path or root or Path.home() / "Android_Library", dry_run)
+        print(f"{'Proposed library' if dry_run else 'Android Library'} at {root}")
+        print(f"Container Storage at {root / lib.STORAGE}")
+        return 0
+    if root is None:
+        raise ValueError("Run lepton-library init first")
+    if cmd == "status":
+        print(f"Android Library at {root}\nContainer Storage at {root / lib.STORAGE}")
+        return 0
+    if cmd in {"import", "update"}:
+        _, config, apk = lib.import_app(root, args.file, mode=cmd, replace=getattr(args, "replace_same_version", False),
+                                        obbs=args.obb, dry_run=dry_run)
+        print(f"{'Would store' if dry_run else 'Library APK'} {apk}")
+        print(f"Run lepton-library play {config['package']} or lepton-library add-to-steam {config['package']}.")
+        if cmd == "update":
+            print("Each managed profile applies and verifies the replacement on its next launch.")
+        return 0
+    exclusive = cmd in {"recover", "reinstall", "remove", "restore-apk", "config"} and not dry_run and getattr(args, "action", "") != "show"
+    with lib.lock(root, exclusive):
+        if cmd == "list":
+            failed = False
+            for directory in sorted(root.iterdir()):
+                if not lib.PACKAGE.fullmatch(directory.name):
+                    continue
+                try:
+                    _, config, apk = lib.load_app(root, directory.name, verify=True)
+                    print(f"{directory.name}\t{config['name']}\t{config['version_name']} ({config['version_code']})\t{apk}")
+                except (OSError, ValueError) as exc:
+                    failed = True
+                    print(f"{directory.name}\tERROR {exc}", file=sys.stderr)
+            return int(failed)
+        if cmd == "recover":
+            if not lib.PACKAGE.fullmatch(args.package):
+                raise ValueError("Invalid package name")
+            directory = root / args.package
+            lib.real_dir(directory)
+            lib.real_dir(directory / ".update")
+            if not dry_run:
+                lib.commit_update(directory)
+            print(f"{'Would finish' if dry_run else 'Finished'} library file transaction for {args.package}")
+            return 0
+        directory, config, apk = lib.load_app(root, args.package, verify=cmd != "remove")
+        if cmd == "info":
+            info(directory, config, apk)
+        elif cmd == "restore-apk":
+            if not dry_run and not args.yes:
+                raise ValueError("This changes the library APK only. Newer Android profiles will refuse to downgrade. Confirm with --yes.")
+            previous = lib.restore_previous(directory, config, apk, dry_run)
+            print(f"{'Would restore' if dry_run else 'Restored'} library version {previous}. Android profiles and OBB files were left in place.")
+        elif cmd == "reinstall":
+            if not dry_run:
+                lib.atomic_json(directory / "config.json", dict(config, revision=uuid.uuid4().hex))
+            print(f"{'Would schedule' if dry_run else 'Scheduled'} replacement on next launch of each managed profile")
+        elif cmd == "remove":
+            if list(lib.steam_shortcuts(apk, removing=True)):
+                raise ValueError("Steam still points to this APK. Remove the shortcut in Steam and exit Steam first.")
+            if not dry_run:
+                if not args.yes:
+                    raise ValueError(f"Removal deletes the APK, OBBs and library configuration at {directory}. Confirm with --yes.")
+                lib.require_unmounted(directory)
+                trash = root / (".removed-" + uuid.uuid4().hex)
+                directory.rename(trash)
+                lib.sync_dir(root)
+                shutil.rmtree(trash)
+            print(f"{'Would remove' if dry_run else 'Removed'} {directory}. Android profiles are preserved.")
+        elif cmd == "config":
+            edit_config(args, root, directory, config)
+        else:
+            tool = lib.TOOLS / ("lepton-play" if cmd == "play" else "lepton-add-game")
+            argv = [str(tool), str(apk)]
+            for option in ("tool", "data_root", "tool_id", "userdata", "name", "shared_folders"):
+                value = getattr(args, option, None)
+                if value is not None:
+                    argv.extend(("--" + option.replace("_", "-"), str(value)))
+            if cmd == "add-to-steam" and args.name is None:
+                argv.extend(("--name", config["name"]))
+            if dry_run:
+                argv.append("--dry-run")
+            return subprocess.call(argv)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile, subprocess.CalledProcessError) as exc:
+        sys.exit(f"lepton-library: {exc}")

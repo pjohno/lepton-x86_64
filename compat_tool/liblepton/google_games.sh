@@ -98,30 +98,8 @@ function prepare_apkm()
         mkdir -p -- "${CACHE_ROOT}"
         # Only this key's unfinished scratch copy; completed caches are kept.
         rm -rf -- "${CACHE}.tmp"
-        python3 - "${APKM}" "${CACHE}.tmp" <<'PY' || die "Cannot unpack ${APKM} (expected an APKMirror-style bundle with base.apk)."
-import re, shutil, sys, zipfile
-from pathlib import Path
-ABI = {"arm64_v8a", "armeabi_v7a", "x86", "x86_64"}
-with zipfile.ZipFile(sys.argv[1]) as bundle:
-    apks = [e for e in bundle.infolist() if e.filename.endswith(".apk")]
-    names = {e.filename for e in apks}
-    if "base.apk" not in names or len(names) != len(apks):
-        raise SystemExit("needs exactly one base.apk")
-    if any(not re.fullmatch(r"[A-Za-z0-9_.-]+\.apk", n) for n in names):
-        raise SystemExit("unsafe APK names")
-    abi_of = lambda n: n[len("split_config."):-4] if n.startswith("split_config.") and n[len("split_config."):-4] in ABI else None
-    present = {abi_of(n) for n in names} - {None}
-    # Native x86_64 first; otherwise ARM64 (needs ARM translation).
-    chosen = "x86_64" if "x86_64" in present else ("arm64_v8a" if "arm64_v8a" in present else None)
-    out = Path(sys.argv[2]); out.mkdir()
-    for entry in apks:
-        abi = abi_of(entry.filename)
-        if abi is not None and abi != chosen:
-            continue
-        with bundle.open(entry) as src, (out / entry.filename).open("xb") as dst:
-            shutil.copyfileobj(src, dst)
-    (out / "lepton-abi").write_text((chosen or "none").replace("_v8a", "-v8a") + "\n")
-PY
+        lepton_library_helper unpack "${APKM}" "${CACHE}.tmp" ||
+            die "Cannot unpack ${APKM} (expected an APKMirror-style bundle with base.apk)."
         mv -T -- "${CACHE}.tmp" "${CACHE}"
     fi
     ABI="$(cat "${CACHE}/lepton-abi" 2>/dev/null || echo none)"

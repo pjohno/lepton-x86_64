@@ -78,7 +78,7 @@ LEPTON_SHARED_LEGACY_LINKS=(Documents:Documents Download:Downloads Movies:Videos
 
 # Shared-storage names that can't be used, lower case: Android's own folder
 # (app data, OBB).
-LEPTON_SHARED_RESERVED_NAMES=(android)
+LEPTON_SHARED_RESERVED_NAMES=(android "container storage")
 
 # Print XDG user directory KEY (DOCUMENTS, MUSIC, ...) from user-dirs.dirs, or
 # HOME/FALLBACK when the file doesn't set it. The file is shell syntax written
@@ -290,7 +290,7 @@ function lepton_array_has()
 function lepton_shared_protected_paths()
 {
     local P
-    for P in "${STEAM_COMPAT_DATA_PATH:-}" "$(get_baked_app_data_dir 2>/dev/null)" \
+    for P in "${LEPTON_LIBRARY_ROOT:-}" "${XDG_CONFIG_HOME:-${HOME}/.config}/lepton-x86_64" "${STEAM_COMPAT_DATA_PATH:-}" "$(get_baked_app_data_dir 2>/dev/null)" \
              "${LEPTON_DIR:+${LEPTON_DIR}/..}" "${LEPTON_DATA_DIR:-}" \
              "${XDG_DATA_HOME:-${HOME}/.local/share}/lepton-compat-data"; do
         [[ -n "${P}" ]] && PROTECTED+=("$(realpath -m -- "${P}")")
@@ -564,6 +564,9 @@ function setup_shared_folders()
     local TARGET="$1" ENTRY NAME HOST GUEST MODE STATE KIND LINK
     local SHARED_FOLDER_ENTRIES=() ACTIVE=() PROBLEMS=() DEFAULT_NAMES=() PAIR
     lepton_shared_folder_entries || die "Launch stopped: fix the LEPTON_SHARED_FOLDERS launch option. Shared folders unchanged."
+    if [[ -n "${LEPTON_LIBRARY_ROOT:-}" ]]; then
+        SHARED_FOLDER_ENTRIES+=("Container Storage"$'\t'"${LEPTON_LIBRARY_ROOT}/Container Storage"$'\t'"${LEPTON_SHARED_GUEST_ROOT}/Container Storage"$'\t'rw$'\t'ok$'\t'library)
+    fi
     for PAIR in "${LEPTON_SHARED_FOLDER_DEFAULTS[@]}"; do DEFAULT_NAMES+=("${PAIR%%:*}"); done
 
     # A link that is not Lepton's, where a folder is to be shared, would stop
@@ -640,8 +643,8 @@ function setup_mounts()
 
     local APP_ID="$(get_app_id)"
 
-    if is_app; then
-        BASE_APK=base.apk
+    BASE_APK=base.apk
+    if [[ -z "${LEPTON_MANAGED_APP:-}" ]] && is_app; then
         APP_APK_DIR="$(dirname "$(get_apk_path)")"
         # x86_64 port: an unpacked .apkm already has base.apk; its splits share
         # the package ID, so the rename-to-base.apk search must not run.
@@ -656,7 +659,7 @@ function setup_mounts()
                 fi
             done
         fi
-    else
+    elif [[ -z "${LEPTON_MANAGED_APP:-}" ]]; then
         APP_APK_DIR="$(get_baked_app_data_dir)/app_lowerdir"
         mkdir -p "${APP_APK_DIR}"
     fi
@@ -713,6 +716,19 @@ function setup_mounts()
         mkdir -p "${LEPTON_DATA_DIR}"
         podman_mount_entry "${LEPTON_DATA_DIR}" "${LEPTON_DATA_DIR}" rw
 
+        if [[ -n "${LEPTON_LIBRARY_ROOT:-}" ]]; then
+            local ROOT HOST_LIBRARY_PATHS=()
+            IFS=: read -ra HOST_LIBRARY_PATHS <<< "${STEAM_COMPAT_LIBRARY_PATHS:-}"
+            for ROOT in "${STEAM_COMPAT_CLIENT_INSTALL_PATH:-}" "${HOST_LIBRARY_PATHS[@]}" "${STEAM_COMPAT_DATA_PATH:-}"; do
+                [[ -n "$ROOT" ]] || continue
+                ROOT="$(realpath -m -- "$ROOT")"
+                if [[ "$ROOT" == / || "$ROOT" == "$LEPTON_LIBRARY_ROOT" ||
+                      "$ROOT" == "$LEPTON_LIBRARY_ROOT/"* || "$LEPTON_LIBRARY_ROOT" == "$ROOT/"* ]]; then
+                    die "Android Library must be outside Steam and Android profile mount paths: $ROOT"
+                fi
+            done
+        fi
+
         # Also mount the whole STEAM_COMPAT_CLIENT_INSTALL_PATH into the container to avoid having to do path translations
         if [[ -n "${STEAM_COMPAT_CLIENT_INSTALL_PATH:-}" ]]; then
             podman_mount_entry "${STEAM_COMPAT_CLIENT_INSTALL_PATH}" "${STEAM_COMPAT_CLIENT_INSTALL_PATH}" rw
@@ -748,11 +764,23 @@ function setup_mounts()
         setup_shared_folders "${TARGET_PATH}"
         if [[ -d "${STEAM_COMPAT_DATA_PATH:-}" ]]; then
             local GUEST_EXTERNAL_PATH="${STEAM_COMPAT_DATA_PATH}/external"
-            if [[ -n "${LEPTON_PROFILE_EXTERNAL_STORAGE:-}" ]]; then
-                [[ "$LEPTON_PROFILE_EXTERNAL_STORAGE" == /lepton/* && "$LEPTON_PROFILE_EXTERNAL_STORAGE" != *'/../'* && "$LEPTON_PROFILE_EXTERNAL_STORAGE" != */.. ]] || die 'Invalid profile external-storage path'
-                # Android mounts its own /mnt during init. Experimental profiles
-                # stored on host /mnt need a guest alias outside that subtree.
-                GUEST_EXTERNAL_PATH="$LEPTON_PROFILE_EXTERNAL_STORAGE"
+            local EXTERNAL_ALIAS="${LEPTON_PROFILE_EXTERNAL_STORAGE:-}"
+            local MEDIA_PATH="$(data_mount_path)/media/0"
+            if [[ -z "$EXTERNAL_ALIAS" ]] && {
+                [[ -L "$MEDIA_PATH" && "$(readlink -- "$MEDIA_PATH")" == /lepton/profile-external ]] ||
+                [[ -n "${LEPTON_LIBRARY_ROOT:-}" && "$GUEST_EXTERNAL_PATH" == /mnt/* ]] ||
+                [[ -n "${LEPTON_LIBRARY_ROOT:-}" && "$GUEST_EXTERNAL_PATH" == /tmp/* ]];
+            }; then
+                # Android hides these host paths during boot. The alias mounts
+                # the same directory, so existing external files stay in place.
+                EXTERNAL_ALIAS=/lepton/profile-external
+                if [[ -L "$MEDIA_PATH" && "$(readlink -- "$MEDIA_PATH")" == "$GUEST_EXTERNAL_PATH" ]]; then
+                    ln -sfnT -- "$EXTERNAL_ALIAS" "$MEDIA_PATH" || die "Could not update Lepton's external-storage link"
+                fi
+            fi
+            if [[ -n "$EXTERNAL_ALIAS" ]]; then
+                [[ "$EXTERNAL_ALIAS" == /lepton/* && "$EXTERNAL_ALIAS" != *'/../'* && "$EXTERNAL_ALIAS" != */.. ]] || die 'Invalid profile external-storage path'
+                GUEST_EXTERNAL_PATH="$EXTERNAL_ALIAS"
                 podman_mount_entry "${STEAM_COMPAT_DATA_PATH}/external" "$GUEST_EXTERNAL_PATH" rw
             elif ! host_path_in_container "${GUEST_EXTERNAL_PATH}"; then
                 # x86_64 port: profiles outside Steam's folders (lepton-play)
@@ -775,7 +803,7 @@ function setup_mounts()
         fi
     fi
 
-    if ! is_sysbake; then
+    if ! is_sysbake && [[ -z "${LEPTON_MANAGED_APP:-}" ]]; then
         local APP_WORKDIR="$(app_workdir)"
         local APP_OVERLAY_UPPERDIR="$(app_datadir)"
         mkdir -p "${APP_WORKDIR}"
@@ -789,7 +817,9 @@ function setup_mounts()
         fi
     fi
 
-    if [[ -n "${LEPTON_MOUNT_OBB_DIR:-}" ]]; then
+    if [[ -n "${LEPTON_MANAGED_OBB:-}" ]]; then
+        podman_mount_entry "$LEPTON_MANAGED_OBB" /lepton/managed-obb ro
+    elif [[ -z "${LEPTON_MANAGED_APP:-}" && -n "${LEPTON_MOUNT_OBB_DIR:-}" ]]; then
         podman_mount_entry "${LEPTON_MOUNT_OBB_DIR}" "/${APP_MOUNT_TARGET}/obb" ro
     fi
 
@@ -870,7 +900,7 @@ function generate_app_launch_rc()
         APP_MOUNT_TARGET="$(get_app_mount_dir)"
     fi
 
-    if ! is_app_baked && [[ "${BASE_APK}" != "base.apk" ]]; then
+    if [[ -z "${LEPTON_MANAGED_APP:-}" ]] && ! is_app_baked && [[ "${BASE_APK}" != "base.apk" ]]; then
         println "on early-init" >>"${APP_LAUNCH_RC}"
         println "    exec -- /system/bin/sh -c \"mv \"/${APP_MOUNT_TARGET#/}/${BASE_APK}\" \"/${APP_MOUNT_TARGET#/}/base.apk\"\"" >>"${APP_LAUNCH_RC}"
         println "    exec -- /system/bin/sh -c \"find \"/${APP_MOUNT_TARGET#/}\" -name '*.apk' -a ! -name 'base.apk' -type f -exec rm -f {} +\"" >>"${APP_LAUNCH_RC}"
@@ -887,7 +917,11 @@ function generate_app_launch_rc()
 
         # Make sure the obb symlink is in order.
         local APP_ID="$(get_app_id)"
-        println "    exec -- /vendor/bin/fix_obb_symlink.sh \"${APP_ID}\"" >>"${APP_LAUNCH_RC}"
+        if [[ -z "${LEPTON_MANAGED_APP:-}" ]]; then
+            println "    exec -- /vendor/bin/fix_obb_symlink.sh \"${APP_ID}\"" >>"${APP_LAUNCH_RC}"
+        else
+            println "    exec -- /system/bin/cmd lepton mount_vulkan_layers" >>"${APP_LAUNCH_RC}"
+        fi
 
         # Add install commands for vulkan layers
         local HOST_LAYER_INSTALL_SCRIPT="$(prefix "${1:-}")/vulkan_layer_setup.sh"
