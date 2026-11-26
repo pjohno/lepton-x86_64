@@ -247,7 +247,8 @@ The installer:
    GApps, NDK or Widevine add them after it, for example
    **lepton v0.2.0-alpha x86_64 (community, GApps + NDK)**;
 5. writes `~/.config/lepton-x86_64/<tool id>.env` and makes it the default;
-6. links `lepton-add-game`, `lepton-add-game-gui` and `lepton-run-apk` into `~/.local/bin`;
+6. links `lepton-add-game`, `lepton-add-game-gui`, `lepton-run-apk`,
+   `lepton-play` and `lepton-library` into `~/.local/bin`;
 7. adds **Lepton: Add Android game**, **Lepton: Check graphics** and **Lepton:
    Remove installs** to the desktop and the application menu (Games); GApps
    bundles also add **Lepton: Add Google game**, **Lepton: Google sign-in**,
@@ -622,6 +623,45 @@ previous saved board but did not save the latest moves by itself.
 The waits can be changed with
 `LEPTON_STOP_SAVE_WAIT=<seconds>` and `LEPTON_STOP_SHUTDOWN_WAIT=<seconds>`;
 setting both to `0` gives the old instant stop.
+
+## Android Library profiles and recovery
+
+Use [the Android Library quick start](README.md#manage-sideloaded-apps-with-android-library)
+in Fedora or Steam Deck Desktop Mode. The selected directory is remembered
+in `~/.config/lepton-x86_64/android-library.json` (or under
+`XDG_CONFIG_HOME`). Keep the directory on the same mount path. A missing
+drive stops launch and leaves the mount point untouched. Choose a library
+directory outside Steam's library folders and Android profile directories.
+
+Managed APKs install through Android's package manager in each existing
+**managed** profile. Standalone data is stored under
+`~/.local/share/lepton-compat-data/<package>` by default. Steam data stays
+under its `steamapps/compatdata/<AppID>`. The Android Library contains
+neither profile. Common Container Storage is accessible to apps in the
+shared Google Play instance under the usual Android storage permissions,
+so treat it as shared files across those apps.
+
+You can keep using `lepton-add-game FILE.apk` and `lepton-play FILE.apk`
+with unmanaged files. Use `lepton-add-game --import FILE.apk` to copy a file
+into the configured library when creating a new shortcut. If you already
+have an unmanaged installation, keep launching the original file to keep
+using its baked profile. This release cannot adopt a legacy baked install
+into a managed profile. Importing a copy leaves your old shortcut and
+profile in place. If you intentionally want a separate managed standalone
+installation of the same package, give `lepton-library play` a different
+`--data-root`. Adding the managed library copy to Steam creates a separate
+shortcut and profile.
+
+If a library file change is interrupted, `lepton-library recover PACKAGE`
+finishes the staged transaction. The previous APK is kept in the package's
+hidden `.previous` directory. If Android rejects the update, use
+`lepton-library info PACKAGE` to check the failed profile and retry the
+launch after fixing the cause. To put the previous APK back at the stable
+path, run `lepton-library restore-apk PACKAGE --dry-run`, then
+`lepton-library restore-apk PACKAGE --yes`. This restores the library file.
+An Android profile that already moved to a newer version will refuse the
+older APK. Restoring an Android installation and its private data to an
+earlier state requires a compatible profile backup.
 
 ## Starting again from a clean slate
 

@@ -110,6 +110,89 @@ With patch 0012 in the Android image, closing the game's direct Wayland desktop
 window requests Android task removal and launcher teardown. Save in the game
 first: window closing does not guarantee unsaved progress has been written.
 
+## Manage sideloaded apps with Android Library
+
+After installing a Lepton bundle, open a terminal on Fedora or Konsole in
+Steam Deck Desktop Mode. For APK imports and updates, install the Android SDK
+Build Tools using Google's SDK Manager. Lepton uses `aapt2` to read metadata
+and `apksigner` to verify APK signatures. If the tools are outside your
+`PATH`, point Lepton at the Build Tools directory for your SDK installation.
+On Steam Deck, install the SDK under your home directory.
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+export LEPTON_ANDROID_BUILD_TOOLS="$HOME/Android/Sdk/build-tools/34.0.0"
+lepton-library init
+lepton-library import "$HOME/Downloads/Example Game.apk"
+lepton-library list
+lepton-library play com.example.game
+```
+
+For an SD card or another drive, choose the location during setup. Mount the
+drive before you initialise it and reconnect it before launching Lepton.
+
+```bash
+lepton-library init --path "/run/media/$USER/My SD Card/Android_Library"
+```
+
+Use the package name printed by `list` in the commands below. Exit Steam
+completely before adding a shortcut, then restart Steam. The shortcut can
+also be launched in Steam Deck Gaming Mode.
+
+```bash
+lepton-library add-to-steam com.example.game
+lepton-library status
+lepton-library config com.example.game share-add --name Books --path "$HOME/Books" --read-only
+lepton-library config com.example.game defaults none
+lepton-library config com.example.game show
+```
+
+The library stores your imported APKs or APKMs, OBB files and settings.
+**Container Storage** is a separate folder inside the library. Open it in
+Dolphin or Nautilus, or find it at `/storage/emulated/0/Container Storage`
+in Android. It is available even with optional shared folders set to
+`none`, including in unmanaged and shared Google Play sessions. Optional
+folders can be read-only or read-write. Custom folders are added to the
+standard folders unless you choose defaults explicitly. A Steam launch
+option such as `LEPTON_SHARED_FOLDERS=none %command%` or
+`lepton-library play com.example.game --shared-folders none` overrides the
+optional settings for one launch.
+
+Close running managed apps before updating. Importing copies the source
+file. Use `--obb FILE` to include each versioned OBB explicitly.
+
+```bash
+lepton-library update "$HOME/Downloads/Example Game v2.apk" --dry-run
+lepton-library update "$HOME/Downloads/Example Game v2.apk"
+lepton-library apply com.example.game
+lepton-library info com.example.game
+lepton-library remove com.example.game --dry-run
+```
+
+Steam and standalone profiles are separate Android installations. Each
+applies the replacement on its next launch. Use `apply` to update an
+existing standalone profile without opening the app, or skip it to update
+when you next play. `info` shows the library
+version and the last verified version of each launched profile. Android's
+package manager preserves saves, settings and sign-ins during replacement.
+Steam retains the existing AppID, artwork, controller settings, launch
+options and compatibility-tool selection. `reinstall` schedules a
+replacement with the current library APK. For a different APK with the
+same version, use `update --replace-same-version`. Android version downgrades
+and APK/APKM format changes are refused. Signing-key rotation requires a
+verified Android signing lineage that preserves access to existing data.
+
+Ordinary removal deletes the library copy, its OBBs and library settings.
+It preserves Steam and standalone compatibility profiles, Android app data
+and Container Storage. Remove any Steam shortcut first, exit Steam, then
+run `lepton-library remove com.example.game --yes`. APK updates keep the
+Android-image compatibility checks in place, so changing the Android image
+can still require a different profile. Steam-distributed apps and Play Store
+apps continue receiving updates through their stores.
+
+See the [installation guide](INSTALL-STEAM-DECK.md#android-library-profiles-and-recovery)
+for recovery and existing unmanaged profiles.
+
 ## Launch options
 
 Games need no launch options. These optional ones go in the shortcut's
