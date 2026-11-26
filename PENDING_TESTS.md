@@ -535,7 +535,12 @@ Findings from the Intel run (2026-11-26):
   but no folder replaces it, and Android doesn't recreate these two (it does
   recreate Movies, Music and Pictures). Seen in round 1 too. The docs say
   Android keeps private folders; the launcher should create the empty
-  folders when it removes the links.
+  folders when it removes the links. **Fixed** in bundle
+  `v0.4.0-shared-folders-4`: the launcher now makes an empty folder of
+  Android's own for each default folder that is not shared. Intel check:
+  `none` gives real, writable `Documents` and `Download`; back to the
+  default, the empty one is replaced by the link, one with files is kept
+  with the `not linked` message, and is linked once emptied.
 - A default folder that is missing (drive unplugged) is skipped silently and
   its old link is left pointing at nothing; custom folders log `is not there`.
 - `lepton-play` ignores Ctrl-C when started in the background by a script
