@@ -544,8 +544,8 @@ and Properties > General > Launch Options; nothing changes:
 | Test | Desktop (Fedora) | Steam Deck | Notes |
 | --- | --- | --- | --- |
 | Host test | PASS (SKIP /mnt) | | |
-| T24 adding | Works | | Intel, `lepton-play`: `Books`, `~/lepton-sf/Films` (defaults kept), `none,Books` (only Books) |
-| T25 popups | Works | | Intel desktop popup text checked: typo, and two problems in one popup with the value |
+| T24 adding | Works | Works | Deck, bundle -5: runs as expected. Intel, `lepton-play`: `Books`, `~/lepton-sf/Films` (defaults kept), `none,Books` (only Books) |
+| T25 popups | Works | Works | Deck, bundle -5: error message clear in the popup. Intel desktop popup text checked: typo, and two problems in one popup with the value |
 
 ## 3. Results
 
