@@ -54,6 +54,81 @@ function safe_storage_link()
     ln -s -- "$TARGET" "$LINK"
 }
 
+# Host folders that can appear in Android's shared storage, as
+# "<name in /storage/emulated/0>:<folder in HOME>".
+LEPTON_SHARED_FOLDER_PAIRS=(Documents:Documents Download:Downloads Movies:Videos)
+
+# Shared-storage names to link to host folders, space-separated. The
+# LEPTON_SHARED_FOLDERS launch option lists them (commas or spaces, Android or
+# host names, any case); "none" or an empty value shares nothing. Unset keeps
+# the original behaviour: all three.
+function lepton_shared_folders()
+{
+    if [[ ! -v LEPTON_SHARED_FOLDERS ]]; then
+        print "Documents Download Movies"
+        return 0
+    fi
+    local ITEM ITEMS=() RESULT=()
+    IFS=', ' read -ra ITEMS <<< "${LEPTON_SHARED_FOLDERS}"
+    for ITEM in "${ITEMS[@]}"; do
+        case "${ITEM,,}" in
+            "") ;;
+            none) ;;
+            documents) RESULT+=(Documents) ;;
+            download|downloads) RESULT+=(Download) ;;
+            movies|videos) RESULT+=(Movies) ;;
+            *)
+                println "ERROR: LEPTON_SHARED_FOLDERS: unknown folder '${ITEM}'. Use Documents, Downloads, Videos or none." >&2
+                return 1
+                ;;
+        esac
+    done
+    print "${RESULT[*]}"
+}
+
+# Remove DIR if it is an empty folder Android made. MediaProvider's own marker
+# (.thumbnails/.database_uuid and nothing else) counts as empty; any other
+# content, including real thumbnails, keeps the folder.
+function remove_empty_android_folder()
+{
+    local DIR="$1"
+    [[ -d "${DIR}" && ! -L "${DIR}" ]] || return 1
+    if [[ -d "${DIR}/.thumbnails" && ! -L "${DIR}/.thumbnails" &&
+          -f "${DIR}/.thumbnails/.database_uuid" && ! -L "${DIR}/.thumbnails/.database_uuid" &&
+          "$(ls -A -- "${DIR}")" == .thumbnails && "$(ls -A -- "${DIR}/.thumbnails")" == .database_uuid ]]; then
+        rm -f -- "${DIR}/.thumbnails/.database_uuid" && rmdir -- "${DIR}/.thumbnails" || return 1
+    fi
+    rmdir -- "${DIR}" 2>/dev/null
+}
+
+# Share HOST as shared-storage folder LINK (ENABLED=true), or stop sharing it.
+# Never moves or deletes user data: only Lepton's own link (pointing exactly at
+# HOST) is removed, and only an empty real folder, such as one Android created
+# while sharing was off, is replaced by the link. A folder with files in it
+# stays private to Android and the launch continues.
+function share_host_folder()
+{
+    local HOST="$1" LINK="$2" ENABLED="$3"
+    if [[ "${ENABLED}" != true ]]; then
+        if [[ -L "${LINK}" ]]; then
+            if [[ "$(readlink -- "${LINK}")" == "${HOST}" ]]; then
+                rm -f -- "${LINK}"
+                println "Shared folder off: ${LINK##*/} no longer shows ${HOST}"
+            else
+                println "WARNING: shared folder ${LINK##*/} left unchanged: it links to $(readlink -- "${LINK}"), not ${HOST}" >&2
+            fi
+        fi
+        return 0
+    fi
+    [[ -d "${HOST}" ]] || return 0
+    if [[ -d "${LINK}" && ! -L "${LINK}" ]] && ! remove_empty_android_folder "${LINK}"; then
+        println "Shared folder ${LINK##*/} not linked to ${HOST}: Android's own ${LINK##*/} folder has files, so it is kept. Move them out to share ${HOST}." >&2
+        return 0
+    fi
+    safe_storage_link "${HOST}" "${LINK}" || die "Shared storage preserved; launch stopped"
+    podman_mount_entry "${HOST}" "${HOST}" rw
+}
+
 function setup_mounts()
 {
     mkdir -p "$(data_mount_path)"
@@ -166,15 +241,16 @@ function setup_mounts()
         else
             mkdir -p "${TARGET_PATH}"
         fi
-        if [[ -d "${HOME}/Documents" ]]; then
-            safe_storage_link "${HOME}/Documents" "${TARGET_PATH}/Documents" || die "Shared storage preserved; launch stopped"
-        fi
-        if [[ -d "${HOME}/Downloads" ]]; then
-            safe_storage_link "${HOME}/Downloads" "${TARGET_PATH}/Download" || die "Shared storage preserved; launch stopped"
-        fi
-        if [[ -d "${HOME}/Videos" ]]; then
-            safe_storage_link "${HOME}/Videos" "${TARGET_PATH}/Movies" || die "Shared storage preserved; launch stopped"
-        fi
+        local SHARED_FOLDERS SHARED HOST_FOLDER
+        SHARED_FOLDERS=" $(lepton_shared_folders) " || die "Launch stopped: fix the LEPTON_SHARED_FOLDERS launch option."
+        for SHARED in "${LEPTON_SHARED_FOLDER_PAIRS[@]}"; do
+            HOST_FOLDER="${HOME}/${SHARED#*:}"
+            if [[ "${SHARED_FOLDERS}" == *" ${SHARED%%:*} "* ]]; then
+                share_host_folder "${HOST_FOLDER}" "${TARGET_PATH}/${SHARED%%:*}" true
+            else
+                share_host_folder "${HOST_FOLDER}" "${TARGET_PATH}/${SHARED%%:*}" false
+            fi
+        done
         if [[ -d "${STEAM_COMPAT_DATA_PATH:-}" ]]; then
             local GUEST_EXTERNAL_PATH="${STEAM_COMPAT_DATA_PATH}/external"
             if [[ -n "${LEPTON_PROFILE_EXTERNAL_STORAGE:-}" ]]; then
@@ -183,12 +259,17 @@ function setup_mounts()
                 # stored on host /mnt need a guest alias outside that subtree.
                 GUEST_EXTERNAL_PATH="$LEPTON_PROFILE_EXTERNAL_STORAGE"
                 podman_mount_entry "${STEAM_COMPAT_DATA_PATH}/external" "$GUEST_EXTERNAL_PATH" rw
+            elif ! host_path_in_container "${GUEST_EXTERNAL_PATH}"; then
+                # x86_64 port: profiles outside Steam's folders (lepton-play)
+                # are not otherwise mounted, which left /data/media/0 dangling:
+                # no shared storage and no OBB link. Mount it at its own path
+                # so the existing link stays valid.
+                [[ "${GUEST_EXTERNAL_PATH}" != /mnt/* ]] ||
+                    println "WARNING: Android hides host /mnt; shared storage for a profile in ${STEAM_COMPAT_DATA_PATH} will not work. Keep the profile outside /mnt." >&2
+                podman_mount_entry "${GUEST_EXTERNAL_PATH}" "${GUEST_EXTERNAL_PATH}" rw
             fi
             safe_storage_link "$GUEST_EXTERNAL_PATH" "$(data_mount_path)/media/0" || die "Shared storage preserved; launch stopped"
         fi
-        podman_mount_entry_optional "${HOME}/Documents" "${HOME}/Documents" rw
-        podman_mount_entry_optional "${HOME}/Videos" "${HOME}/Videos" rw
-        podman_mount_entry_optional "${HOME}/Downloads" "${HOME}/Downloads" rw
     fi
 
     if steamos_devmode_enabled; then
