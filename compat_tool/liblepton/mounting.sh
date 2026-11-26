@@ -78,7 +78,7 @@ LEPTON_SHARED_LEGACY_LINKS=(Documents:Documents Download:Downloads Movies:Videos
 
 # Shared-storage names that can't be used, lower case: Android's own folder
 # (app data, OBB).
-LEPTON_SHARED_RESERVED_NAMES=(android "container storage")
+LEPTON_SHARED_RESERVED_NAMES=(android)
 
 # Print XDG user directory KEY (DOCUMENTS, MUSIC, ...) from user-dirs.dirs, or
 # HOME/FALLBACK when the file doesn't set it. The file is shell syntax written
@@ -443,6 +443,10 @@ function lepton_shared_name_ok()
         ERRORS+=("'${ITEM}': '${NAME}' can't be a shared-storage folder name. Give a plain name, as Name=/path (no / \\ : * ? \" < > |, not starting with . or -, at most 64 characters)")
         return 1
     fi
+    if [[ -n "${LEPTON_LIBRARY_ROOT:-}" && "${NAME,,}" == "container storage" ]]; then
+        ERRORS+=("'${ITEM}': Container Storage is reserved by the Android Library")
+        return 1
+    fi
     if lepton_array_has "${NAME,,}" "${LEPTON_SHARED_RESERVED_NAMES[@]}"; then
         ERRORS+=("'${ITEM}': ${NAME} is kept for Android's app data; give it another name, as Books=/path")
         return 1
@@ -780,6 +784,12 @@ function setup_mounts()
             fi
             if [[ -n "$EXTERNAL_ALIAS" ]]; then
                 [[ "$EXTERNAL_ALIAS" == /lepton/* && "$EXTERNAL_ALIAS" != *'/../'* && "$EXTERNAL_ALIAS" != */.. ]] || die 'Invalid profile external-storage path'
+                if [[ -n "${LEPTON_LIBRARY_ROOT:-}" ]]; then
+                    EXTERNAL_ALIAS="$(realpath -sm -- "$EXTERNAL_ALIAS")"
+                    [[ "$EXTERNAL_ALIAS" != /lepton && "$EXTERNAL_ALIAS" != /lepton/shared &&
+                       "$EXTERNAL_ALIAS" != /lepton/shared/* && "$EXTERNAL_ALIAS" != /lepton/managed-obb &&
+                       "$EXTERNAL_ALIAS" != /lepton/managed-obb/* ]] || die "External-storage alias overlaps Android Library mounts"
+                fi
                 GUEST_EXTERNAL_PATH="$EXTERNAL_ALIAS"
                 podman_mount_entry "${STEAM_COMPAT_DATA_PATH}/external" "$GUEST_EXTERNAL_PATH" rw
             elif ! host_path_in_container "${GUEST_EXTERNAL_PATH}"; then

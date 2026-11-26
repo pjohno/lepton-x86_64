@@ -534,3 +534,23 @@ grep -qxF -- "type=bind,source=$ext,destination=/lepton/profile-external,rw" "$w
 link_is /lepton/profile-external "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/media/0" || fail "alias media/0 link"
 
 echo "PASS: shared folders and profile shared storage"
+
+# A configured library shares only the common transfer folder. This also
+# covers a session without an APK, such as the shared Google Play launcher.
+export LEPTON_LIBRARY_ROOT="$work/Managed Android Library"
+storage="$LEPTON_LIBRARY_ROOT/Container Storage"
+mkdir -p "$storage" "$LEPTON_LIBRARY_ROOT/org.example.game/obb"
+touch "$LEPTON_LIBRARY_ROOT/org.example.game/org.example.game.apk"
+ln -s "$books" "$storage/nested-link"
+LEPTON_SHARED_FOLDERS=none run_mounts || fail "managed storage stopped with optional sharing off"
+shared "Container Storage" "$storage" || fail "common storage missing"
+[[ "$(count_mounts)" == 1 ]] || fail "optional or nested folders were mounted"
+! grep -qF "source=$LEPTON_LIBRARY_ROOT," "$work/mounts" || fail "entire library was exposed"
+invalid "container storage=$books" "Container Storage is reserved"
+invalid "Whole=$LEPTON_LIBRARY_ROOT" "holds Lepton's own data"
+
+# Legacy external-storage links under /tmp need the alias once the library
+# is configured. The backing host directory and its files are kept.
+LEPTON_PROFILE_EXTERNAL_STORAGE= LEPTON_SHARED_FOLDERS=none run_mounts || fail "configured alias profile stopped"
+mounted_at "$ext" /lepton/profile-external || fail "common storage profile alias missing"
+echo "PASS: managed Container Storage, optional override, reserved name and library mount protection"

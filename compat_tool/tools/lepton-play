@@ -193,6 +193,7 @@ info "data: $DATA"
 
 # Steam's environment for a non-Steam shortcut, without Steam.
 unset STEAM_COMPAT_INSTALL_PATH STEAM_COMPAT_LIBRARY_PATHS
+export LEPTON_STANDALONE_PROFILE=1
 export SteamAppId="$APP_ID"
 export STEAM_COMPAT_DATA_PATH="$DATA"
 export STEAM_COMPAT_SHADER_PATH="$SHADERS"

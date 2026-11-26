@@ -205,6 +205,9 @@ case "${COMMAND}" in
         trap "cleanup_failed_start" EXIT
 
         lepton_library_launch "${3:-}"
+        if [[ "${LEPTON_LIBRARY_APPLY_ONLY:-false}" == true && -z "$LEPTON_MANAGED_APP" ]]; then
+            die "Apply requires a managed library APK"
+        fi
         determine_app --start "${3:-}"
 
         log_to_file
@@ -394,6 +397,10 @@ case "${COMMAND}" in
             continue_boot_after_bake
         elif [[ -n "$LEPTON_MANAGED_APP" ]]; then
             if lepton_install_managed_app; then
+                if [[ "${LEPTON_LIBRARY_APPLY_ONLY:-false}" == true ]]; then
+                    teardown
+                    exit 0
+                fi
                 continue_boot_after_bake
             else
                 println "ERROR: Managed Android installation failed; profile preserved. See lepton-library info $(get_app_id)."

@@ -3,6 +3,7 @@
 """Command-line access to the managed Android Library."""
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -23,7 +24,7 @@ def edit_config(args, root, directory, config):
             settings.pop("defaults", None)
         elif args.names == ["none"]:
             settings["defaults"] = []
-        elif all(name in lib.DEFAULTS for name in args.names):
+        elif all(lib.default_share(name) for name in args.names):
             settings["defaults"] = args.names
         else:
             raise ValueError("Choose all, none, or one or more standard folders")
@@ -85,6 +86,7 @@ def main():
         "reinstall": "Schedule the current APK for replacement on each profile's next launch",
         "remove": "Remove library files while keeping Android profiles",
         "play": "Launch in a standalone profile",
+        "apply": "Apply a pending update to an existing standalone profile without opening the app",
         "add-to-steam": "Create a Steam shortcut pointing to the stable library APK",
         "config": "Inspect and edit per-app shared folders",
     }.items():
@@ -94,7 +96,7 @@ def main():
             action.add_argument("--dry-run", action="store_true")
         if name in {"remove", "restore-apk"}:
             action.add_argument("--yes", action="store_true", help="Confirm the file operation")
-        if name == "play":
+        if name in {"play", "apply"}:
             action.add_argument("--tool")
             action.add_argument("--data-root", type=Path)
             action.add_argument("--shared-folders")
@@ -184,8 +186,9 @@ def main():
         elif cmd == "config":
             edit_config(args, root, directory, config)
         else:
-            tool = lib.TOOLS / ("lepton-play" if cmd == "play" else "lepton-add-game")
-            argv = [str(tool), str(apk)]
+            tool = lib.TOOLS / ("lepton-play" if cmd in {"apply", "play"} else "lepton-add-game")
+            interpreter = sys.executable if cmd == "add-to-steam" else "bash"
+            argv = [interpreter, str(tool), str(apk)]
             for option in ("tool", "data_root", "tool_id", "userdata", "name", "shared_folders"):
                 value = getattr(args, option, None)
                 if value is not None:
@@ -194,7 +197,10 @@ def main():
                 argv.extend(("--name", config["name"]))
             if dry_run:
                 argv.append("--dry-run")
-            return subprocess.call(argv)
+            environment = os.environ.copy()
+            if cmd == "apply":
+                environment["LEPTON_LIBRARY_APPLY_ONLY"] = "true"
+            return subprocess.call(argv, env=environment)
     return 0
 
 

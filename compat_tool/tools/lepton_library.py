@@ -17,6 +17,7 @@ import zipfile
 TOOLS = Path(__file__).resolve().parent
 PACKAGE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+")
 DIGEST = re.compile(r"[a-f0-9]{64}")
+SIGNER = re.compile(r"(?im)^Signer (?:#\d+|\(minSdkVersion=[^\r\n]+\)) certificate SHA-256 digest: ([a-f0-9]{64})[ \t]*$")
 STORAGE = "Container Storage"
 DEFAULTS = ("Documents", "Downloads", "Videos", "Music", "Pictures")
 
@@ -215,12 +216,13 @@ def apk_metadata(path):
     if int(code) > 0xffffffff or major > 0x7fffffff:
         raise ValueError("Android version code is outside its supported range")
     result = command([sdk_tool("apksigner"), "verify", "--print-certs", str(path)])
-    signers = sorted(set(re.findall(r"(?im)^Signer #\d+ certificate SHA-256 digest: ([a-f0-9]{64})\s*$", result.lower())))
+    signers = sorted(set(SIGNER.findall(result.lower())))
     if not signers:
         raise ValueError(f"No verified Android signing certificates in {path.name}")
-    label = next((line[len("application-label:'"):-1] for line in badging.splitlines()
-                  if line.startswith("application-label:'") and line.endswith("'")), package)
-    return dict(package=package, name=label, version_name=fields.get("versionName", ""),
+    label = re.search(r"(?m)^application-label:'(.*)'$", badging)
+    if label is None:
+        label = re.search(r"(?m)^application: label='(.*)' icon=", badging)
+    return dict(package=package, name=(label[1] if label and label[1] else package), version_name=fields.get("versionName", ""),
                 version_code=(major << 32) | int(code), signers=signers, abis=abis,
                 split=fields.get("split", ""), sha256=sha256(path))
 
@@ -257,6 +259,36 @@ def inspect(path, suffix):
     return info
 
 
+
+def validate_rotation(path, old, new):
+    # apksigner verify has already authenticated every member. Check that each
+    # embeds the successor proof and retains access to its predecessors' data.
+    def accepts(apk):
+        try:
+            proof = command([sdk_tool("apksigner"), "lineage", "--print-certs", "--in", str(apk)])
+        except ValueError:
+            return False
+        certificates = re.split(r"(?m)^Signer #\d+ in lineage certificate SHA-256 digest: ([a-f0-9]{64})[ \t]*$", proof)
+        if len(certificates) < 5:
+            return False
+        lineage = dict(zip(certificates[1::2], certificates[2::2]))
+        successor = next(reversed(lineage))
+        return (successor in new["signers"] and set(new["signers"]).issubset(lineage) and
+                all(digest in lineage and "Has installed data capability: true" in lineage[digest].splitlines()
+                    for digest in old["signers"]))
+
+    if new["format"] == ".apk":
+        return accepts(path)
+    with zipfile.ZipFile(path) as archive, tempfile.TemporaryDirectory() as folder:
+        for name in new["apks"]:
+            apk = Path(folder) / name
+            with archive.open(name) as source, apk.open("xb") as output:
+                shutil.copyfileobj(source, output)
+            if not accepts(apk):
+                return False
+            apk.unlink()
+    return True
+
 def load_app(root, package, verify=False):
     if not PACKAGE.fullmatch(package):
         raise ValueError(f"Invalid Android package: {package}")
@@ -265,7 +297,14 @@ def load_app(root, package, verify=False):
     if (directory / ".update").exists() or (directory / ".update").is_symlink():
         raise ValueError(f"Interrupted library update for {package}. Run lepton-library recover {package}.")
     config = read_json(directory / "config.json")
-    if config.get("package") != package or config.get("format") not in {".apk", ".apkm"}:
+    if (config.get("package") != package or config.get("format") not in {".apk", ".apkm"} or
+            not isinstance(config.get("name"), str) or not isinstance(config.get("version_name"), str) or
+            type(config.get("version_code")) is not int or not 0 <= config["version_code"] < (1 << 63) or
+            not isinstance(config.get("sha256"), str) or not DIGEST.fullmatch(config["sha256"]) or
+            not isinstance(config.get("revision"), str) or not config["revision"] or
+            not isinstance(config.get("signers"), list) or not config["signers"] or
+            any(not isinstance(digest, str) or not DIGEST.fullmatch(digest) for digest in config["signers"]) or
+            not isinstance(config.get("apks"), dict) or "base.apk" not in config["apks"]):
         raise ValueError(f"Invalid application metadata for {package}")
     apk = directory / (package + config["format"])
     regular(apk)
@@ -274,18 +313,29 @@ def load_app(root, package, verify=False):
     return directory, config, apk
 
 
+def default_share(item):
+    if not isinstance(item, str):
+        return False
+    name, separator, mode = item.partition(":")
+    return name in DEFAULTS and (not separator or mode in {"ro", "rw"})
+
+
 def sharing(config):
     settings = config.get("shared_folders", {})
+    if not isinstance(settings, dict):
+        raise ValueError("Invalid shared-folder configuration")
     defaults = settings.get("defaults")
     custom = settings.get("custom", [])
     if defaults is not None and (not isinstance(defaults, list) or
-            any(not isinstance(item, str) or item not in DEFAULTS for item in defaults)):
+            any(not default_share(item) for item in defaults)):
         raise ValueError("Invalid shared-folder defaults")
     if not isinstance(custom, list):
         raise ValueError("Invalid custom shared folders")
     items = [] if defaults is None else defaults or ["none"]
     for item in custom:
-        name, path, ro = item["name"], item["path"], item["read_only"]
+        if not isinstance(item, dict):
+            raise ValueError("Invalid custom shared folder")
+        name, path, ro = item.get("name"), item.get("path"), item.get("read_only")
         if (not isinstance(name, str) or not name or any(char in name for char in "=,/:") or
                 not isinstance(path, str) or not path.startswith("/") or "," in path or
                 type(ro) is not bool or any(ord(char) < 32 or ord(char) == 127 for char in name + path)):
@@ -410,8 +460,8 @@ def import_app(root, source, *, mode, replace=False, obbs=(), dry_run=False, ver
             if verbose:
                 print(f"{package}: library {old['version_name']} ({old['version_code']}), "
                       f"incoming {incoming['version_name']} ({incoming['version_code']})")
-            if old["signers"] != incoming["signers"]:
-                raise ValueError("Incompatible signing certificates. Signing-key rotation is currently unsupported.")
+            if old["signers"] != incoming["signers"] and not validate_rotation(staged, old, incoming):
+                raise ValueError("Incompatible signing certificates or missing Android signing lineage")
             if incoming["version_code"] < old["version_code"]:
                 raise ValueError("Android version downgrade refused")
             if active != apk:
