@@ -72,6 +72,8 @@ rm "$work/baked/app_install_complete"; refuses
 [[ ! -e "$work/baked/app_hash" ]]
 # An interrupted first unpack leaves <key>.tmp; only that scratch copy is
 # replaced, and other completed (possibly installed) caches are retained.
+LEPTON_DIR="$repo/compat_tool/liblepton"
+source "$LEPTON_DIR/android_library.sh"
 eval "$(sed -n "/^function prepare_apkm()/,/^}/p" "$repo/compat_tool/liblepton/google_games.sh")"
 die() { echo "FAIL: $*"; exit 1; }
 rootfs_has_arm_translation() { return 0; }
