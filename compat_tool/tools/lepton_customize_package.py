@@ -872,6 +872,7 @@ def restore_main(args, core):
     core.require(hasattr(ctypes.CDLL(None), 'memfd_create') and hasattr(ctypes.CDLL(None), 'renameat2'),
                  'Linux memfd and glibc renameat2 support are required')
     destination = core.destination_path(args.stage_dir)
+    core.require_no_inherited_acl(destination)
     args.bundle, args.checksum = Path(args.bundle), Path(args.checksum)
     args.signature = Path(args.signature) if args.signature else None
     args.trusted_signers = Path(args.trusted_signers) if args.trusted_signers else None
