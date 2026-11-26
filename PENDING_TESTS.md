@@ -111,3 +111,12 @@ whose minimum SDK is deliberately higher than Android 14.
 
 Android media indexing and app-specific file picker behavior can be tested
 separately from package updates and direct file access.
+
+## Results so far
+
+| Environment | Observed result |
+|---|---|
+| Fedora, Intel | Signed APK and APKM updates preserved the launch counter across repeated shutdowns. Both APKM members and the test OBB remained available. Apply-only verified the replacement without opening the app. Interrupting the installer helper before and after Android's commit recovered the original counter. The committed code path was reused after recovery. |
+| Fedora, Intel with disposable Steam files | Created a real shortcut VDF entry and launched through the Steam compatibility entry point with a separate compatdata path. The signed SDK-incompatible update failed in Android. Restoring the library APK and applying a valid signing-key rotation retained the saved counter. Shortcut, mapping and artwork checksums were unchanged. |
+| Fedora, AMD | Updated an APKM library on a mounted ext4 drive. The counter survived the update and restart. An Android-side write appeared in Container Storage with optional sharing off. Simulating a missing drive left the replacement mount-point directory empty. A legacy OBB fixture in a secondary Steam library launched after falling back to streamed installation, and both OBB and Container Storage were visible. |
+| Steam Deck and shared Google Play | Live Gaming Mode, controller layout, physical SD-card removal, Android file-manager access under app permissions and the authenticated GApps workflow are pending. |

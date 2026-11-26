@@ -546,11 +546,17 @@ LEPTON_SHARED_FOLDERS=none run_mounts || fail "managed storage stopped with opti
 shared "Container Storage" "$storage" || fail "common storage missing"
 [[ "$(count_mounts)" == 1 ]] || fail "optional or nested folders were mounted"
 ! grep -qF "source=$LEPTON_LIBRARY_ROOT," "$work/mounts" || fail "entire library was exposed"
+snapshot > "$work/links.good"
 invalid "container storage=$books" "Container Storage is reserved"
 invalid "Whole=$LEPTON_LIBRARY_ROOT" "holds Lepton's own data"
 
 # Legacy external-storage links under /tmp need the alias once the library
 # is configured. The backing host directory and its files are kept.
+printf 'kept
+' > "$ext/keep.txt"
+ln -sfnT -- "$ext" "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/media/0"
 LEPTON_PROFILE_EXTERNAL_STORAGE= LEPTON_SHARED_FOLDERS=none run_mounts || fail "configured alias profile stopped"
 mounted_at "$ext" /lepton/profile-external || fail "common storage profile alias missing"
+link_is /lepton/profile-external "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/media/0" || fail "legacy alias not replaced"
+grep -qx kept "$ext/keep.txt" || fail "existing profile storage was changed"
 echo "PASS: managed Container Storage, optional override, reserved name and library mount protection"
