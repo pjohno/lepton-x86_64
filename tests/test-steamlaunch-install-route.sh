@@ -6,6 +6,7 @@ set -Eeuo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 lib="$repo/compat_tool/liblepton/liblepton.sh"
 eval "$(sed -n '/^function apk_path_in_container()/,/^}/p' "$lib")"
+eval "$(sed -n '/^function host_path_in_container()/,/^}/p' "$lib")"
 declare -F apk_path_in_container > /dev/null
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT

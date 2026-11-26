@@ -46,12 +46,591 @@ function safe_storage_link()
     if [[ -L "$LINK" ]]; then
         [[ "$(readlink -- "$LINK")" == "$TARGET" ]] && return 0
         println "ERROR: unexpected storage link retained: $LINK; inspect it before changing storage mapping" >&2
+        lepton_tell_player_shared "a link in its Android shared storage was not made by this Lepton tool" \
+            "Remove the link (only the link, not the folder it points to) and launch again." \
+            "$LINK links to $(readlink -- "$LINK"), not $TARGET"
         return 1
     elif [[ -e "$LINK" ]]; then
         println "ERROR: real storage path retained: $LINK; back it up and resolve the mapping manually" >&2
+        lepton_tell_player_shared "a file or folder is in the way in its Android shared storage" \
+            "Back it up and move it out of the way, then launch again." "$LINK"
         return 1
     fi
     ln -s -- "$TARGET" "$LINK"
+}
+
+# Default shared folders, as "<name in /storage/emulated/0>:<XDG user-dir
+# key>:<folder in HOME when user-dirs.dirs doesn't say>".
+LEPTON_SHARED_FOLDER_DEFAULTS=(Documents:DOCUMENTS:Documents Download:DOWNLOAD:Downloads
+                               Movies:VIDEOS:Videos Music:MUSIC:Music Pictures:PICTURES:Pictures)
+
+# Every shared folder is mounted at <this>/<Name> and linked as <Name> in
+# shared storage. A path under the container's own /lepton is never hidden by
+# Android's /mnt, so folders on /mnt drives work. A link pointing at exactly
+# <this>/<its own name> is Lepton's: that is how a folder no longer shared is
+# recognised.
+LEPTON_SHARED_GUEST_ROOT=/lepton/shared
+
+# Before that, Lepton linked these names to these HOME folders, mounted at
+# their host path. Such a link is also Lepton's, and is replaced by the
+# current kind when the folder is shared.
+LEPTON_SHARED_LEGACY_LINKS=(Documents:Documents Download:Downloads Movies:Videos)
+
+# Shared-storage names that can't be used, lower case: Android's own folder
+# (app data, OBB).
+LEPTON_SHARED_RESERVED_NAMES=(android)
+
+# Print XDG user directory KEY (DOCUMENTS, MUSIC, ...) from user-dirs.dirs, or
+# HOME/FALLBACK when the file doesn't set it. The file is shell syntax written
+# by xdg-user-dirs-update; it is parsed here, never sourced, and only
+# XDG_<KEY>_DIR="$HOME/..." or "/..." without other $, ` or \ is accepted.
+# The last valid line wins, as in a shell.
+function lepton_xdg_user_dir()
+{
+    local KEY="$1" FALLBACK="$2" LINE VALUE RESULT="${HOME}/$2"
+    local FILE="${XDG_CONFIG_HOME:-${HOME}/.config}/user-dirs.dirs"
+    if [[ -f "${FILE}" && -r "${FILE}" ]]; then
+        while IFS= read -r LINE || [[ -n "${LINE}" ]]; do
+            [[ "${LINE}" =~ ^[[:space:]]*XDG_${KEY}_DIR=\"(.*)\"[[:space:]]*$ ]] || continue
+            VALUE="${BASH_REMATCH[1]}"
+            if [[ "${VALUE}" == '$HOME' || "${VALUE}" == '$HOME/'* ]]; then
+                VALUE="${HOME}${VALUE:5}"
+            elif [[ "${VALUE}" != /* ]]; then
+                continue
+            fi
+            [[ "${VALUE#"${HOME}"}" != *[\$\`\\]* ]] || continue
+            RESULT="${VALUE}"
+        done < "${FILE}"
+    fi
+    while [[ "${RESULT}" == ?*/ ]]; do RESULT="${RESULT%/}"; done
+    print "${RESULT}"
+}
+
+# Parse LEPTON_SHARED_FOLDERS into SHARED_FOLDER_ENTRIES, one per folder to
+# share: "NAME<TAB>HOST<TAB>GUEST<TAB>MODE<TAB>STATE<TAB>KIND". HOST is mounted
+# at GUEST (MODE rw or ro) and NAME in shared storage links to GUEST. KIND is
+# default or custom. STATE is ok; missing for a folder that is not there now
+# (a drive not plugged in), which is reported and left alone; or absent, the
+# same without a report, for a default folder that wasn't asked for by name.
+#
+# The option is a comma-separated list. Each item is one of:
+#   Documents | Downloads | Videos | Music | Pictures
+#                                    the default folders, from the XDG user
+#                                    directories (Android names Download and
+#                                    Movies too; any case)
+#   /abs/path  or  ~/path            any host folder, shown under its final
+#                                    name; may contain spaces
+#   Name=/abs/path                   the same, shown as Name
+#   none                             nothing (also an empty value)
+# and may end in :ro (read-only) or :rw. Default folders may also be separated
+# by spaces (the original syntax); paths must be separated by commas. A path
+# may use a default folder's name (Music=/mnt/Media/Music), in place of it.
+# Unset shares the five default folders, read-write.
+#
+# Everything is checked before anything is changed: returns 1 with every
+# problem reported, and SHARED_FOLDER_ENTRIES empty. A default folder that
+# wasn't asked for by name and can't be shared is reported and skipped.
+function lepton_shared_folder_entries()
+{
+    SHARED_FOLDER_ENTRIES=()
+    local DEFAULTS=() ERRORS=() NAMES=() SOURCES=() CUSTOM_ITEMS=() CUSTOM_BARE=()
+    local PROTECTED=() HOME_REAL SELECTED=false
+    HOME_REAL="$(realpath -m -- "${HOME}")"
+    lepton_shared_protected_paths
+    if [[ "${LEPTON_SHARED_FOLDERS:-}" == *[[:cntrl:]]* ]]; then
+        ERRORS+=("it contains a control character (such as a line break)")
+    elif [[ -v LEPTON_SHARED_FOLDERS ]]; then
+        # An empty value is the same as none.
+        [[ -n "$(lepton_trim "${LEPTON_SHARED_FOLDERS}")" ]] || SELECTED=true
+        local PART PARTS=() WORD WORDS=() MODE KNOWN
+        IFS=',' read -ra PARTS <<< "${LEPTON_SHARED_FOLDERS}"
+        for PART in "${PARTS[@]}"; do
+            PART="$(lepton_trim "${PART}")"
+            [[ -n "${PART}" ]] || continue
+            if [[ "${PART}" == [/~]* || "${PART}" == *=* ]]; then
+                CUSTOM_ITEMS+=("${PART}"); CUSTOM_BARE+=(false)
+                continue
+            fi
+            read -ra WORDS <<< "${PART}"
+            # Several words are default folder names separated by spaces (the
+            # original syntax) only if every one is; otherwise the item is one
+            # folder name with spaces in it, such as My Comics.
+            if ((${#WORDS[@]} > 1)); then
+                KNOWN=true
+                for WORD in "${WORDS[@]}"; do
+                    lepton_shared_default_word "${WORD}" > /dev/null || KNOWN=false
+                done
+                if [[ "${KNOWN}" == false && " ${PART}" == *" "[/~]* ]]; then
+                    ERRORS+=("'${PART}': separate folder paths from other items with commas")
+                    continue
+                fi
+                if [[ "${KNOWN}" == false ]]; then
+                    CUSTOM_ITEMS+=("${PART}"); CUSTOM_BARE+=(true)
+                    continue
+                fi
+            fi
+            for WORD in "${WORDS[@]}"; do
+                if [[ "${WORD,,}" == none ]]; then
+                    SELECTED=true
+                elif [[ "${WORD,,}" == none:r[ow] ]]; then
+                    ERRORS+=("'${WORD}': none can't be read-only or read-write")
+                elif KNOWN="$(lepton_shared_default_word "${WORD}")"; then
+                    SELECTED=true
+                    DEFAULTS+=("${KNOWN}:named")
+                else
+                    # A folder in your home, by its name alone.
+                    CUSTOM_ITEMS+=("${WORD}"); CUSTOM_BARE+=(true)
+                fi
+            done
+        done
+    fi
+    # Naming no default folder (and not none) keeps all five; the folders
+    # given are shared as well. A folder given under a default folder's name
+    # (Music=/mnt/Music, ~/Music), or the same host folder, replaces it.
+    if [[ "${SELECTED}" == false ]]; then
+        local PAIR
+        for PAIR in "${LEPTON_SHARED_FOLDER_DEFAULTS[@]}"; do
+            DEFAULTS+=("${PAIR%%:*}:rw:implicit")
+        done
+    fi
+    local CUSTOM_NAMES=() CUSTOM_REALS=()
+    lepton_shared_custom_names
+    lepton_shared_check_defaults
+    lepton_shared_check_custom
+
+    if ((${#ERRORS[@]})); then
+        local ERROR
+        for ERROR in "${ERRORS[@]}"; do
+            println "ERROR: LEPTON_SHARED_FOLDERS: ${ERROR}" >&2
+        done
+        lepton_tell_player_shared "its LEPTON_SHARED_FOLDERS launch option has a problem" \
+            "Fix the option in the game's Properties > General > Launch Options. Value: ${LEPTON_SHARED_FOLDERS:-}" \
+            "${ERRORS[@]}"
+        SHARED_FOLDER_ENTRIES=()
+        return 1
+    fi
+}
+
+# Print "Name:mode" for a default folder name (any case, Android names too,
+# optional :ro or :rw), or return 1.
+function lepton_shared_default_word()
+{
+    local WORD="$1" MODE=rw
+    case "${WORD,,}" in
+        *:ro) MODE=ro; WORD="${WORD:0:${#WORD}-3}" ;;
+        *:rw) WORD="${WORD:0:${#WORD}-3}" ;;
+    esac
+    case "${WORD,,}" in
+        documents) print "Documents:${MODE}" ;;
+        download|downloads) print "Download:${MODE}" ;;
+        movies|videos) print "Movies:${MODE}" ;;
+        music) print "Music:${MODE}" ;;
+        pictures) print "Pictures:${MODE}" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Tell the player (the launch popup) why shared folders stopped the launch:
+# SUMMARY, the problems (one per line, at most 6), then ADVICE. The log has
+# the same lines.
+function lepton_tell_player_shared()
+{
+    local SUMMARY="$1" ADVICE="$2" GAME LINES=() PROBLEM
+    shift 2
+    GAME="$(lepton_session_name 2>/dev/null)" || GAME=""
+    for PROBLEM in "${@:1:6}"; do LINES+=("• ${PROBLEM}"); done
+    (($# <= 6)) || LINES+=("• ... and $(($# - 6)) more (see the log)")
+    lepton_tell_player "${GAME:-The game} can't start: ${SUMMARY}. Nothing was changed.
+" "${LINES[@]}" "
+${ADVICE}"
+}
+
+# lepton_shared_folder_entries helper: the shared-storage names (lower case)
+# and real host folders of the folder items, so that a default folder they
+# replace is left out rather than reported as a clash. Errors in the items
+# are left to lepton_shared_check_custom.
+function lepton_shared_custom_names()
+{
+    local I ITEM PATH_GIVEN NAME
+    for I in "${!CUSTOM_ITEMS[@]}"; do
+        ITEM="${CUSTOM_ITEMS[I]}"
+        case "${ITEM,,}" in *:ro|*:rw) ITEM="${ITEM:0:${#ITEM}-3}" ;; esac
+        NAME="" PATH_GIVEN="${ITEM}"
+        if [[ "${CUSTOM_BARE[I]}" == true ]]; then
+            NAME="${ITEM}" PATH_GIVEN="${HOME}/${ITEM}"
+        elif [[ "${ITEM}" != [/~]* ]]; then
+            NAME="$(lepton_trim "${ITEM%%=*}")"
+            PATH_GIVEN="$(lepton_trim "${ITEM#*=}")"
+        fi
+        [[ "${PATH_GIVEN}" != "~/"* ]] || PATH_GIVEN="${HOME}${PATH_GIVEN:1}"
+        while [[ "${PATH_GIVEN}" == ?*/ ]]; do PATH_GIVEN="${PATH_GIVEN%/}"; done
+        [[ -n "${NAME}" ]] || NAME="${PATH_GIVEN##*/}"
+        CUSTOM_NAMES+=("${NAME,,}")
+        [[ ! -e "${PATH_GIVEN}" ]] || CUSTOM_REALS+=("$(realpath -e -- "${PATH_GIVEN}" 2>/dev/null)")
+    done
+}
+
+function lepton_trim()
+{
+    local S="$1"
+    S="${S#"${S%%[![:space:]]*}"}"
+    print "${S%"${S##*[![:space:]]}"}"
+}
+
+function lepton_array_has()
+{
+    local WANT="$1" ITEM
+    shift
+    for ITEM in "$@"; do [[ "${ITEM}" == "${WANT}" ]] && return 0; done
+    return 1
+}
+
+# lepton_shared_folder_entries helper: Lepton's own data, which no shared
+# folder may hold or be inside. Sets the caller's PROTECTED.
+function lepton_shared_protected_paths()
+{
+    local P
+    for P in "${STEAM_COMPAT_DATA_PATH:-}" "$(get_baked_app_data_dir 2>/dev/null)" \
+             "${LEPTON_DIR:+${LEPTON_DIR}/..}" "${LEPTON_DATA_DIR:-}" \
+             "${XDG_DATA_HOME:-${HOME}/.local/share}/lepton-compat-data"; do
+        [[ -n "${P}" ]] && PROTECTED+=("$(realpath -m -- "${P}")")
+    done
+}
+
+# lepton_shared_folder_entries helper: resolve the default folders in
+# DEFAULTS ("Name:mode:named|implicit") through the XDG user directories, and
+# add them to SHARED_FOLDER_ENTRIES. A problem with a folder asked for by name
+# is an error; with one that wasn't, a warning, and the folder is not shared.
+function lepton_shared_check_defaults()
+{
+    local DEFAULT NAME MODE HOW PAIR KEY FALLBACK HOST REAL FIRST_ERROR
+    for DEFAULT in "${DEFAULTS[@]}"; do
+        IFS=: read -r NAME MODE HOW <<< "${DEFAULT}"
+        for PAIR in "${LEPTON_SHARED_FOLDER_DEFAULTS[@]}"; do
+            [[ "${PAIR%%:*}" == "${NAME}" ]] && IFS=: read -r _ KEY FALLBACK <<< "${PAIR}"
+        done
+        if lepton_array_has "${NAME,,}" "${NAMES[@]}"; then
+            ERRORS+=("${NAME} is listed twice")
+            continue
+        fi
+        HOST="$(lepton_xdg_user_dir "${KEY}" "${FALLBACK}")"
+        if [[ "${HOW}" == implicit ]]; then
+            # Replaced by a folder given under its name, or by the same folder
+            # given under another (~/Downloads is shown as Downloads).
+            lepton_array_has "${NAME,,}" "${CUSTOM_NAMES[@]}" && continue
+            [[ -e "${HOST}" ]] && lepton_array_has "$(realpath -m -- "${HOST}")" "${CUSTOM_REALS[@]}" && continue
+        fi
+        NAMES+=("${NAME,,}")
+        if [[ ! -e "${HOST}" ]]; then
+            # Never created on the host; a relocated one may be on a drive
+            # that isn't plugged in. Its link is kept.
+            local STATE=absent
+            [[ "${HOW}" == implicit ]] || STATE=missing
+            SHARED_FOLDER_ENTRIES+=("${NAME}"$'\t'"${HOST}"$'\t'"${LEPTON_SHARED_GUEST_ROOT}/${NAME}"$'\t'"${MODE}"$'\t'"${STATE}"$'\t'default)
+            continue
+        fi
+        FIRST_ERROR=${#ERRORS[@]}
+        REAL="$(realpath -m -- "${HOST}")"
+        if [[ "${REAL}" == "${HOME_REAL}" ]]; then
+            # XDG's way of saying a folder is turned off.
+            ERRORS+=("${NAME}: your ${NAME} folder is set to your home folder (XDG_${KEY}_DIR in user-dirs.dirs), which is never shared. Set it to a folder, or give one, as ${NAME}=/path")
+        elif lepton_shared_folder_ok "${HOST}" "${NAME}"; then
+            if lepton_array_has "${REAL}" "${SOURCES[@]}"; then
+                ERRORS+=("${NAME}: ${REAL} is already shared by another item")
+            else
+                SOURCES+=("${REAL}")
+                SHARED_FOLDER_ENTRIES+=("${NAME}"$'\t'"${REAL}"$'\t'"${LEPTON_SHARED_GUEST_ROOT}/${NAME}"$'\t'"${MODE}"$'\t'ok$'\t'default)
+            fi
+        fi
+        if [[ "${HOW}" == implicit ]] && ((${#ERRORS[@]} > FIRST_ERROR)); then
+            local ERROR
+            for ERROR in "${ERRORS[@]:FIRST_ERROR}"; do
+                println "WARNING: shared folder ${ERROR}; not shared" >&2
+            done
+            ERRORS=("${ERRORS[@]:0:FIRST_ERROR}")
+        fi
+    done
+}
+
+# lepton_shared_folder_entries helper: validate the path items queued in
+# CUSTOM_ITEMS ("[Name=]path[:ro]"), after the default folders, and add them
+# to SHARED_FOLDER_ENTRIES, or to ERRORS. Uses the caller's NAMES and SOURCES
+# (lower-case names and real host folders already taken).
+function lepton_shared_check_custom()
+{
+    local I ITEM PATH_GIVEN NAME MODE REAL
+    for I in "${!CUSTOM_ITEMS[@]}"; do
+        ITEM="${CUSTOM_ITEMS[I]}"
+        NAME="" MODE=rw PATH_GIVEN="${ITEM}"
+        case "${PATH_GIVEN,,}" in
+            *:ro) MODE=ro; PATH_GIVEN="${PATH_GIVEN:0:${#PATH_GIVEN}-3}" ;;
+            *:rw) PATH_GIVEN="${PATH_GIVEN:0:${#PATH_GIVEN}-3}" ;;
+        esac
+        if [[ "${CUSTOM_BARE[I]}" == true ]]; then
+            # A name alone is a folder in your home, which must be there:
+            # unlike a path, it is not a drive that may be unplugged, and a
+            # misspelt default folder name ends up here.
+            NAME="${PATH_GIVEN}"
+            if [[ "${NAME}" == */* ]]; then
+                ERRORS+=("'${ITEM}': a folder path starts with / or ~/ (~/${NAME} for one in your home folder)")
+                continue
+            fi
+            lepton_shared_name_ok "${NAME}" "${ITEM}" || continue
+            if [[ ! -d "${HOME}/${NAME}" ]]; then
+                ERRORS+=("'${ITEM}': there is no folder ${NAME} in your home folder (${HOME}/${NAME}). Use Documents, Downloads, Videos, Music, Pictures, a folder in your home such as Books, or a full path such as /run/media/${USER:-deck}/<drive>/${NAME}")
+                continue
+            fi
+            PATH_GIVEN="${HOME}/${NAME}"
+        elif [[ "${PATH_GIVEN}" != [/~]* ]]; then
+            NAME="$(lepton_trim "${PATH_GIVEN%%=*}")"
+            PATH_GIVEN="$(lepton_trim "${PATH_GIVEN#*=}")"
+            if [[ "${PATH_GIVEN}" != [/~]* ]]; then
+                ERRORS+=("'${ITEM}': after ${NAME}= give a folder path starting with / or ~/")
+                continue
+            fi
+        fi
+        if [[ "${PATH_GIVEN}" == "~" || "${PATH_GIVEN}" == "~/"* ]]; then
+            PATH_GIVEN="${HOME}${PATH_GIVEN:1}"
+        elif [[ "${PATH_GIVEN}" == "~"* ]]; then
+            ERRORS+=("'${ITEM}': write ~/ for your home folder, or the full path")
+            continue
+        fi
+        while [[ "${PATH_GIVEN}" == ?*/ ]]; do PATH_GIVEN="${PATH_GIVEN%/}"; done
+        if [[ "${PATH_GIVEN}" == / ]]; then
+            ERRORS+=("'${ITEM}': share a folder inside /, not the whole of it")
+            continue
+        fi
+        if [[ "/${PATH_GIVEN}/" == *"/./"* || "/${PATH_GIVEN}/" == *"/../"* || "${PATH_GIVEN}" == *//* ]]; then
+            ERRORS+=("'${ITEM}': use a plain folder path, without . or .. parts")
+            continue
+        fi
+        if [[ "${PATH_GIVEN}" == *'"'* ]]; then
+            ERRORS+=("'${ITEM}': folder paths with \" in them can't be shared")
+            continue
+        fi
+        [[ -n "${NAME}" ]] || NAME="${PATH_GIVEN##*/}"
+        lepton_shared_name_ok "${NAME}" "${ITEM}" || continue
+        if lepton_array_has "${NAME,,}" "${NAMES[@]}"; then
+            ERRORS+=("'${ITEM}': ${NAME} is already used by another item; give one a different name, as Name=/path")
+            continue
+        fi
+        NAMES+=("${NAME,,}")
+
+        if [[ ! -e "${PATH_GIVEN}" ]]; then
+            # Not there now (or a link to a drive that is not): not an error,
+            # so a game still starts without its drive. Nothing is changed.
+            SHARED_FOLDER_ENTRIES+=("${NAME}"$'\t'"${PATH_GIVEN}"$'\t'"${LEPTON_SHARED_GUEST_ROOT}/${NAME}"$'\t'"${MODE}"$'\t'missing$'\t'custom)
+            continue
+        fi
+        lepton_shared_folder_ok "${PATH_GIVEN}" "'${ITEM}'" || continue
+        REAL="$(realpath -e -- "${PATH_GIVEN}")"
+        if lepton_array_has "${REAL}" "${SOURCES[@]}"; then
+            ERRORS+=("'${ITEM}': ${REAL} is already shared by another item")
+            continue
+        fi
+        SOURCES+=("${REAL}")
+        SHARED_FOLDER_ENTRIES+=("${NAME}"$'\t'"${REAL}"$'\t'"${LEPTON_SHARED_GUEST_ROOT}/${NAME}"$'\t'"${MODE}"$'\t'ok$'\t'custom)
+    done
+}
+
+# NAME must be usable as one folder in Android's shared storage, and not one
+# Android keeps. Android refuses FAT-invalid characters.
+function lepton_shared_name_ok()
+{
+    local NAME="$1" ITEM="$2"
+    if [[ -z "${NAME}" || "${NAME}" == [.\ -]* || "${NAME}" == *' ' ||
+          "${NAME}" == *[[:cntrl:]/\\:*?\"\<\>\|,]* || ${#NAME} -gt 64 ]]; then
+        ERRORS+=("'${ITEM}': '${NAME}' can't be a shared-storage folder name. Give a plain name, as Name=/path (no / \\ : * ? \" < > |, not starting with . or -, at most 64 characters)")
+        return 1
+    fi
+    if lepton_array_has "${NAME,,}" "${LEPTON_SHARED_RESERVED_NAMES[@]}"; then
+        ERRORS+=("'${ITEM}': ${NAME} is kept for Android's app data; give it another name, as Books=/path")
+        return 1
+    fi
+}
+
+# HOST (an existing path, which may be a symlink) must be a folder you can
+# open whose real location may be shared. LABEL starts each error. Only HOST
+# itself is resolved: links inside the folder are not followed or mounted.
+# Inside the container they resolve against the container's own files.
+function lepton_shared_folder_ok()
+{
+    local HOST="$1" LABEL="$2" REAL
+    if [[ ! -d "${HOST}" ]]; then
+        ERRORS+=("${LABEL}: ${HOST} is not a folder")
+        return 1
+    fi
+    if [[ ! -r "${HOST}" || ! -x "${HOST}" ]]; then
+        ERRORS+=("${LABEL}: you don't have permission to open ${HOST}")
+        return 1
+    fi
+    REAL="$(realpath -e -- "${HOST}")"
+    if [[ "${REAL}" == *[[:cntrl:]\",]* ]]; then
+        ERRORS+=("${LABEL}: ${HOST} leads to ${REAL}, whose name can't be shared")
+        return 1
+    fi
+    lepton_shared_host_ok "${REAL}" "${LABEL}"
+}
+
+# Real folders that must not be shared: the whole system, home or a drive
+# list; system and settings folders; and Lepton's own data. The caller's
+# HOME_REAL and PROTECTED are used when set.
+function lepton_shared_host_ok()
+{
+    local REAL="$1" LABEL="$2" TOP="${1#/}" HOME_R="${HOME_REAL:-$(realpath -m -- "${HOME}")}" P
+    TOP="/${TOP%%/*}"
+    if [[ "${REAL}" == / || "${REAL}" == "${HOME_R}" || "${HOME_R}" == "${REAL}/"* ]]; then
+        ERRORS+=("${LABEL}: ${REAL} holds your whole home folder; share a folder inside it")
+        return 1
+    fi
+    case "${REAL}" in
+        /mnt|/media|/run/media|/var/mnt|/home|/var/home|/run/media/*)
+            if [[ "${REAL}" != /run/media/*/* ]]; then
+                ERRORS+=("${LABEL}: ${REAL} lists whole drives or homes; share a folder on one"); return 1
+            fi ;;
+    esac
+    case "${TOP}" in
+        /proc|/sys|/dev|/boot|/efi|/etc|/usr|/bin|/sbin|/lib|/lib32|/lib64|/root)
+            ERRORS+=("${LABEL}: ${REAL} is a system folder"); return 1 ;;
+        /run)
+            if [[ "${REAL}" != /run/media/?*/?* ]]; then
+                ERRORS+=("${LABEL}: ${REAL} is a system folder; drives are under /run/media/<user>/<drive>"); return 1
+            fi ;;
+        /var)
+            if [[ "${REAL}" != /var/home/?* && "${REAL}" != /var/mnt/?* ]]; then
+                ERRORS+=("${LABEL}: ${REAL} is a system folder"); return 1
+            fi ;;
+    esac
+    if [[ "${REAL}" == "${HOME_R}/."* ]]; then
+        ERRORS+=("${LABEL}: ${REAL} is inside a hidden folder of your home, which holds settings and keys"); return 1
+    fi
+    for P in "${PROTECTED[@]}"; do
+        if [[ "${REAL}" == "${P}" || "${REAL}" == "${P}/"* || "${P}" == "${REAL}/"* ]]; then
+            ERRORS+=("${LABEL}: ${REAL} holds Lepton's own data (${P}); share a folder that doesn't")
+            return 1
+        fi
+    done
+}
+
+# Remove DIR if it is an empty folder Android made. MediaProvider's own marker
+# (.thumbnails/.database_uuid and nothing else) counts as empty; any other
+# content, including real thumbnails, keeps the folder.
+function remove_empty_android_folder()
+{
+    local DIR="$1"
+    [[ -d "${DIR}" && ! -L "${DIR}" ]] || return 1
+    if [[ -d "${DIR}/.thumbnails" && ! -L "${DIR}/.thumbnails" &&
+          -f "${DIR}/.thumbnails/.database_uuid" && ! -L "${DIR}/.thumbnails/.database_uuid" &&
+          "$(ls -A -- "${DIR}")" == .thumbnails && "$(ls -A -- "${DIR}/.thumbnails")" == .database_uuid ]]; then
+        rm -f -- "${DIR}/.thumbnails/.database_uuid" && rmdir -- "${DIR}/.thumbnails" || return 1
+    fi
+    rmdir -- "${DIR}" 2>/dev/null
+}
+
+# Share HOST as shared-storage folder LINK: mount it at GUEST with MODE and
+# point LINK at GUEST. Never moves or deletes user data: only an empty real
+# folder, such as one Android created while sharing was off, is replaced by
+# the link. A folder with files in it stays private to Android and the launch
+# continues.
+function share_host_folder()
+{
+    local HOST="$1" LINK="$2" GUEST="$3" MODE="$4"
+    if [[ -d "${LINK}" && ! -L "${LINK}" ]] && ! remove_empty_android_folder "${LINK}"; then
+        println "Shared folder ${LINK##*/} not linked to ${HOST}: Android's own ${LINK##*/} folder has files, so it is kept. Move them out to share ${HOST}." >&2
+        return 0
+    fi
+    safe_storage_link "${GUEST}" "${LINK}" || die "Shared storage preserved; launch stopped"
+    podman_mount_entry "${HOST}" "${GUEST}" "${MODE}"
+}
+
+# Is LINK (in shared storage) a link Lepton made for a shared folder?
+function lepton_shared_link_is_ours()
+{
+    local LINK="$1" NAME="${1##*/}" TARGET PAIR
+    [[ -L "${LINK}" ]] || return 1
+    TARGET="$(readlink -- "${LINK}")"
+    [[ "${TARGET}" == "${LEPTON_SHARED_GUEST_ROOT}/${NAME}" ]] && return 0
+    for PAIR in "${LEPTON_SHARED_LEGACY_LINKS[@]}"; do
+        [[ "${NAME}" == "${PAIR%%:*}" && "${TARGET}" == "${HOME}/${PAIR#*:}" ]] && return 0
+    done
+    return 1
+}
+
+# Bring shared storage folder TARGET (the profile's /data/media/0) in line
+# with LEPTON_SHARED_FOLDERS. Checks the whole option, and every link it would
+# change, before changing anything.
+function setup_shared_folders()
+{
+    local TARGET="$1" ENTRY NAME HOST GUEST MODE STATE KIND LINK
+    local SHARED_FOLDER_ENTRIES=() ACTIVE=() PROBLEMS=() DEFAULT_NAMES=() PAIR
+    lepton_shared_folder_entries || die "Launch stopped: fix the LEPTON_SHARED_FOLDERS launch option. Shared folders unchanged."
+    for PAIR in "${LEPTON_SHARED_FOLDER_DEFAULTS[@]}"; do DEFAULT_NAMES+=("${PAIR%%:*}"); done
+
+    # A link that is not Lepton's, where a folder is to be shared, would stop
+    # the launch halfway; find all of them first.
+    for ENTRY in "${SHARED_FOLDER_ENTRIES[@]}"; do
+        IFS=$'\t' read -r NAME HOST GUEST MODE STATE KIND <<< "${ENTRY}"
+        ACTIVE+=("${NAME}")
+        LINK="${TARGET}/${NAME}"
+        if [[ "${STATE}" == ok && -L "${LINK}" ]] && ! lepton_shared_link_is_ours "${LINK}"; then
+            PROBLEMS+=("${LINK} links to $(readlink -- "${LINK}"), not ${GUEST}")
+        fi
+    done
+    if ((${#PROBLEMS[@]})); then
+        local PROBLEM
+        for PROBLEM in "${PROBLEMS[@]}"; do
+            println "ERROR: unexpected storage link retained: ${PROBLEM}; inspect it before changing storage mapping" >&2
+        done
+        lepton_tell_player_shared "a link in its Android shared storage was not made by this Lepton tool" \
+            "A newer Lepton tool may have made it: select that tool again, or remove the link (only the link, not the folder it points to) and launch again." \
+            "${PROBLEMS[@]}"
+        die "Shared storage preserved; launch stopped"
+    fi
+
+    # Lepton's links for folders no longer shared.
+    for LINK in "${TARGET}"/*; do
+        [[ -L "${LINK}" ]] || continue
+        NAME="${LINK##*/}"
+        lepton_array_has "${NAME}" "${ACTIVE[@]}" && continue
+        if lepton_shared_link_is_ours "${LINK}"; then
+            rm -f -- "${LINK}"
+            println "Shared folder off: ${NAME} is no longer shared"
+        elif lepton_array_has "${NAME}" "${DEFAULT_NAMES[@]}"; then
+            println "WARNING: shared folder ${NAME} left unchanged: it links to $(readlink -- "${LINK}"), which Lepton did not make" >&2
+        fi
+    done
+
+    for ENTRY in "${SHARED_FOLDER_ENTRIES[@]}"; do
+        IFS=$'\t' read -r NAME HOST GUEST MODE STATE KIND <<< "${ENTRY}"
+        LINK="${TARGET}/${NAME}"
+        case "${STATE}" in
+            absent) continue ;;
+            missing)
+                println "WARNING: shared folder ${NAME}: ${HOST} is not there (a drive not connected?), so it is not shared this launch. Nothing was changed." >&2
+                continue ;;
+        esac
+        # Default folders shared read-write stay quiet, as they always were.
+        if [[ "${KIND}" == custom || "${MODE}" == ro ]]; then
+            println "Shared folder ${NAME}: ${HOST} ($([[ "${MODE}" == ro ]] && print read-only || print read-write))"
+        fi
+        if [[ -L "${LINK}" && "$(readlink -- "${LINK}")" != "${GUEST}" ]]; then
+            # Lepton's link from before /lepton/shared (checked above).
+            rm -f -- "${LINK}"
+            println "Shared folder ${NAME}: link updated to ${GUEST}"
+        fi
+        share_host_folder "${HOST}" "${LINK}" "${GUEST}" "${MODE}"
+    done
+
+    # Android makes its standard folders only when shared storage is first
+    # set up, and remakes just the ones its media index writes to (Movies,
+    # Music, Pictures). A default folder that is not shared, or no longer is,
+    # gets an empty folder of Android's own, as on a phone; share_host_folder
+    # replaces it with the link if the folder is shared again.
+    for NAME in "${DEFAULT_NAMES[@]}"; do
+        LINK="${TARGET}/${NAME}"
+        [[ -e "${LINK}" || -L "${LINK}" ]] && continue
+        mkdir -m 0700 -- "${LINK}"
+    done
 }
 
 function setup_mounts()
@@ -166,15 +745,7 @@ function setup_mounts()
         else
             mkdir -p "${TARGET_PATH}"
         fi
-        if [[ -d "${HOME}/Documents" ]]; then
-            safe_storage_link "${HOME}/Documents" "${TARGET_PATH}/Documents" || die "Shared storage preserved; launch stopped"
-        fi
-        if [[ -d "${HOME}/Downloads" ]]; then
-            safe_storage_link "${HOME}/Downloads" "${TARGET_PATH}/Download" || die "Shared storage preserved; launch stopped"
-        fi
-        if [[ -d "${HOME}/Videos" ]]; then
-            safe_storage_link "${HOME}/Videos" "${TARGET_PATH}/Movies" || die "Shared storage preserved; launch stopped"
-        fi
+        setup_shared_folders "${TARGET_PATH}"
         if [[ -d "${STEAM_COMPAT_DATA_PATH:-}" ]]; then
             local GUEST_EXTERNAL_PATH="${STEAM_COMPAT_DATA_PATH}/external"
             if [[ -n "${LEPTON_PROFILE_EXTERNAL_STORAGE:-}" ]]; then
@@ -183,12 +754,17 @@ function setup_mounts()
                 # stored on host /mnt need a guest alias outside that subtree.
                 GUEST_EXTERNAL_PATH="$LEPTON_PROFILE_EXTERNAL_STORAGE"
                 podman_mount_entry "${STEAM_COMPAT_DATA_PATH}/external" "$GUEST_EXTERNAL_PATH" rw
+            elif ! host_path_in_container "${GUEST_EXTERNAL_PATH}"; then
+                # x86_64 port: profiles outside Steam's folders (lepton-play)
+                # are not otherwise mounted, which left /data/media/0 dangling:
+                # no shared storage and no OBB link. Mount it at its own path
+                # so the existing link stays valid.
+                [[ "${GUEST_EXTERNAL_PATH}" != /mnt/* ]] ||
+                    println "WARNING: Android hides host /mnt; shared storage for a profile in ${STEAM_COMPAT_DATA_PATH} will not work. Keep the profile outside /mnt." >&2
+                podman_mount_entry "${GUEST_EXTERNAL_PATH}" "${GUEST_EXTERNAL_PATH}" rw
             fi
             safe_storage_link "$GUEST_EXTERNAL_PATH" "$(data_mount_path)/media/0" || die "Shared storage preserved; launch stopped"
         fi
-        podman_mount_entry_optional "${HOME}/Documents" "${HOME}/Documents" rw
-        podman_mount_entry_optional "${HOME}/Videos" "${HOME}/Videos" rw
-        podman_mount_entry_optional "${HOME}/Downloads" "${HOME}/Downloads" rw
     fi
 
     if steamos_devmode_enabled; then

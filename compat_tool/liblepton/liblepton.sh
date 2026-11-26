@@ -732,8 +732,13 @@ function auto_install_apps()
 # STEAM_COMPAT_LIBRARY_PATHS), i.e. Android can read it directly.
 function apk_path_in_container()
 {
+    host_path_in_container "$@"
+}
+
+function host_path_in_container()
+{
     local path root roots=()
-    # install_app passes the resolved APK path; Android must see exactly it.
+    # Callers pass the path Android must see exactly (install_app: the resolved APK).
     path="$(realpath -s -m -- "$1")"
     [[ -z "${STEAM_COMPAT_CLIENT_INSTALL_PATH:-}" ]] || roots+=("${STEAM_COMPAT_CLIENT_INSTALL_PATH}")
     local library_paths=()
