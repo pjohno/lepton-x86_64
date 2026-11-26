@@ -23,7 +23,7 @@
 * `LEPTON_CODEC2` defaults to automatic selection on Android 14 x86_64: `blob` for software rendering, AMD images with patch 0013 or Intel images with patches 0013 and 0014, otherwise `heap` when the host DMA-BUF system heap is readable/writable, otherwise `off`. `false` disables Codec2; `true` forces experimental BLOB allocation and can crash older AMD allocators or fail on Intel images without patch 0014. Mode names are outputs, not values for this variable. Ordinary PCM game audio is independent; AVC/video output remains unresolved. See [media decoder selection](../GAPPS.md#media-decoder-selection).
 * `LEPTON_VIDEO_HWACCEL=true` enables experimental hardware video decoding (VA-API) on Android 14 x86_64 images that contain the Codec2 FFmpeg service: FFmpeg's video decoders are ranked ahead of Android's software ones, and decode on the GPU gralloc uses. Off by default; refused under software rendering or with Codec2 off. Audio keeps Android's decoders. See [video-vaapi.md](../image-14/docs/video-vaapi.md).
 * `LEPTON_VIDEO_HWACCEL_OUTPUT=direct|copyback` (with `LEPTON_VIDEO_HWACCEL=true`) chooses how hardware-decoded frames reach Android: `direct` (default) has the GPU convert each frame straight into Android's buffer, which played 4K60 10-bit at full rate on the tested Intel, AMD and Steam Deck GPUs; `copyback` downloads and converts each frame on the CPU. Images without direct output use `copyback`, and the service switches a session to `copyback` by itself if direct output fails.
-* `LEPTON_SHARED_FOLDERS` chooses which host folders appear in the game's Android shared storage: by default your Documents, Downloads, Videos, Music and Pictures folders, or any folders you name, or none. See [Shared folders](#shared-folders).
+* `LEPTON_SHARED_FOLDERS` chooses which host folders appear in the game's Android shared storage: by default your Documents, Downloads, Videos, Music and Pictures folders; folders you give are added to them, and naming default folders (or `none`) chooses which of those are kept. See [Shared folders](#shared-folders).
 * `LEPTON_DMA_HEAP_DEVICE` overrides `/dev/dma_heap/system` for diagnostics/tests. Automatic heap selection requires a readable/writable character device; leave unset normally.
 * `LEPTON_PREFIX` supplies an external scratch directory. The launcher never owns or deletes a supplied prefix, including `/tmp/lepton-context.*`. Internally created prefixes always use `/tmp` regardless of `TMPDIR`; containers using the prefix or uncertain inspection/mount state prevent deletion. Persistent Android profiles are separate and retained by ordinary cleanup.
 * ```LEPTON_LOCK_TIMEOUT``` maximum time in seconds to wait for the per-user `lepton.lock` (default 10). Initial acquisition and later re-acquisitions stop the command on failure; a timeout of 0 makes acquisition nonblocking. See [lock paths and launcher-only deployment](../FEDORA-DEBUGGING.md#per-user-launcher-lock).
@@ -60,29 +60,41 @@ skipped. A folder set to your home folder itself (which is how XDG turns a
 folder off) is never shared; the log says so. Desktop, Public and Templates
 are not shared.
 
+Two rules decide what is shared:
+
+* **Folders you give are added.** A folder path, or the name of a folder in
+  your home, is shared next to the default folders.
+* **Default folder names choose the defaults.** Name one or more of
+  `Documents`, `Downloads`, `Videos`, `Music`, `Pictures` (or the Android
+  names `Download`, `Movies`, in any case) and only those are shared; name
+  none of them and all five are; `none` shares none of them.
+
 | Value | What Android sees |
 | --- | --- |
 | *(unset)* | The five default folders |
+| `Books` or `"~/Books"` | The five default folders, and `~/Books` as `Books` |
+| `"/run/media/deck/SD/Films"` | The five default folders, and that folder as `Films` |
+| `"Library=/run/media/deck/SD/Books"` | The five default folders, and that folder as `Library` |
+| `Music,Pictures` | Only those two default folders |
+| `"Downloads,Books,/mnt/media/Films"` | `Download`, `Books` and `Films` |
+| `"none,Books"` | Only `Books` |
 | `none`, or empty | None of your folders. Android keeps private `Documents`, `Download`, `Movies`, `Music` and `Pictures` folders in the profile |
-| `Music,Pictures` | Only those default folders. Use `Documents`, `Downloads`, `Videos`, `Music`, `Pictures` (or the Android names `Download`, `Movies`), in any case |
-| `"~/Books"` | `~/Books` as `Books`. Any folder path starting with `/` or `~/` is shown under its last name |
-| `"Library=/run/media/deck/SD/Books"` | That folder, shown as `Library` |
-| `"Music=/mnt/Media/Music"` | That folder as `Music`, in place of your Music folder |
-| `"Downloads,~/Books,/mnt/media/Films"` | `Download`, `Books` and `Films` |
-| `"~/Books:ro"`, `Downloads:ro` | Read-only: Android can open the files but not change, add or delete them |
+| `"Music=/mnt/Media/Music"` | The default folders, with that folder as `Music` in place of your Music folder |
+| `"Books:ro"`, `Downloads:ro` | Read-only: Android can open the files but not change, add or delete them |
 
 Examples, as Steam launch options:
 
 ```bash
+LEPTON_SHARED_FOLDERS=Books %command%
+LEPTON_SHARED_FOLDERS="/run/media/deck/SD/Films" %command%
+LEPTON_SHARED_FOLDERS="Music,Pictures,Books" %command%
 LEPTON_SHARED_FOLDERS=none %command%
-LEPTON_SHARED_FOLDERS="Music,Pictures,~/Books" %command%
-LEPTON_SHARED_FOLDERS="Library=/mnt/Media/Books:ro" %command%
 ```
 
 and with `lepton-play`:
 
 ```bash
-LEPTON_SHARED_FOLDERS="Documents,~/Books" lepton-play game.apk
+LEPTON_SHARED_FOLDERS="Documents,Books" lepton-play game.apk
 ```
 
 Writing the value:
@@ -91,6 +103,10 @@ Writing the value:
   a path has spaces; the spaces are part of the path. The default folder
   names may also be separated by spaces (`"Documents Videos"`), but paths
   always need commas. Paths cannot contain commas or `"`.
+* A name alone that isn't a default folder (`Books`, `My Comics`) is that
+  folder in your home. It must exist: if it doesn't, perhaps a misspelt
+  default folder name, the launch stops and says so. For a folder anywhere
+  else, give its path.
 * `~/` means your home folder. Lepton expands it itself, so it works inside
   quotes.
 * Any folder you can open works: inside or outside your home folder, on an
@@ -102,7 +118,11 @@ Writing the value:
   `Name=/path`. Names are compared without regard to case, as Android does.
 * `Android` can't be used: it holds app data and OBB files. A default
   folder's name can be given to a path, which then replaces that default
-  folder; listing both (`Music,Music=/x`) is a mistake.
+  folder; listing both (`Music,Music=/x`) is a mistake. Giving a default
+  folder by its path (`~/Downloads`) shares it under that folder's own name
+  (`Downloads`) in place of the default one.
+* When a launch is stopped because of the setting, the popup lists each
+  problem and the value that was used; nothing has been changed.
 
 ## What can't be shared
 

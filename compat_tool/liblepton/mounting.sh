@@ -46,9 +46,14 @@ function safe_storage_link()
     if [[ -L "$LINK" ]]; then
         [[ "$(readlink -- "$LINK")" == "$TARGET" ]] && return 0
         println "ERROR: unexpected storage link retained: $LINK; inspect it before changing storage mapping" >&2
+        lepton_tell_player_shared "a link in its Android shared storage was not made by this Lepton tool" \
+            "Remove the link (only the link, not the folder it points to) and launch again." \
+            "$LINK links to $(readlink -- "$LINK"), not $TARGET"
         return 1
     elif [[ -e "$LINK" ]]; then
         println "ERROR: real storage path retained: $LINK; back it up and resolve the mapping manually" >&2
+        lepton_tell_player_shared "a file or folder is in the way in its Android shared storage" \
+            "Back it up and move it out of the way, then launch again." "$LINK"
         return 1
     fi
     ln -s -- "$TARGET" "$LINK"
@@ -128,45 +133,68 @@ function lepton_xdg_user_dir()
 function lepton_shared_folder_entries()
 {
     SHARED_FOLDER_ENTRIES=()
-    local DEFAULTS=() ERRORS=() NAMES=() SOURCES=() CUSTOM_ITEMS=()
-    local PROTECTED=() HOME_REAL
+    local DEFAULTS=() ERRORS=() NAMES=() SOURCES=() CUSTOM_ITEMS=() CUSTOM_BARE=()
+    local PROTECTED=() HOME_REAL SELECTED=false
     HOME_REAL="$(realpath -m -- "${HOME}")"
     lepton_shared_protected_paths
-    if [[ ! -v LEPTON_SHARED_FOLDERS ]]; then
-        DEFAULTS=(Documents:rw:implicit Download:rw:implicit Movies:rw:implicit
-                  Music:rw:implicit Pictures:rw:implicit)
-    elif [[ "${LEPTON_SHARED_FOLDERS}" == *[[:cntrl:]]* ]]; then
+    if [[ "${LEPTON_SHARED_FOLDERS:-}" == *[[:cntrl:]]* ]]; then
         ERRORS+=("it contains a control character (such as a line break)")
-    else
-        local PART PARTS=() WORD WORDS=() MODE
+    elif [[ -v LEPTON_SHARED_FOLDERS ]]; then
+        # An empty value is the same as none.
+        [[ -n "$(lepton_trim "${LEPTON_SHARED_FOLDERS}")" ]] || SELECTED=true
+        local PART PARTS=() WORD WORDS=() MODE KNOWN
         IFS=',' read -ra PARTS <<< "${LEPTON_SHARED_FOLDERS}"
         for PART in "${PARTS[@]}"; do
             PART="$(lepton_trim "${PART}")"
             [[ -n "${PART}" ]] || continue
             if [[ "${PART}" == [/~]* || "${PART}" == *=* ]]; then
-                CUSTOM_ITEMS+=("${PART}")
+                CUSTOM_ITEMS+=("${PART}"); CUSTOM_BARE+=(false)
                 continue
             fi
             read -ra WORDS <<< "${PART}"
+            # Several words are default folder names separated by spaces (the
+            # original syntax) only if every one is; otherwise the item is one
+            # folder name with spaces in it, such as My Comics.
+            if ((${#WORDS[@]} > 1)); then
+                KNOWN=true
+                for WORD in "${WORDS[@]}"; do
+                    lepton_shared_default_word "${WORD}" > /dev/null || KNOWN=false
+                done
+                if [[ "${KNOWN}" == false && " ${PART}" == *" "[/~]* ]]; then
+                    ERRORS+=("'${PART}': separate folder paths from other items with commas")
+                    continue
+                fi
+                if [[ "${KNOWN}" == false ]]; then
+                    CUSTOM_ITEMS+=("${PART}"); CUSTOM_BARE+=(true)
+                    continue
+                fi
+            fi
             for WORD in "${WORDS[@]}"; do
-                MODE=rw
-                case "${WORD,,}" in
-                    *:ro) MODE=ro; WORD="${WORD:0:${#WORD}-3}" ;;
-                    *:rw) WORD="${WORD:0:${#WORD}-3}" ;;
-                esac
-                case "${WORD,,}" in
-                    none) ;;
-                    documents) DEFAULTS+=("Documents:${MODE}:named") ;;
-                    download|downloads) DEFAULTS+=("Download:${MODE}:named") ;;
-                    movies|videos) DEFAULTS+=("Movies:${MODE}:named") ;;
-                    music) DEFAULTS+=("Music:${MODE}:named") ;;
-                    pictures) DEFAULTS+=("Pictures:${MODE}:named") ;;
-                    */*|*=*) ERRORS+=("'${PART}': separate folder paths from other items with commas") ;;
-                    *) ERRORS+=("unknown folder '${WORD}'. Use Documents, Downloads, Videos, Music, Pictures, none, or a folder path such as ~/${WORD}") ;;
-                esac
+                if [[ "${WORD,,}" == none ]]; then
+                    SELECTED=true
+                elif [[ "${WORD,,}" == none:r[ow] ]]; then
+                    ERRORS+=("'${WORD}': none can't be read-only or read-write")
+                elif KNOWN="$(lepton_shared_default_word "${WORD}")"; then
+                    SELECTED=true
+                    DEFAULTS+=("${KNOWN}:named")
+                else
+                    # A folder in your home, by its name alone.
+                    CUSTOM_ITEMS+=("${WORD}"); CUSTOM_BARE+=(true)
+                fi
             done
         done
     fi
+    # Naming no default folder (and not none) keeps all five; the folders
+    # given are shared as well. A folder given under a default folder's name
+    # (Music=/mnt/Music, ~/Music), or the same host folder, replaces it.
+    if [[ "${SELECTED}" == false ]]; then
+        local PAIR
+        for PAIR in "${LEPTON_SHARED_FOLDER_DEFAULTS[@]}"; do
+            DEFAULTS+=("${PAIR%%:*}:rw:implicit")
+        done
+    fi
+    local CUSTOM_NAMES=() CUSTOM_REALS=()
+    lepton_shared_custom_names
     lepton_shared_check_defaults
     lepton_shared_check_custom
 
@@ -175,9 +203,71 @@ function lepton_shared_folder_entries()
         for ERROR in "${ERRORS[@]}"; do
             println "ERROR: LEPTON_SHARED_FOLDERS: ${ERROR}" >&2
         done
+        lepton_tell_player_shared "its LEPTON_SHARED_FOLDERS launch option has a problem" \
+            "Fix the option in the game's Properties > General > Launch Options. Value: ${LEPTON_SHARED_FOLDERS:-}" \
+            "${ERRORS[@]}"
         SHARED_FOLDER_ENTRIES=()
         return 1
     fi
+}
+
+# Print "Name:mode" for a default folder name (any case, Android names too,
+# optional :ro or :rw), or return 1.
+function lepton_shared_default_word()
+{
+    local WORD="$1" MODE=rw
+    case "${WORD,,}" in
+        *:ro) MODE=ro; WORD="${WORD:0:${#WORD}-3}" ;;
+        *:rw) WORD="${WORD:0:${#WORD}-3}" ;;
+    esac
+    case "${WORD,,}" in
+        documents) print "Documents:${MODE}" ;;
+        download|downloads) print "Download:${MODE}" ;;
+        movies|videos) print "Movies:${MODE}" ;;
+        music) print "Music:${MODE}" ;;
+        pictures) print "Pictures:${MODE}" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Tell the player (the launch popup) why shared folders stopped the launch:
+# SUMMARY, the problems (one per line, at most 6), then ADVICE. The log has
+# the same lines.
+function lepton_tell_player_shared()
+{
+    local SUMMARY="$1" ADVICE="$2" GAME LINES=() PROBLEM
+    shift 2
+    GAME="$(lepton_session_name 2>/dev/null)" || GAME=""
+    for PROBLEM in "${@:1:6}"; do LINES+=("• ${PROBLEM}"); done
+    (($# <= 6)) || LINES+=("• ... and $(($# - 6)) more (see the log)")
+    lepton_tell_player "${GAME:-The game} can't start: ${SUMMARY}. Nothing was changed.
+" "${LINES[@]}" "
+${ADVICE}"
+}
+
+# lepton_shared_folder_entries helper: the shared-storage names (lower case)
+# and real host folders of the folder items, so that a default folder they
+# replace is left out rather than reported as a clash. Errors in the items
+# are left to lepton_shared_check_custom.
+function lepton_shared_custom_names()
+{
+    local I ITEM PATH_GIVEN NAME
+    for I in "${!CUSTOM_ITEMS[@]}"; do
+        ITEM="${CUSTOM_ITEMS[I]}"
+        case "${ITEM,,}" in *:ro|*:rw) ITEM="${ITEM:0:${#ITEM}-3}" ;; esac
+        NAME="" PATH_GIVEN="${ITEM}"
+        if [[ "${CUSTOM_BARE[I]}" == true ]]; then
+            NAME="${ITEM}" PATH_GIVEN="${HOME}/${ITEM}"
+        elif [[ "${ITEM}" != [/~]* ]]; then
+            NAME="$(lepton_trim "${ITEM%%=*}")"
+            PATH_GIVEN="$(lepton_trim "${ITEM#*=}")"
+        fi
+        [[ "${PATH_GIVEN}" != "~/"* ]] || PATH_GIVEN="${HOME}${PATH_GIVEN:1}"
+        while [[ "${PATH_GIVEN}" == ?*/ ]]; do PATH_GIVEN="${PATH_GIVEN%/}"; done
+        [[ -n "${NAME}" ]] || NAME="${PATH_GIVEN##*/}"
+        CUSTOM_NAMES+=("${NAME,,}")
+        [[ ! -e "${PATH_GIVEN}" ]] || CUSTOM_REALS+=("$(realpath -e -- "${PATH_GIVEN}" 2>/dev/null)")
+    done
 }
 
 function lepton_trim()
@@ -223,8 +313,14 @@ function lepton_shared_check_defaults()
             ERRORS+=("${NAME} is listed twice")
             continue
         fi
-        NAMES+=("${NAME,,}")
         HOST="$(lepton_xdg_user_dir "${KEY}" "${FALLBACK}")"
+        if [[ "${HOW}" == implicit ]]; then
+            # Replaced by a folder given under its name, or by the same folder
+            # given under another (~/Downloads is shown as Downloads).
+            lepton_array_has "${NAME,,}" "${CUSTOM_NAMES[@]}" && continue
+            [[ -e "${HOST}" ]] && lepton_array_has "$(realpath -m -- "${HOST}")" "${CUSTOM_REALS[@]}" && continue
+        fi
+        NAMES+=("${NAME,,}")
         if [[ ! -e "${HOST}" ]]; then
             # Never created on the host; a relocated one may be on a drive
             # that isn't plugged in. Its link is kept.
@@ -262,14 +358,30 @@ function lepton_shared_check_defaults()
 # (lower-case names and real host folders already taken).
 function lepton_shared_check_custom()
 {
-    local ITEM PATH_GIVEN NAME MODE REAL
-    for ITEM in "${CUSTOM_ITEMS[@]}"; do
+    local I ITEM PATH_GIVEN NAME MODE REAL
+    for I in "${!CUSTOM_ITEMS[@]}"; do
+        ITEM="${CUSTOM_ITEMS[I]}"
         NAME="" MODE=rw PATH_GIVEN="${ITEM}"
         case "${PATH_GIVEN,,}" in
             *:ro) MODE=ro; PATH_GIVEN="${PATH_GIVEN:0:${#PATH_GIVEN}-3}" ;;
             *:rw) PATH_GIVEN="${PATH_GIVEN:0:${#PATH_GIVEN}-3}" ;;
         esac
-        if [[ "${PATH_GIVEN}" != [/~]* ]]; then
+        if [[ "${CUSTOM_BARE[I]}" == true ]]; then
+            # A name alone is a folder in your home, which must be there:
+            # unlike a path, it is not a drive that may be unplugged, and a
+            # misspelt default folder name ends up here.
+            NAME="${PATH_GIVEN}"
+            if [[ "${NAME}" == */* ]]; then
+                ERRORS+=("'${ITEM}': a folder path starts with / or ~/ (~/${NAME} for one in your home folder)")
+                continue
+            fi
+            lepton_shared_name_ok "${NAME}" "${ITEM}" || continue
+            if [[ ! -d "${HOME}/${NAME}" ]]; then
+                ERRORS+=("'${ITEM}': there is no folder ${NAME} in your home folder (${HOME}/${NAME}). Use Documents, Downloads, Videos, Music, Pictures, a folder in your home such as Books, or a full path such as /run/media/${USER:-deck}/<drive>/${NAME}")
+                continue
+            fi
+            PATH_GIVEN="${HOME}/${NAME}"
+        elif [[ "${PATH_GIVEN}" != [/~]* ]]; then
             NAME="$(lepton_trim "${PATH_GIVEN%%=*}")"
             PATH_GIVEN="$(lepton_trim "${PATH_GIVEN#*=}")"
             if [[ "${PATH_GIVEN}" != [/~]* ]]; then
@@ -469,6 +581,9 @@ function setup_shared_folders()
         for PROBLEM in "${PROBLEMS[@]}"; do
             println "ERROR: unexpected storage link retained: ${PROBLEM}; inspect it before changing storage mapping" >&2
         done
+        lepton_tell_player_shared "a link in its Android shared storage was not made by this Lepton tool" \
+            "A newer Lepton tool may have made it: select that tool again, or remove the link (only the link, not the folder it points to) and launch again." \
+            "${PROBLEMS[@]}"
         die "Shared storage preserved; launch stopped"
     fi
 

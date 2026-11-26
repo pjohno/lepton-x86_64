@@ -14,6 +14,7 @@ for fn in podman_cmdline podman_mount_entry podman_mount_entry_optional safe_sto
           lepton_shared_protected_paths lepton_shared_check_defaults lepton_shared_check_custom \
           lepton_shared_name_ok lepton_shared_folder_ok lepton_shared_host_ok \
           remove_empty_android_folder share_host_folder lepton_shared_link_is_ours \
+          lepton_shared_default_word lepton_tell_player_shared lepton_shared_custom_names \
           setup_shared_folders setup_mounts; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/mounting.sh")"
     declare -F "$fn" > /dev/null || { echo "FAIL: $fn not found"; exit 1; }
@@ -27,6 +28,9 @@ eval "$(sed -n '/^function host_path_in_container()/,/^}/p' "$repo/compat_tool/l
 print() { printf '%s' "$*"; }
 println() { printf '%s\n' "$*" >> "$work/messages"; }
 die() { printf 'DIE: %s\n' "$*" >> "$work/messages"; exit 3; }
+# The launch popup: the first message wins, as in utils.sh.
+lepton_tell_player() { [[ -s "$work/popup" ]] || printf '%s\n' "$@" > "$work/popup"; }
+lepton_session_name() { print TestGame; }
 is_app() { return 1; }
 is_app_baked() { return 1; }
 is_sysbake() { return 1; }
@@ -52,7 +56,7 @@ fail() { echo "FAIL: $*"; [[ ! -f "$work/messages" ]] || cat "$work/messages"; e
 
 # Run setup_mounts in a subshell; leave the mount arguments in $work/mounts.
 run_mounts() {
-    : > "$work/messages"
+    : > "$work/messages"; : > "$work/popup"
     ( PODMAN_CMDLINE=(); setup_mounts; printf '%s\n' "${PODMAN_CMDLINE[@]}" > "$work/mounts" )
 }
 mounted() { grep -qxF -- "type=bind,source=$1,destination=$1,rw" "$work/mounts"; }
@@ -164,7 +168,11 @@ rm -f "$ext/Movies"
 # Unknown names stop the launch before anything changes.
 run_mounts
 if LEPTON_SHARED_FOLDERS="Downloads,Photos" run_mounts; then fail "unknown folder name accepted"; fi
-grep -q "unknown folder 'Photos'" "$work/messages" || fail "no message for unknown name"
+grep -q "'Photos': there is no folder Photos in your home folder" "$work/messages" || fail "no message for unknown name"
+# The popup names the game, the problem and the fix, not just "see the log".
+grep -q "^TestGame can't start: its LEPTON_SHARED_FOLDERS launch option has a problem. Nothing was changed." "$work/popup" &&
+    grep -q "^• 'Photos': there is no folder Photos" "$work/popup" &&
+    grep -q "Launch Options. Value: Downloads,Photos$" "$work/popup" || { cat "$work/popup"; fail "popup lacks the problem"; }
 shared Download "$HOME/Downloads" || fail "links changed by invalid option"
 
 # A missing default folder is skipped quietly; its link is kept, and the
@@ -291,11 +299,35 @@ mkdir -p "$books" "$films" "$outside"
 # A single path: shown under its final name.
 LEPTON_SHARED_FOLDERS="$books" run_mounts || fail "single custom path stopped"
 shared Books "$books" || fail "Books not shared at /lepton/shared/Books"
-for d in "${defaults[@]}"; do not_shared "${d%%:*}" || fail "${d%%:*} linked when only a path is listed"; done
+# Naming no default folder keeps all five: folders given are added to them.
+all_defaults_shared || fail "defaults dropped when only a path is listed"
+[[ "$(count_mounts)" == 6 ]] || fail "expected 6 mounts for defaults + Books, got $(count_mounts)"
 grep -qF "Shared folder Books: $books (read-write)" "$work/messages" || fail "no message for custom folder"
 # ~/ is expanded by Lepton (Steam passes it quoted), trailing / ignored.
 LEPTON_SHARED_FOLDERS="~/Books/" run_mounts || fail "~/ path stopped"
 shared Books "$books" || fail "~/Books not shared"
+
+# A name alone is a folder in your home; with spaces it is one name.
+mkdir -p "$HOME/My Comics"
+LEPTON_SHARED_FOLDERS="Books, My Comics:ro" run_mounts || fail "bare home folder names stopped"
+shared Books "$books" && shared "My Comics" "$HOME/My Comics" ro && all_defaults_shared ||
+    fail "bare names not shared next to the defaults"
+# none with folders: only those folders.
+LEPTON_SHARED_FOLDERS="none,Books" run_mounts || fail "none,Books stopped"
+shared Books "$books" || fail "Books not shared with none"
+for d in "${defaults[@]}"; do not_shared "${d%%:*}" || fail "${d%%:*} shared with none,Books"; done
+# A bare name that isn't there stops the launch (it may be a misspelt default).
+if LEPTON_SHARED_FOLDERS="Picture" run_mounts; then fail "missing bare name accepted"; fi
+grep -q "'Picture': there is no folder Picture in your home folder" "$work/messages" || fail "no message for missing bare name"
+# A folder given under a default's name, or the same folder, replaces that
+# default instead of clashing with it.
+LEPTON_SHARED_FOLDERS="~/Downloads" run_mounts || fail "~/Downloads next to the defaults stopped"
+shared Downloads "$HOME/Downloads" && not_shared Download && shared Music "$HOME/Music" ||
+    fail "~/Downloads did not replace the default Download"
+mkdir -p "$work/other/Tunes"
+LEPTON_SHARED_FOLDERS="Music=$work/other/Tunes" run_mounts || fail "Music=path next to the defaults stopped"
+shared Music "$work/other/Tunes" && shared Pictures "$HOME/Pictures" &&
+    [[ "$(grep -c 'destination=/lepton/shared/Music,' "$work/mounts")" == 1 ]] || fail "Music=path did not replace the implicit Music"
 
 # Mixture of default names and paths, with spaces and outside HOME.
 LEPTON_SHARED_FOLDERS="Downloads, $books ,$films,Strips = $outside" run_mounts || fail "mixed list stopped"
@@ -336,7 +368,7 @@ grep -qF "Shared folder Download: $HOME/Downloads (read-only)" "$work/messages" 
 other="$work/other/Books"; mkdir -p "$other"
 LEPTON_SHARED_FOLDERS="$books" run_mounts
 LEPTON_SHARED_FOLDERS="$other" run_mounts || fail "changing Books stopped"
-shared Books "$other" && [[ "$(count_mounts)" == 1 ]] || fail "changed Books mapping"
+shared Books "$other" && [[ "$(grep -c 'destination=/lepton/shared/Books,' "$work/mounts")" == 1 ]] || fail "changed Books mapping"
 ! grep -qF "source=$books," "$work/mounts" || fail "old Books source still mounted"
 # Renaming: the old link goes, the new one appears.
 LEPTON_SHARED_FOLDERS="Novels=$books" run_mounts || fail "renaming stopped"
@@ -437,7 +469,7 @@ invalid() {
     grep -q 'Shared folders unchanged' "$work/messages" || fail "no unchanged message for: $value"
     diff <(snapshot) "$work/links.good" > /dev/null || fail "links changed by invalid option: $value"
 }
-invalid "Downloads,Photos" "unknown folder 'Photos'"
+invalid "Downloads,Photos" "there is no folder Photos in your home folder"
 invalid "$work/a/Books,$work/b/Books" "Books is already used by another item"
 invalid "Downloads,$work/a/Books,books=$work/b/Books" "books is already used"
 invalid "Downloads,Downloads" "Download is listed twice"
@@ -450,7 +482,7 @@ invalid "$work/Android" "is kept for Android"
 invalid ".hidden=$books" "can't be a shared-storage folder name"
 invalid "a:b=$books" "can't be a shared-storage folder name"
 invalid "Books=relative/path" "give a folder path starting with / or ~/"
-invalid "relative/path" "separate folder paths"
+invalid "relative/path" "a folder path starts with / or ~/ (~/relative/path"
 invalid "Downloads $books" "separate folder paths from other items with commas"
 invalid "$HOME/../x" "without . or .. parts"
 invalid "~otheruser/Books" "write ~/ for your home folder"
