@@ -505,6 +505,48 @@ Fossify Gallery, Fossify Music Player, VLC).
 | T22 safety | Works | | `Keys=~/.ssh`, `/home`, `/var/log`, link `~/Keys -> ~/.ssh` stop the launch, nothing changed. `/var/home` and `/run/media/$USER` don't exist here: warned `is not there` and launched, so their refusal is untested on this machine |
 | T23 media apps | | | |
 
+### Round 4: folders are added to the defaults; clearer popups
+
+Round 4 bundle: `--bundle-id v0.4.0-shared-folders-5` (tool
+`lepton_x86_64_v0_4_0_shared_folders_5`). It changes, compared with round 3:
+
+- Folders you give are **added** to the five default folders. Naming default
+  folders (`Music,Pictures`) still shares only those, and `none` none:
+  `"Books"` and `"/run/media/deck/SD/Films"` keep all five defaults;
+  `"Downloads,Books"` shares Download and Books; `"none,Books"` only Books.
+  Round 2/3 tests that expect the defaults to go when only a path is given
+  (T10, T14, T15) now see them stay.
+- A name alone that isn't a default folder is a folder in your home:
+  `Books` is `~/Books`, `My Comics` (with its space) is `~/My Comics`. It
+  must exist, so a misspelt default (`Picture`) stops the launch.
+- A launch stopped by the setting shows the problem in the popup: each
+  problem from the log, the value used, and where to fix it.
+
+#### T24. Adding folders
+
+- [ ] `LEPTON_SHARED_FOLDERS=Books` (make `~/Books` first): Books and all
+  five defaults are shared.
+- [ ] `"/run/media/deck/<card>/Films"`: Films and the five defaults.
+- [ ] `"My Comics"` with quotes (make `~/My Comics`): shared as `My Comics`.
+- [ ] `"Downloads,Books"`: only Download and Books. `"none,Books"`: only Books.
+
+#### T25. Popups
+
+Each must stop the launch and show a popup naming the problem, the value
+and Properties > General > Launch Options; nothing changes:
+
+- [ ] `Picture` (a typo): `there is no folder Picture in your home folder`.
+- [ ] `"/etc,Android=~/Books"`: both problems listed in one popup.
+- [ ] In Gaming Mode the popup is readable (size, line breaks).
+
+#### Round 4 results
+
+| Test | Desktop (Fedora) | Steam Deck | Notes |
+| --- | --- | --- | --- |
+| Host test | PASS (SKIP /mnt) | | |
+| T24 adding | Works | | Intel, `lepton-play`: `Books`, `~/lepton-sf/Films` (defaults kept), `none,Books` (only Books) |
+| T25 popups | Works | | Intel desktop popup text checked: typo, and two problems in one popup with the value |
+
 ## 3. Results
 
 | Test            | Desktop (Fedora)         | Steam Deck   | Notes                                                                                                                                                                                                                                                    |
@@ -521,7 +563,7 @@ Fossify Gallery, Fossify Music Player, VLC).
 | T9 questions    |                          |              |                                                                                                                                                                                                                                                          |
 | T10 ~/Books | Works |              | `~/Books` and `$HOME/Books` (env, not Steam). Only Books shared; Android write reached host as the user. Documents/Download then missing from the profile (see notes below) |
 | T11 spaces | Works |              | `~/My Comics` shared (quoted). Unquoted Steam form not tested (no Steam) |
-| T12 SD card     | n/a                      |              |                                                                                                                                                                                                                                                          |
+| T12 SD card | n/a | Works | Deck, bundle -4. Expected the listed folder to be added to the defaults, and a bare home folder name to work: led to round 4 |
 | T13 ext. drive  |                          | n/a          |                                                                                                                                                                                                                                                          |
 | T14 several, ro | Works |              | Four shared; `My Comics:ro` rw=false, `(read-only)` logged, write and delete refused (Read-only file system), host unchanged; `Downloads:ro` read-only |
 | T15 changes | Works |              | Off messages, `Library` rename and re-point, back to defaults, second default launch silent; own link `MyLink -> /tmp` kept |
