@@ -130,16 +130,9 @@ Use the file manager shortcut with no `LEPTON_SHARED_FOLDERS`.
 
 Same shortcut, launched after T1.
 
-> **Round 1 Fedora result needs a re-check.** The note recorded for T2 is a
-> listing with `Documents`, `Download` and `Movies` as links (`lrwxrwxrwx ...
-> -> /home/paulwork/...`). That is what T1 (default) should show. With
-> `none`, those three must be real directories (`drwx------`), not links. If
-> that listing came from the `none` launch, sharing was not turned off, and
-> T2 fails. Re-run T2 on Fedora: check the launch option was saved, run the
-> `ls -la /data/media/0/` command above while the game is open, and record
-> whether the three entries start with `l` or `d`. Also check the log for
-> `Shared folder off: ...` lines, which appear on the first `none` launch
-> after a default launch.
+> Round 1 Fedora note: the listing recorded for T2 was taken with sharing
+> on (default), to show the links' permissions. It is not a T2 result; T2
+> itself passed.
 
 - [ ] The log shows `Shared folder off: Documents`, `Download` and `Movies`.
 - [ ] None of the three host folders is in the mount list; no links under
@@ -383,6 +376,135 @@ With `"~/Books,$SD/Films"` (Deck) or `"~/Books,$USB/Films"` (desktop):
   no option and with `"~/Books"`; its existing `Documents`/`Download`/`Movies`
   links keep working.
 
+### Round 3: five default folders, XDG folders, safety
+
+Round 3 bundle: same command as above with `--bundle-id v0.4.0-shared-folders-3`
+(tool `lepton_x86_64_v0_4_0_shared_folders_3`). It changes, compared with
+round 2:
+
+- Defaults are five folders: Documents, Downloads, Videos, **Music** and
+  **Pictures**, taken from `~/.config/user-dirs.dirs` when it sets them
+  (translated or moved folders), otherwise `~/Music` etc. Missing ones are
+  not created.
+- Every shared folder, default ones included, is now mounted at
+  `/lepton/shared/<Name>`; the link in `/data/media/0` points there. Links
+  made by round 1/2 (`Download -> /home/<you>/Downloads`) are replaced at the
+  next launch; the log says `link updated`.
+- `Music`, `Pictures`, `Documents`, `Download`, `Movies` can be given to a
+  path (`Music=/mnt/Media/Music`) in place of the default; only `Android`
+  is refused.
+- More folders are refused: `/home`, `/var` (other than `/var/home`,
+  `/var/mnt`), `/mnt` and `/run/media/<user>` themselves, hidden folders in
+  your home (`~/.ssh`, `~/.local`, ...), and Lepton's own data and
+  installation.
+
+In the inspection commands, the mount list now shows
+`<host folder> -> /lepton/shared/<Name>` for the default folders too, and
+`grep -E 'Shared folder|shared folder|link updated'` covers the new
+messages.
+
+Check what your desktop has configured first, and record it in the notes:
+
+```bash
+cat ~/.config/user-dirs.dirs 2>/dev/null | grep -v '^#'
+for d in DOCUMENTS DOWNLOAD VIDEOS MUSIC PICTURES; do printf '%s: ' $d; xdg-user-dir $d; done
+```
+
+#### T19. Five default folders on an existing profile
+
+Use a shortcut that ran with round 1 or 2 and the default setting (the file
+manager from T1). Put a marker in Music and Pictures first:
+`echo host > ~/Music/lepton-test-music.txt; echo host > ~/Pictures/lepton-test-pictures.txt`.
+
+- [ ] Launch with no option. All five are links to `/lepton/shared/<Name>`;
+  the log shows `link updated` for Documents, Download and Movies, once.
+- [ ] `Music` and `Pictures`: if Android's own folders were empty, they are
+  now links and the file manager shows the marker files. If either held
+  files (a game's saves or screenshots), it is kept, the log says
+  `Shared folder Music not linked ... has files, so it is kept`, and the
+  game starts. Record which happened.
+- [ ] Launch again: no `link updated`, nothing changes.
+- [ ] `LEPTON_SHARED_FOLDERS="Documents Videos Downloads"` (round 1's three):
+  Music and Pictures go (`Shared folder off: Music ...`), the others stay.
+
+#### T20. XDG folders
+
+Desktop. Do this with a copy of the file and restore it afterwards:
+`cp ~/.config/user-dirs.dirs ~/user-dirs.dirs.bak`. Log out and back in is
+not needed: Lepton reads the file at each launch.
+
+1. Moved folder: `mkdir -p ~/Media/Tunes`, set
+   `XDG_MUSIC_DIR="$HOME/Media/Tunes"`, launch with no option.
+   - [ ] `Music` shows `~/Media/Tunes`.
+2. Folder on another drive: set `XDG_PICTURES_DIR="/run/media/$USER/<drive>/Pictures"`
+   (make it first), launch.
+   - [ ] `Pictures` shows the drive's folder. Unplug the drive, launch: the
+     game starts, `Pictures` keeps its link, nothing is created at that path.
+3. Turned off: set `XDG_VIDEOS_DIR="$HOME/"`, launch with no option.
+   - [ ] `Movies` is not shared; the log warns `your Movies folder is set to
+     your home folder`; the mount list has no mount of your home folder.
+   - [ ] With `LEPTON_SHARED_FOLDERS=Videos` the launch stops with that
+     message instead, and nothing changes.
+4. Protected: set `XDG_DOCUMENTS_DIR="/etc"`, launch with no option.
+   - [ ] `Documents` is not shared, with a warning; the game starts.
+5. Translated names, if you have a non-English desktop or can set
+   `XDG_DOWNLOAD_DIR="$HOME/Téléchargements"` (make it first):
+   - [ ] `Download` shows that folder.
+
+Restore: `mv ~/user-dirs.dirs.bak ~/.config/user-dirs.dirs`.
+
+#### T21. Music and Pictures as custom names (round 2 settings)
+
+- [ ] A shortcut set to `"~/Music,~/Pictures"` in round 2 still starts, with
+  both shared.
+- [ ] `"Music=$HOME/Media/Tunes"` shares that folder as `Music`, in place of
+  `~/Music`.
+- [ ] `"Music,~/Music"` stops the launch: `Music is already used by another item`.
+
+#### T22. Safety
+
+Each must stop the launch with the message shown, and change nothing:
+
+- [ ] `"Keys=~/.ssh"`: `inside a hidden folder of your home`.
+- [ ] `"/home"` and (Fedora Atomic / Deck) `"/var/home"`: `holds your whole home folder`.
+- [ ] `"/run/media/$USER"`: `lists whole drives`. `"/run/media/$USER/<drive>"`
+  is accepted.
+- [ ] `"/var/log"`: `is a system folder`.
+- [ ] A link to a protected folder: `ln -s ~/.ssh ~/Keys`, then `"~/Keys"`:
+  refused like `~/.ssh`. Remove `~/Keys` afterwards.
+
+#### T23. Media apps and file pickers
+
+A local test found that Android's media index (used by gallery, music and
+video apps) lists no files from shared storage at all on this image, not
+even from Android's own `DCIM`, so it isn't caused by shared folders. This
+test records what that means for real apps. Use a game or app with a file
+picker, and if you can, a gallery and a music app (e.g. from F-Droid: Aves,
+Fossify Gallery, Fossify Music Player, VLC).
+
+- [ ] File manager with all-files access: sees files in Music, Pictures,
+  Movies and a custom folder.
+- [ ] An app's file picker (Android's "Open from" screen): can you browse to
+  `Pictures` and pick a file? Do the "Images"/"Audio"/"Recent" views show
+  anything?
+- [ ] Gallery app: does it list `Pictures`? Music app: does it list songs in
+  `Music`? VLC (which can also browse folders): does its Video/Audio view
+  list `Movies`/`Music`; does its folder browser?
+- [ ] Take a screenshot or save an image from an app into `Pictures`: does a
+  gallery app then show it? (Files created by apps through Android may be
+  indexed even though existing files are not.)
+
+#### Round 3 results
+
+| Test | Desktop (Fedora) | Steam Deck | Notes |
+| --- | --- | --- | --- |
+| Host test | PASS (SKIP /mnt) | | Intel Fedora 44, `lepton-play` + Material Files, 2026-11-26 |
+| T19 five defaults | Works (fresh profile) | | All five linked to `/lepton/shared/<Name>`, markers visible, Android writes reach the host as the user; user checked in the file manager. Upgrade of a round 1/2 profile not tested here |
+| T20 XDG | Works | n/a | Moved Music (`~/Media/Tunes`), translated Download (`~/Téléchargements`) shared; `XDG_VIDEOS_DIR=$HOME/` warns and skips Movies, `=Videos` stops the launch; `XDG_DOCUMENTS_DIR=/etc` warns, game starts. Folder "unplugged" (renamed): game starts, Pictures link kept, nothing created, but no log message (custom folders get `is not there`). No real drive: used `~/lepton-drive`; a `/var/tmp` path was refused as a system folder, as documented |
+| T21 custom Music | Works | | `~/Music,~/Pictures` shared; `Music=~/Media/Tunes` replaces Music; `Music,~/Music` stops: `already used by another item` |
+| T22 safety | Works | | `Keys=~/.ssh`, `/home`, `/var/log`, link `~/Keys -> ~/.ssh` stop the launch, nothing changed. `/var/home` and `/run/media/$USER` don't exist here: warned `is not there` and launched, so their refusal is untested on this machine |
+| T23 media apps | | | |
+
 ## 3. Results
 
 | Test            | Desktop (Fedora)         | Steam Deck   | Notes                                                                                                                                                                                                                                                    |
@@ -397,15 +519,28 @@ With `"~/Books,$SD/Films"` (Deck) or `"~/Books,$USB/Films"` (desktop):
 | T7 regression   | Didn't test              | Didn't test  |                                                                                                                                                                                                                                                          |
 | T8 Google Play  | Didn't test              | Didn't test  |                                                                                                                                                                                                                                                          |
 | T9 questions    |                          |              |                                                                                                                                                                                                                                                          |
-| T10 ~/Books     |                          |              |                                                                                                                                                                                                                                                          |
-| T11 spaces      |                          |              |                                                                                                                                                                                                                                                          |
+| T10 ~/Books | Works |              | `~/Books` and `$HOME/Books` (env, not Steam). Only Books shared; Android write reached host as the user. Documents/Download then missing from the profile (see notes below) |
+| T11 spaces | Works |              | `~/My Comics` shared (quoted). Unquoted Steam form not tested (no Steam) |
 | T12 SD card     | n/a                      |              |                                                                                                                                                                                                                                                          |
 | T13 ext. drive  |                          | n/a          |                                                                                                                                                                                                                                                          |
-| T14 several, ro |                          |              |                                                                                                                                                                                                                                                          |
-| T15 changes     |                          |              |                                                                                                                                                                                                                                                          |
-| T16 mistakes    |                          |              |                                                                                                                                                                                                                                                          |
+| T14 several, ro | Works |              | Four shared; `My Comics:ro` rw=false, `(read-only)` logged, write and delete refused (Read-only file system), host unchanged; `Downloads:ro` read-only |
+| T15 changes | Works |              | Off messages, `Library` rename and re-point, back to defaults, second default launch silent; own link `MyLink -> /tmp` kept |
+| T16 mistakes | Works |              | Duplicate name, `Android=`, a file, `/etc`, `$HOME`, `/`, no comma, bad name all stop with unchanged storage. `Download=$HOME/Books` is now accepted (round 3 lets a path replace a default folder): update T16 |
 | T17 apps        |                          |              |                                                                                                                                                                                                                                                          |
 | T18 profiles    |                          |              |                                                                                                                                                                                                                                                          |
+
+Findings from the Intel run (2026-11-26):
+
+- When `Documents` or `Download` stops being shared, Lepton removes its link
+  but no folder replaces it, and Android doesn't recreate these two (it does
+  recreate Movies, Music and Pictures). Seen in round 1 too. The docs say
+  Android keeps private folders; the launcher should create the empty
+  folders when it removes the links.
+- A default folder that is missing (drive unplugged) is skipped silently and
+  its old link is left pointing at nothing; custom folders log `is not there`.
+- `lepton-play` ignores Ctrl-C when started in the background by a script
+  (bash ignores SIGINT in background jobs); `kill` (TERM) stops it cleanly
+  in about 5 s.
 
 ## 4. Clean up
 
