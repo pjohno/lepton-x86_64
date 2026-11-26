@@ -100,7 +100,10 @@ cmp -s "$work/mounts" "$work/mounts.before" && diff <(snapshot) "$work/links.bef
 # Turning folders off removes only Lepton's link and its mount.
 LEPTON_SHARED_FOLDERS="Documents, videos, MUSIC" run_mounts || fail "partial sharing stopped"
 not_shared Download && not_shared Pictures || fail "Download/Pictures kept when off"
-[[ ! -e "$ext/Download" ]] || fail "Download link kept when off"
+# Android does not remake Documents or Download: Lepton leaves an empty
+# folder of Android's own in place of the link.
+android_folder() { [[ -d "$ext/$1" && ! -L "$ext/$1" && -z "$(ls -A -- "$ext/$1")" ]]; }
+android_folder Download && android_folder Pictures || fail "no empty Android folder for Download/Pictures when off"
 shared Documents "$HOME/Documents" && shared Movies "$HOME/Videos" && shared Music "$HOME/Music" ||
     fail "kept folders not shared"
 grep -q 'Shared folder off: Download' "$work/messages" && grep -q 'Shared folder off: Pictures' "$work/messages" ||
@@ -115,17 +118,18 @@ for value in none ""; do
     for d in "${defaults[@]}"; do
         not_shared "${d%%:*}" || fail "${d%%:*} shared with '$value'"
         [[ -d "$HOME/${d#*:}" ]] || fail "host ${d#*:} touched"
+        android_folder "${d%%:*}" || fail "no Android ${d%%:*} folder with '$value'"
     done
 done
 
 # Android made a real Download folder while sharing was off.
 # Empty: replaced by the link when sharing is turned back on.
-mkdir "$ext/Download"
+android_folder Download || fail "no Android Download folder"
 LEPTON_SHARED_FOLDERS=Downloads run_mounts || fail "re-enable over empty folder stopped"
 shared Download "$HOME/Downloads" || fail "empty Android folder not replaced by link"
 # With files: kept, not linked, launch continues.
 LEPTON_SHARED_FOLDERS=none run_mounts
-mkdir "$ext/Download"; echo irreplaceable > "$ext/Download/book.pdf"
+echo irreplaceable > "$ext/Download/book.pdf"
 LEPTON_SHARED_FOLDERS=Download run_mounts || fail "real folder with files stopped the launch"
 [[ -d "$ext/Download" && ! -L "$ext/Download" && "$(cat "$ext/Download/book.pdf")" == irreplaceable ]] ||
     fail "Android folder with files changed"
@@ -200,7 +204,7 @@ mkdir -p "$ext"
 ln -s "$HOME/Documents" "$ext/Documents"; ln -s "$HOME/Downloads" "$ext/Download"; ln -s "$HOME/Videos" "$ext/Movies"
 LEPTON_SHARED_FOLDERS=Documents run_mounts || fail "old profile with one folder stopped"
 shared Documents "$HOME/Documents" || fail "old Documents link not updated"
-[[ ! -e "$ext/Download" && ! -L "$ext/Download" && ! -L "$ext/Movies" ]] || fail "old links of folders off kept"
+android_folder Download && android_folder Movies || fail "old links of folders off kept"
 grep -q 'Shared folder off: Download' "$work/messages" && grep -q 'Shared folder off: Movies' "$work/messages" ||
     fail "no message for old links removed"
 # An old-style link to some other folder is not Lepton's.

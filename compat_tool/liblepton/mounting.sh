@@ -505,6 +505,17 @@ function setup_shared_folders()
         fi
         share_host_folder "${HOST}" "${LINK}" "${GUEST}" "${MODE}"
     done
+
+    # Android makes its standard folders only when shared storage is first
+    # set up, and remakes just the ones its media index writes to (Movies,
+    # Music, Pictures). A default folder that is not shared, or no longer is,
+    # gets an empty folder of Android's own, as on a phone; share_host_folder
+    # replaces it with the link if the folder is shared again.
+    for NAME in "${DEFAULT_NAMES[@]}"; do
+        LINK="${TARGET}/${NAME}"
+        [[ -e "${LINK}" || -L "${LINK}" ]] && continue
+        mkdir -m 0700 -- "${LINK}"
+    done
 }
 
 function setup_mounts()
