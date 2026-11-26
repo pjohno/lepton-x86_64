@@ -23,7 +23,7 @@
 * `LEPTON_CODEC2` defaults to automatic selection on Android 14 x86_64: `blob` for software rendering, AMD images with patch 0013 or Intel images with patches 0013 and 0014, otherwise `heap` when the host DMA-BUF system heap is readable/writable, otherwise `off`. `false` disables Codec2; `true` forces experimental BLOB allocation and can crash older AMD allocators or fail on Intel images without patch 0014. Mode names are outputs, not values for this variable. Ordinary PCM game audio is independent; AVC/video output remains unresolved. See [media decoder selection](../GAPPS.md#media-decoder-selection).
 * `LEPTON_VIDEO_HWACCEL=true` enables experimental hardware video decoding (VA-API) on Android 14 x86_64 images that contain the Codec2 FFmpeg service: FFmpeg's video decoders are ranked ahead of Android's software ones, and decode on the GPU gralloc uses. Off by default; refused under software rendering or with Codec2 off. Audio keeps Android's decoders. See [video-vaapi.md](../image-14/docs/video-vaapi.md).
 * `LEPTON_VIDEO_HWACCEL_OUTPUT=direct|copyback` (with `LEPTON_VIDEO_HWACCEL=true`) chooses how hardware-decoded frames reach Android: `direct` (default) has the GPU convert each frame straight into Android's buffer, which played 4K60 10-bit at full rate on the tested Intel, AMD and Steam Deck GPUs; `copyback` downloads and converts each frame on the CPU. Images without direct output use `copyback`, and the service switches a session to `copyback` by itself if direct output fails.
-* `LEPTON_SHARED_FOLDERS` chooses which host folders appear in the game's Android shared storage: `Documents` (shown as `Documents`), `Downloads` (shown as `Download`) and `Videos` (shown as `Movies`), separated by commas or spaces, or `none`. Android and host names are both accepted, in any case. Unset keeps the default, which shares all three read-write. A folder that is turned off stops being mounted and Lepton removes only its own link; the host folder is never touched. Android then uses a private folder of the same name in the profile. Turning a folder back on replaces that private folder only while it is empty; if it has files, it is kept and the launch continues with a message. Unknown names stop the launch. The setting belongs to the shortcut, so a shared profile such as Google Play (Lepton) applies it to every app installed there.
+* `LEPTON_SHARED_FOLDERS` chooses which host folders appear in the game's Android shared storage: the default Documents, Downloads and Videos, any other folders you name, or none. See [Shared folders](#shared-folders).
 * `LEPTON_DMA_HEAP_DEVICE` overrides `/dev/dma_heap/system` for diagnostics/tests. Automatic heap selection requires a readable/writable character device; leave unset normally.
 * `LEPTON_PREFIX` supplies an external scratch directory. The launcher never owns or deletes a supplied prefix, including `/tmp/lepton-context.*`. Internally created prefixes always use `/tmp` regardless of `TMPDIR`; containers using the prefix or uncertain inspection/mount state prevent deletion. Persistent Android profiles are separate and retained by ordinary cleanup.
 * ```LEPTON_LOCK_TIMEOUT``` maximum time in seconds to wait for the per-user `lepton.lock` (default 10). Initial acquisition and later re-acquisitions stop the command on failure; a timeout of 0 makes acquisition nonblocking. See [lock paths and launcher-only deployment](../FEDORA-DEBUGGING.md#per-user-launcher-lock).
@@ -33,6 +33,106 @@
 
 * Various other environment variables like ```SteamAppId```, ```STEAM_COMPAT_DATA_PATH```, etc. are used to configure the launch of a game via steam.
 * Even more environment variables like, ```EnableFrameEndMarkers```, ```DisableTimelineSemaphoreWait```, ```HTTP_PROXY``` etc. are passed through to the container/app.
+
+# Shared folders
+
+Android apps see shared storage as `/storage/emulated/0` (the "internal
+storage" a file manager shows). `LEPTON_SHARED_FOLDERS` chooses which host
+folders appear there. Put it in the shortcut's Properties > Launch Options,
+before `%command%`, or before the command for `lepton-play`.
+
+| Value | What Android sees |
+| --- | --- |
+| *(unset)* | The default: host `~/Documents`, `~/Downloads` and `~/Videos` as `Documents`, `Download` and `Movies`, read-write |
+| `none`, or empty | No host folders. Android keeps private `Documents`, `Download` and `Movies` folders in the profile |
+| `Downloads` | Only `~/Downloads`, as `Download`. Any of `Documents`, `Downloads`, `Videos` (or the Android names `Download`, `Movies`), in any case |
+| `"~/Books"` | `~/Books` as `Books`. Any folder path starting with `/` or `~/` is shown under its last name |
+| `"Library=/run/media/deck/SD/Books"` | That folder, shown as `Library` |
+| `"Downloads,~/Books,/mnt/media/Films"` | `Download`, `Books` and `Films` |
+| `"~/Books:ro"`, `Downloads:ro` | Read-only: Android can open the files but not change, add or delete them |
+
+Examples, as Steam launch options:
+
+```bash
+LEPTON_SHARED_FOLDERS=none %command%
+LEPTON_SHARED_FOLDERS="Downloads,~/Books" %command%
+LEPTON_SHARED_FOLDERS="~/My Comics:ro,Films=/run/media/deck/SD/Films" %command%
+```
+
+and with `lepton-play`:
+
+```bash
+LEPTON_SHARED_FOLDERS="Documents,~/Books" lepton-play game.apk
+```
+
+Rules:
+
+* Separate items with commas. Use quotes when a path has spaces; the spaces
+  are part of the path. The default folder names may also be separated by
+  spaces (`"Documents Videos"`), but paths always need commas. Paths cannot
+  contain commas or `"`.
+* `~/` means your home folder. Lepton expands it itself, so it works inside
+  quotes.
+* Any folder you can open works: inside or outside your home folder, on an
+  internal drive, a USB drive or an SD card (`/run/media/<user>/<drive>/...`),
+  or under `/mnt`. A path that is a symlink is followed, and the folder is
+  named after the link.
+* Android's folder name must be a plain name: at most 64 characters, not
+  starting with `.` or `-`, without `/ \ : * ? " < > |`. If a folder's own
+  name doesn't fit, or two folders end in the same name, give one a name with
+  `Name=/path`. Names are compared without regard to case, as Android does.
+* `Android`, `Documents`, `Download` and `Movies` can't be used for your own
+  folders: `Android` holds app data and OBB files, and the others belong to
+  the default folders. Other standard names such as `Music` or `Pictures` can
+  be used.
+* These can't be shared: `/`, your whole home folder, system folders (`/etc`,
+  `/usr`, `/proc`, `/sys`, `/dev`, `/boot`, other `/run` folders), any folder
+  holding the game's own Android data (for example a Steam library folder
+  that contains its `compatdata`), and the same folder twice.
+* Lepton never changes the shared folder or its files' permissions, owners,
+  ACLs or SELinux labels. Android uses your own user's access: if you can
+  read and write a folder, so can the game.
+
+When the setting is checked and what happens:
+
+* The whole value is checked before anything changes. A mistake (an unknown
+  name, a file instead of a folder, a folder you can't open, a clash of
+  names, a folder that can't be shared) stops the launch with every problem
+  listed. On the Deck this shows as a popup. Nothing is changed.
+* A folder path that doesn't exist at launch, such as one on a drive that
+  isn't plugged in, doesn't stop the game. The log says it is not shared
+  this launch, and nothing is changed: Android shows the folder again once
+  the drive is back. A missing default folder (`~/Videos`, say) is skipped
+  quietly, as before.
+* Removing a folder from the setting, or renaming it, removes Lepton's link
+  for it at the next launch. The host folder and its files are not touched.
+  Links and folders that Lepton didn't make are left alone.
+* If Android already has a real folder of that name with files in it (for
+  example, `Music` holds files a game saved), the host folder isn't linked:
+  the launch continues, the log says so, and Android's files are kept. Move
+  them out to share the host folder instead. An empty folder is replaced.
+* Repeated launches with the same setting change nothing.
+
+How it works: a default folder is mounted into the container at its host
+path, and a folder path at `/lepton/shared/<Name>`; Android's shared storage
+holds a link to it. A link that points at exactly `/lepton/shared/<its own
+name>` is Lepton's, which is how a removed folder is recognised. The
+`/lepton` location also avoids Android's own `/mnt`, which hides host paths
+under `/mnt`. Android's storage service serves these folders to apps like any
+other shared-storage folder.
+
+Shared Android profiles: the setting belongs to the shortcut that starts
+Android, and applies to everything installed in that profile. For the
+**Google Play (Lepton)** shortcut, every game installed through Play sees the
+same folders. Launching the same profile with a different setting changes
+the folders for every app in it.
+
+What this setting does not control: Lepton also mounts the Steam install and
+Steam library folders, and the folder of a shortcut's APK and OBB files, so
+games can be installed and load their data. Those mounts are not part of
+shared storage, are not shown in Android's file manager, and are not changed
+by `LEPTON_SHARED_FOLDERS`. A file in a Steam library is therefore still
+reachable inside the container with sharing set to `none`.
 
 # Marker files:
 * ```lepton-show-flatscreen``` inside the application depot can be used to configure an application for 2D launch mode.

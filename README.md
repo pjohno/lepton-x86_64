@@ -118,7 +118,7 @@ Properties > Launch Options, followed by `%command%`:
 | Option | Effect |
 | --- | --- |
 | `LEPTON_RESET_APP_DATA=true` | Permanently delete this game's Android profile (installed app, saves, logins) on the next launch. Back it up first and remove the option afterwards; shared storage is kept ([scope](INSTALL-STEAM-DECK.md#game-data-between-launches)) |
-| `LEPTON_SHARED_FOLDERS=none` | Don't share your Documents, Downloads and Videos folders with this game's Android. Or list the ones to share, e.g. `LEPTON_SHARED_FOLDERS=Downloads`. The default shares all three ([details](compat_tool/configuration.md)) |
+| `LEPTON_SHARED_FOLDERS=none` | Choose which host folders the game's Android sees in its shared storage. The default shares Documents, Downloads and Videos. `none` shares none; `Downloads` only that one; `"Downloads,~/Books,/run/media/deck/SD/Films"` adds any folders, shown as `Books` and `Films`; `:ro` makes one read-only ([details](compat_tool/configuration.md#shared-folders)) |
 | `LEPTON_GAMEPAD_HOTPLUG=true` | Experimental: connect and disconnect controllers while the game runs (see [limitations](#known-limitations)) |
 | `LEPTON_GAMEPAD_PASSTHROUGH=false` | Don't pass controllers to Android |
 | `LEPTON_STOP_SAVE_WAIT=<s>`, `LEPTON_STOP_SHUTDOWN_WAIT=<s>` | Time given to the game to save at Stop (default 3 s) and to Android to shut down (default 5 s); `0` and `0` stop instantly |
