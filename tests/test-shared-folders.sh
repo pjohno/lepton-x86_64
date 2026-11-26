@@ -559,4 +559,9 @@ LEPTON_PROFILE_EXTERNAL_STORAGE= LEPTON_SHARED_FOLDERS=none run_mounts || fail "
 mounted_at "$ext" /lepton/profile-external || fail "common storage profile alias missing"
 link_is /lepton/profile-external "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/media/0" || fail "legacy alias not replaced"
 grep -qx kept "$ext/keep.txt" || fail "existing profile storage was changed"
-echo "PASS: managed Container Storage, optional override, reserved name and library mount protection"
+(
+    is_sysbake() { return 0; }
+    LEPTON_SHARED_FOLDERS=none run_mounts || fail "sysbake mount setup stopped"
+    [[ "$(count_mounts)" == 0 ]] || fail "sysbake received a shared-folder mount"
+)
+echo "PASS: managed Container Storage, optional override, reserved name, protected library and sysbake exclusion"
