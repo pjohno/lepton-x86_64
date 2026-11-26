@@ -74,7 +74,15 @@ class Android:
         base = hashes.pop("base.apk")
         return {"version_code": int(version[1]), "base": base, "splits": sorted(hashes.values())}
 
-    def install(self, files):
+    def abandon(self, session):
+        if not isinstance(session, str) or not re.fullmatch(r"[0-9]+", session):
+            raise ValueError("Invalid pending package-manager session")
+        # A committed session may have disappeared by the time we recover.
+        result = self.run("/system/bin/cmd_real", "package", "install-abandon", session, timeout=5)
+        if result.returncode and "session" not in (result.stdout + result.stderr).lower():
+            raise ValueError("Could not abandon the interrupted installation session")
+
+    def install(self, files, on_created):
         result = self.pm("install-create", "-r", "--user", "0", timeout=self.timeout)
         session = re.fullmatch(r"Success: created install session \[(\d+)\]", result)
         if not session:
@@ -82,6 +90,7 @@ class Android:
         session = session[1]
         committed = False
         try:
+            on_created(session)
             for file in files:
                 with file.open("rb") as source:
                     output = self.pm("install-write", "-S", str(os.fstat(source.fileno()).st_size),
@@ -95,7 +104,7 @@ class Android:
         finally:
             if not committed:
                 try:
-                    self.pm("install-abandon", session, timeout=5)
+                    self.abandon(session)
                 except (ValueError, subprocess.TimeoutExpired):
                     pass
 
@@ -134,23 +143,32 @@ def finish_install(android, state, target, files, package, save):
     old = state.get("installed")
     pending = state.get("pending")
     recovered = pending is not None and live == pending["code"]
+    if not recovered and live != (old["code"] if old else None):
+        raise ValueError("Installed Android code differs from the last verified state. Profile preserved.")
+    if state.get("session") is not None:
+        android.abandon(state["session"])
+        state.pop("session")
+        save()
     if recovered:
         old = pending
         state.update(installed=old, pending=None)
         save()
-    if live != (old["code"] if old else None):
-        raise ValueError("Installed Android code differs from the last verified state. Profile preserved.")
     if old == target:
         return
     if old and target["code"]["version_code"] < old["code"]["version_code"]:
         raise ValueError("Android profile is newer than the library APK")
+    def record_session(session):
+        state["session"] = session
+        save()
+
     state.update(pending=target)
     save()
-    android.install(files)
+    android.install(files, record_session)
     if android.installed(package) != target["code"]:
         raise ValueError("Android installed code or version differs from the requested replacement")
     android.checked("/system/bin/toybox", "sync")
     state.update(installed=target, pending=None)
+    state.pop("session", None)
     save()
 
 

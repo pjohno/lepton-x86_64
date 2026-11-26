@@ -272,10 +272,12 @@ class ProfileTests(unittest.TestCase):
         save.assert_called_once()
         # A subsequent launch verifies the actual package-manager result after
         # host interruption and must not repeat an already committed update.
+        state["session"] = "42"
         android.installed.return_value = target["code"]
         android.install.reset_mock()
         runtime.finish_install(android, state, target, [], package, save)
         android.install.assert_not_called()
+        android.abandon.assert_called_once_with("42")
         self.assertEqual(state, {"installed": target, "pending": None})
         with self.assertRaisesRegex(ValueError, "newer"):
             runtime.finish_install(android, state, old, [], package, save)
