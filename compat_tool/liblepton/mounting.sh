@@ -290,7 +290,7 @@ function lepton_array_has()
 function lepton_shared_protected_paths()
 {
     local P
-    for P in "${LEPTON_LIBRARY_ROOT:-}" "${XDG_CONFIG_HOME:-${HOME}/.config}/lepton-x86_64" "${STEAM_COMPAT_DATA_PATH:-}" "$(get_baked_app_data_dir 2>/dev/null)" \
+    for P in "${LEPTON_LIBRARY_CONFIGURED:-}" "${LEPTON_LIBRARY_ROOT:-}" "${XDG_CONFIG_HOME:-${HOME}/.config}/lepton-x86_64" "${STEAM_COMPAT_DATA_PATH:-}" "$(get_baked_app_data_dir 2>/dev/null)" \
              "${LEPTON_DIR:+${LEPTON_DIR}/..}" "${LEPTON_DATA_DIR:-}" \
              "${XDG_DATA_HOME:-${HOME}/.local/share}/lepton-compat-data"; do
         [[ -n "${P}" ]] && PROTECTED+=("$(realpath -m -- "${P}")")
@@ -443,7 +443,7 @@ function lepton_shared_name_ok()
         ERRORS+=("'${ITEM}': '${NAME}' can't be a shared-storage folder name. Give a plain name, as Name=/path (no / \\ : * ? \" < > |, not starting with . or -, at most 64 characters)")
         return 1
     fi
-    if [[ -n "${LEPTON_LIBRARY_ROOT:-}" && "${NAME,,}" == "container storage" ]]; then
+    if [[ -n "${LEPTON_LIBRARY_CONFIGURED:-}${LEPTON_LIBRARY_ROOT:-}" && "${NAME,,}" == "container storage" ]]; then
         ERRORS+=("'${ITEM}': Container Storage is reserved by the Android Library")
         return 1
     fi
@@ -568,9 +568,10 @@ function setup_shared_folders()
     local TARGET="$1" ENTRY NAME HOST GUEST MODE STATE KIND LINK
     local SHARED_FOLDER_ENTRIES=() ACTIVE=() PROBLEMS=() DEFAULT_NAMES=() PAIR
     lepton_shared_folder_entries || die "Launch stopped: fix the LEPTON_SHARED_FOLDERS launch option. Shared folders unchanged."
-    if [[ -n "${LEPTON_LIBRARY_ROOT:-}" ]]; then
-        SHARED_FOLDER_ENTRIES+=("Container Storage"$'\t'"${LEPTON_LIBRARY_ROOT}/Container Storage"$'\t'"${LEPTON_SHARED_GUEST_ROOT}/Container Storage"$'\t'rw$'\t'ok$'\t'library)
-    fi
+    # Container Storage, independent of the optional folders above.
+    local LIBRARY_ENTRY
+    LIBRARY_ENTRY="$(lepton_library_storage_entry)"
+    [[ -z "${LIBRARY_ENTRY}" ]] || SHARED_FOLDER_ENTRIES+=("${LIBRARY_ENTRY}")
     for PAIR in "${LEPTON_SHARED_FOLDER_DEFAULTS[@]}"; do DEFAULT_NAMES+=("${PAIR%%:*}"); done
 
     # A link that is not Lepton's, where a folder is to be shared, would stop
@@ -648,7 +649,7 @@ function setup_mounts()
     local APP_ID="$(get_app_id)"
 
     BASE_APK=base.apk
-    if [[ -z "${LEPTON_MANAGED_APP:-}" ]] && is_app; then
+    if ! lepton_managed_app && is_app; then
         APP_APK_DIR="$(dirname "$(get_apk_path)")"
         # x86_64 port: an unpacked .apkm already has base.apk; its splits share
         # the package ID, so the rename-to-base.apk search must not run.
@@ -663,7 +664,7 @@ function setup_mounts()
                 fi
             done
         fi
-    elif [[ -z "${LEPTON_MANAGED_APP:-}" ]]; then
+    elif ! lepton_managed_app; then
         APP_APK_DIR="$(get_baked_app_data_dir)/app_lowerdir"
         mkdir -p "${APP_APK_DIR}"
     fi
@@ -813,7 +814,7 @@ function setup_mounts()
         fi
     fi
 
-    if ! is_sysbake && [[ -z "${LEPTON_MANAGED_APP:-}" ]]; then
+    if ! is_sysbake && ! lepton_managed_app; then
         local APP_WORKDIR="$(app_workdir)"
         local APP_OVERLAY_UPPERDIR="$(app_datadir)"
         mkdir -p "${APP_WORKDIR}"
@@ -827,9 +828,9 @@ function setup_mounts()
         fi
     fi
 
-    if [[ -n "${LEPTON_MANAGED_OBB:-}" ]]; then
-        podman_mount_entry "$LEPTON_MANAGED_OBB" /lepton/managed-obb ro
-    elif [[ -z "${LEPTON_MANAGED_APP:-}" && -n "${LEPTON_MOUNT_OBB_DIR:-}" ]]; then
+    if lepton_managed_app; then
+        lepton_managed_mounts
+    elif [[ -n "${LEPTON_MOUNT_OBB_DIR:-}" ]]; then
         podman_mount_entry "${LEPTON_MOUNT_OBB_DIR}" "/${APP_MOUNT_TARGET}/obb" ro
     fi
 
@@ -910,7 +911,7 @@ function generate_app_launch_rc()
         APP_MOUNT_TARGET="$(get_app_mount_dir)"
     fi
 
-    if [[ -z "${LEPTON_MANAGED_APP:-}" ]] && ! is_app_baked && [[ "${BASE_APK}" != "base.apk" ]]; then
+    if ! lepton_managed_app && ! is_app_baked && [[ "${BASE_APK}" != "base.apk" ]]; then
         println "on early-init" >>"${APP_LAUNCH_RC}"
         println "    exec -- /system/bin/sh -c \"mv \"/${APP_MOUNT_TARGET#/}/${BASE_APK}\" \"/${APP_MOUNT_TARGET#/}/base.apk\"\"" >>"${APP_LAUNCH_RC}"
         println "    exec -- /system/bin/sh -c \"find \"/${APP_MOUNT_TARGET#/}\" -name '*.apk' -a ! -name 'base.apk' -type f -exec rm -f {} +\"" >>"${APP_LAUNCH_RC}"
@@ -927,10 +928,10 @@ function generate_app_launch_rc()
 
         # Make sure the obb symlink is in order.
         local APP_ID="$(get_app_id)"
-        if [[ -z "${LEPTON_MANAGED_APP:-}" ]]; then
-            println "    exec -- /vendor/bin/fix_obb_symlink.sh \"${APP_ID}\"" >>"${APP_LAUNCH_RC}"
+        if lepton_managed_app; then
+            lepton_managed_launch_rc >>"${APP_LAUNCH_RC}"
         else
-            println "    exec -- /system/bin/cmd lepton mount_vulkan_layers" >>"${APP_LAUNCH_RC}"
+            println "    exec -- /vendor/bin/fix_obb_symlink.sh \"${APP_ID}\"" >>"${APP_LAUNCH_RC}"
         fi
 
         # Add install commands for vulkan layers

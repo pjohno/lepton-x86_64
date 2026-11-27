@@ -739,7 +739,7 @@ def add_game(locks):
         root = library()
         if root is None:
             fail("Run lepton-library init before using --import")
-        _, managed, apk = import_app(root, apk, mode="import", dry_run=args.dry_run)
+        _, managed, apk, _ = import_app(root, apk, mode="import", dry_run=args.dry_run)
         if not args.dry_run:
             locks.enter_context(lock(root, False))
             _, managed, apk = load_app(root, managed["package"], verify=True)

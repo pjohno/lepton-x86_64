@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Host-side storage and package-manager transaction regressions."""
+"""Android Library storage, staging and package-manager transaction regressions.
+
+Package metadata comes from a stand-in for the bundled apk-info-extractor
+(--json) that reads a JSON "manifest" from each test APK. No Android SDK is
+needed. A stand-in apksigner covers the optional host signature check.
+"""
+import contextlib
+import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -15,142 +23,232 @@ import zipfile
 
 tools = Path(__file__).resolve().parents[1] / "compat_tool/tools"
 sys.path.insert(0, str(tools))
-import lepton_library as lib
+import lepton_library as lib  # noqa: E402
 
 loader = importlib.machinery.SourceFileLoader("library_runtime", str(tools / "lepton-library-runtime"))
 runtime = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
 loader.exec_module(runtime)
 package = "org.example.game"
 
+EXTRACTOR = r'''#!/usr/bin/env python3
+import json, sys, zipfile
+assert sys.argv[1] == "--json", sys.argv
+m = json.loads(zipfile.ZipFile(sys.argv[2]).read("AndroidManifest.xml"))
+major, minor = m.get("major") or 0, m["version"] & 0xffffffff
+print(json.dumps({"package": m["package"], "split": m["split"] or None, "version_code": minor,
+                  "version_code_major": major, "long_version_code": (major << 32) | minor,
+                  "version_name": str(m["version"]), "min_sdk": m.get("min_sdk", 24),
+                  "min_sdk_codename": m.get("codename"), "label": m.get("label"),
+                  "launchable_activity": m.get("activity", ".Main"), "extract_native_libs": None,
+                  "abis": m.get("abis", [])}))
+'''
+APKSIGNER = r'''#!/usr/bin/env python3
+import json, sys, zipfile
+m = json.loads(zipfile.ZipFile(sys.argv[-1]).read("AndroidManifest.xml"))
+if m["key"] is None:
+    sys.exit("DOES NOT VERIFY")
+if m["key"] == "odd":
+    print("Signer one: something new")
+else:
+    print(f"Signer #1 certificate SHA-256 digest: {m['key'] * 64}")
+'''
 
-class LibraryTests(unittest.TestCase):
+
+def script(path, text):
+    path.write_text(text)
+    path.chmod(0o755)
+    return path
+
+
+class LibraryCase(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.home = Path(temp.name)
-        env = patch.dict(os.environ, {"HOME": temp.name, "XDG_CONFIG_HOME": str(self.home / "config")})
+        self.extractor = script(self.home / "extractor", EXTRACTOR)
+        self.signer = script(self.home / "apksigner", APKSIGNER)
+        env = patch.dict(os.environ, {"HOME": temp.name, "XDG_CONFIG_HOME": str(self.home / "config"),
+                                      "LEPTON_APK_EXTRACTOR": str(self.extractor), "LEPTON_APKSIGNER": "none"})
         env.start()
         self.addCleanup(env.stop)
         self.root = lib.initialize(self.home / "Android Library")
 
-        def fake_command(args):
-            path = Path(args[-1] if args[0] == "apksigner" else args[3])
-            with zipfile.ZipFile(path) as archive:
-                manifest = json.loads(archive.read("AndroidManifest.xml"))
-            if args[1] == "lineage":
-                raise ValueError("no embedded lineage")
-            if args[0] == "apksigner":
-                if manifest["key"] is None:
-                    raise ValueError("signature verification failed")
-                return f"Signer #1 certificate SHA-256 digest: {manifest['key'] * 64}\n"
-            if args[2] == "xmltree":
-                major = manifest["major"]
-                return ("E: manifest\n" if major is None else
-                        f"    A: http://schemas.android.com/apk/res/android:versionCodeMajor(0x01010576)={major}\n")
-            return ("package: name='%s' versionCode='%s' versionName='%s' split='%s'\n"
-                    "application-label:'Example Game'\n" %
-                    (manifest["package"], manifest["version"], manifest["version"], manifest["split"]))
-
-        patcher = patch.multiple(lib, sdk_tool=lambda name: name, command=fake_command)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def apk(self, name, version=1, key="a", split="", pkg=package, major=None):
+    def apk(self, name, version=1, key="a", split="", pkg=package, **manifest):
         path = self.home / name
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr("AndroidManifest.xml", json.dumps(dict(
-                package=pkg, key=key, version=version, split=split, major=major)))
+                package=pkg, key=key, version=version, split=split, **manifest)))
             archive.writestr("classes.dex", name)
+        return path
+
+    def bundle(self, name, version, **split_args):
+        path = self.home / name
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.write(self.apk("base-source.apk", version), "base.apk")
+            archive.write(self.apk("split-source.apk", version, split="config.x86_64", **split_args),
+                          "split_config.x86_64.apk")
         return path
 
     def install(self, apk, mode="import", **kwargs):
         return lib.import_app(self.root, apk, mode=mode, verbose=False, **kwargs)
 
-    def test_location_and_disconnection(self):
+    def promote(self):
+        lib.promote_candidate(self.root / package)
+
+    def cli(self, *args, check=True):
+        return subprocess.run([str(tools / "lepton-library"), *args], text=True, capture_output=True, check=check)
+
+
+class LibraryTests(LibraryCase):
+    def test_configured_location_is_separate_from_availability(self):
         self.assertEqual(lib.library(), self.root)
+        self.assertEqual(lib.configured()[0], self.root)
         self.assertTrue((self.root / lib.STORAGE).is_dir())
         other = self.home / "Disconnected"
         self.root.rename(other)
-        self.root.mkdir()
+        # A disconnected drive: the location is still known, nothing is made.
+        self.assertEqual(lib.configured()[0], self.root)
+        with self.assertRaisesRegex(lib.Unavailable, "Reconnect"):
+            lib.library()
         with self.assertRaisesRegex(ValueError, "Reconnect"):
             lib.initialize(self.root)
+        self.assertFalse(self.root.exists())
+        self.root.mkdir()  # an empty mount point is not the library
+        with self.assertRaisesRegex(lib.Unavailable, "unavailable"):
+            lib.library()
         self.assertEqual(list(self.root.iterdir()), [])
         self.root.rmdir()
         other.rename(self.root)
         storage = self.root / lib.STORAGE
         storage.rmdir()
         storage.symlink_to(self.home, target_is_directory=True)
-        with self.assertRaisesRegex(ValueError, "unavailable"):
+        with self.assertRaisesRegex(lib.Unavailable, "unavailable"):
             lib.library()
 
-    def test_init_dry_run_and_default(self):
+    def test_forget_keeps_files_and_init_adopts_library(self):
+        storage = self.root / lib.STORAGE / "save.txt"
+        storage.write_text("kept")
+        self.install(self.apk("v1.apk"))
+        self.assertIn("Stopped using", self.cli("forget").stdout)
+        self.assertIsNone(lib.configured())
+        self.assertEqual(storage.read_text(), "kept")
+        self.assertTrue((self.root / package / f"{package}.apk").is_file())
+        lib.initialize(self.root)
+        self.assertEqual(lib.load_app(self.root, package)[1]["version_code"], 1)
+
+    def test_init_dry_run_default_and_first_import(self):
         lib.settings_path().unlink()
-        result = subprocess.run([str(tools / "lepton-library"), "init", "--dry-run"], text=True,
-                                capture_output=True, check=True)
+        result = self.cli("init", "--dry-run")
         self.assertIn(str(self.home / "Android_Library"), result.stdout)
         self.assertFalse((self.home / "Android_Library").exists())
-        subprocess.run([str(tools / "lepton-library"), "init"], check=True, stdout=subprocess.DEVNULL)
+        result = self.cli("import", str(self.apk("first.apk")))
+        self.assertIn("Creating the Android Library at", result.stdout)
         self.assertEqual(lib.library(), self.home / "Android_Library")
+        self.assertTrue((self.home / "Android_Library" / package / f"{package}.apk").is_file())
 
-    def test_update_identity_and_version(self):
+    def test_first_import_does_not_adopt_an_unrelated_directory(self):
+        lib.settings_path().unlink()
+        (self.home / "Android_Library").mkdir()
+        (self.home / "Android_Library/notes.txt").write_text("mine")
+        result = self.cli("import", str(self.apk("first.apk")), check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not an Android Library", result.stderr)
+        self.assertEqual(sorted(p.name for p in (self.home / "Android_Library").iterdir()), ["notes.txt"])
+
+    def test_update_is_staged_until_android_accepts_it(self):
         first, new = self.apk("game v1.apk"), self.apk("game v2.apk", 2)
-        directory, one, apk = self.install(first)
+        directory, one, apk, staged = self.install(first)
+        self.assertFalse(staged)
         self.assertEqual(self.install(first)[1], one)
         with self.assertRaisesRegex(ValueError, "already imported"):
             self.install(new)
-        with self.assertRaisesRegex(ValueError, "same-version"):
-            self.install(self.apk("variant.apk"), "update")
-        self.assertEqual(self.install(self.apk("variant.apk"), "update", replace=True)[2], apk)
-        before = apk.read_bytes()
-        self.assertEqual(self.install(new, "update")[2], apk)
-        self.assertEqual((directory / ".previous" / apk.name).read_bytes(), before)
-        self.assertTrue(first.is_file())
-        self.assertEqual(apk.read_bytes(), new.read_bytes())
+        _, two, active, staged = self.install(new, "update")
+        self.assertTrue(staged)
+        self.assertEqual(active, apk)
+        self.assertEqual(apk.read_bytes(), first.read_bytes())  # known-good copy untouched
+        self.assertEqual(lib.load_candidate(directory, one, verify=True)["config"]["version_code"], 2)
+        # Several unaccepted updates replace one another, never the active APK.
+        third = self.apk("game v3.apk", 3)
+        self.install(third, "update")
+        self.assertEqual(apk.read_bytes(), first.read_bytes())
+        self.assertEqual(lib.load_candidate(directory, one)["config"]["version_code"], 3)
+        self.promote()
+        self.assertEqual(apk.read_bytes(), third.read_bytes())
+        self.assertEqual((directory / lib.PREVIOUS / apk.name).read_bytes(), first.read_bytes())
+        self.assertIsNone(lib.load_candidate(directory, lib.load_app(self.root, package)[1]))
         with self.assertRaisesRegex(ValueError, "downgrade"):
-            self.install(first, "update")
-        with self.assertRaisesRegex(ValueError, "signing"):
-            self.install(self.apk("wrong.apk", 3, key="b"), "update")
-        self.assertEqual(apk.read_bytes(), new.read_bytes())
+            self.install(new, "update")
+        with self.assertRaisesRegex(ValueError, "same-version"):
+            self.install(self.apk("variant.apk", 3), "update")
+        self.assertTrue(self.install(self.apk("variant.apk", 3), "update", replace=True)[3])
 
-    def test_long_version_code_orders_by_major_then_minor(self):
+    def test_settings_survive_promotion(self):
+        directory, config, _, _ = self.install(self.apk("v1.apk"))
+        self.install(self.apk("v2.apk", 2), "update")
+        config["shared_folders"] = {"defaults": ["Music:ro"], "custom": []}
+        lib.atomic_json(directory / "config.json", config)  # edited after staging
+        self.promote()
+        promoted = lib.load_app(self.root, package)[1]
+        self.assertEqual(promoted["version_code"], 2)
+        self.assertEqual(promoted["shared_folders"], {"defaults": ["Music:ro"], "custom": []})
+
+    def test_long_version_codes_are_signed_64_bit(self):
         first = self.apk("v1.apk", version=23, major=2)
         second = self.apk("v2.apk", version=1, major=3)
         self.assertEqual(self.install(first)[1]["version_code"], (2 << 32) + 23)
         self.assertEqual(self.install(second, "update")[1]["version_code"], (3 << 32) + 1)
+        self.promote()
         with self.assertRaisesRegex(ValueError, "downgrade"):
             self.install(first, "update")
+        # versionCode -1 is the unsigned low word; a negative major is a
+        # negative long version code, which Android orders below zero.
+        low = self.apk("neg.apk", version=-1, major=-1, pkg="org.example.negative")
+        _, config, _, _ = self.install(low)
+        self.assertEqual(config["version_code"], -1 << 32 | 0xffffffff)
+        lib.check_metadata(config, "org.example.negative", "test")
+        self.assertTrue(self.install(self.apk("zero.apk", version=0, pkg="org.example.negative"), "update")[3])
 
-    def test_rotation_requires_verified_lineage_and_data_capability(self):
-        before = {"signers": ["a" * 64]}
-        incoming = {"signers": ["a" * 64, "b" * 64], "format": ".apk"}
-        proof = (f"Signer #1 in lineage certificate SHA-256 digest: {'a' * 64}\n"
-                 "Has installed data capability: true\n"
-                 f"Signer #2 in lineage certificate SHA-256 digest: {'b' * 64}\n"
-                 "Has installed data capability: true\n")
-        with patch.object(lib, "command", return_value=proof):
-            self.assertTrue(lib.validate_rotation(Path("new.apk"), before, incoming))
-        with patch.object(lib, "command", return_value=proof.replace("true", "false", 1)):
-            self.assertFalse(lib.validate_rotation(Path("new.apk"), before, incoming))
+    def test_minimum_sdk_and_preview_builds(self):
+        with self.assertRaisesRegex(ValueError, "needs Android API 35"):
+            self.install(self.apk("too-new.apk", min_sdk=35))
+        with self.assertRaisesRegex(ValueError, "preview"):
+            self.install(self.apk("preview.apk", min_sdk=None, codename="Baklava"))
+        self.assertEqual(self.install(self.apk("ok.apk", min_sdk=34))[1]["min_sdk"], 34)
 
     def test_apkm_and_split_validation(self):
-        def bundle(name, version, **split_args):
-            path = self.home / name
-            with zipfile.ZipFile(path, "w") as archive:
-                archive.write(self.apk("base-source.apk", version), "base.apk")
-                archive.write(self.apk("split-source.apk", version, split="feature", **split_args), "split_feature.apk")
-            return path
-        with self.assertRaisesRegex(ValueError, "signers differ"):
-            self.install(bundle("bad.apkm", 1, key="b"))
-        _, first, apk = self.install(bundle("v1.apkm", 1))
-        _, updated, active = self.install(bundle("v2.apkm", 2), "update")
-        self.assertEqual(apk, active)
-        self.assertEqual(set(first["apks"]), {"base.apk", "split_feature.apk"})
-        self.assertEqual(updated["version_code"], 2)
+        with self.assertRaisesRegex(ValueError, "version differs"):
+            self.install(self.bundle("bad.apkm", 1, pkg="org.other.app"))
+        _, first, apk, _ = self.install(self.bundle("v1.apkm", 1))
+        self.assertEqual(first["splits"], {"split_config.x86_64.apk": "config.x86_64"})
+        self.assertEqual(self.install(self.bundle("v2.apkm", 2), "update")[2], apk)
+        self.promote()
+        self.assertEqual(set(lib.load_app(self.root, package)[1]["apks"]), {"base.apk", "split_config.x86_64.apk"})
         with self.assertRaisesRegex(ValueError, "Changing between"):
             self.install(self.apk("v3.apk", 3), "update")
 
+    def test_optional_host_signature_check(self):
+        _, config, _, _ = self.install(self.apk("other.apk", pkg="org.example.other"))
+        self.assertIsNone(config["signers"])  # no apksigner: Android checks
+        with patch.dict(os.environ, {"LEPTON_APKSIGNER": str(self.signer)}):
+            self.assertEqual(self.install(self.apk("v1.apk"))[1]["signers"], ["a" * 64])
+            _, staged, _, _ = self.install(self.apk("v2.apk", 2), "update")
+            self.assertEqual(staged["signers"], ["a" * 64])
+            with self.assertRaisesRegex(ValueError, "did not verify"):
+                self.install(self.apk("unsigned.apk", 3, key=None), "update")
+            with self.assertRaisesRegex(ValueError, "known format"):
+                self.install(self.apk("odd.apk", 3, key="odd"), "update")
+            # A different key may be a valid rotation: Android decides.
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                lib.import_app(self.root, self.apk("rotated.apk", 3, key="b"), mode="update")
+            self.assertIn("valid signing-key rotation", out.getvalue())
+            with self.assertRaisesRegex(ValueError, "Verified signers differ"):
+                self.install(self.bundle("mixed.apkm", 1, key="b", pkg=package))
+        with patch.dict(os.environ, {"LEPTON_APKSIGNER": str(self.home / "missing")}):
+            with self.assertRaisesRegex(ValueError, "not executable"):
+                self.install(self.apk("v4.apk", 4), "update")
+
     def test_steam_appid_and_renamed_shortcut(self):
-        _, _, apk = self.install(self.apk("old.apk"))
+        _, _, apk, _ = self.install(self.apk("old.apk"))
         steam = self.home / "Steam"
         user = steam / "userdata/123/config"
         user.mkdir(parents=True)
@@ -161,39 +259,64 @@ class LibraryTests(unittest.TestCase):
             addon = importlib.util.module_from_spec(importlib.util.spec_from_loader(addon_loader.name, addon_loader))
             addon_loader.exec_module(addon)
             vdf = user / "shortcuts.vdf"
-            vdf.write_bytes(b"\x00shortcuts\x00" +
-                            addon.shortcut_entry(0, int(before), "Renamed in Steam", apk, "custom options") + b"\x08")
+            vdf.write_bytes(b"\x00shortcuts\x00" + addon.shortcut_entry(
+                0, int(before), "Renamed in Steam", apk, "LEPTON_SHARED_FOLDERS=none %command%") + b"\x08")
             original = vdf.read_bytes()
             self.install(self.apk("new.apk", 2), "update")
+            self.promote()
             self.assertEqual(subprocess.check_output(argv, text=True), before)
             self.assertEqual(vdf.read_bytes(), original)
-            self.assertEqual(list(lib.steam_shortcuts(apk)),
-                             [{"user": "123", "appid": int(before), "name": "Renamed in Steam"}])
-            result = subprocess.run([str(tools / "lepton-library"), "remove", package, "--yes"],
-                                    text=True, capture_output=True)
+            self.assertEqual(list(lib.steam_shortcuts(apk)), [{
+                "user": "123", "appid": int(before), "name": "Renamed in Steam",
+                "launch_options": "LEPTON_SHARED_FOLDERS=none %command%"}])
+            profile = self.home / "compatdata" / before.strip()
+            lib.real_dir(self.root / package)
+            (self.root / package / ".profiles").mkdir()
+            lib.atomic_json(self.root / package / ".profiles" / "x.json", dict(
+                schema_version=1, profile=str(profile), kind="steam", state="applied",
+                installed_revision=lib.load_app(self.root, package)[1]["revision"], installed_version=2))
+            info = self.cli("info", package).stdout
+            self.assertIn('Steam shortcut "Renamed in Steam"', info)
+            self.assertIn("up to date", info)
+            self.assertIn("LEPTON_SHARED_FOLDERS=none, which overrides", info)
+            result = self.cli("remove", package, "--yes", check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertTrue(apk.is_file())
 
     def test_restore_is_a_library_file_transaction(self):
         first = self.apk("v1.apk")
-        directory, _, apk = self.install(first)
+        directory, _, apk, _ = self.install(first)
         self.install(self.apk("v2.apk", 2), "update")
+        self.promote()
         _, config, _ = lib.load_app(self.root, package)
         config["shared_folders"] = {"defaults": ["Music:ro"]}
         lib.atomic_json(directory / "config.json", config)
-        self.assertEqual(lib.restore_previous(directory, config, apk, dry_run=False), 1)
+        self.assertEqual(lib.restore_previous(directory, config, apk, dry_run=False)["version_code"], 1)
         self.assertEqual(apk.read_bytes(), first.read_bytes())
-        self.assertEqual(lib.load_app(self.root, package)[1]["shared_folders"], {"defaults": ["Music:ro"]})
+        restored = lib.load_app(self.root, package)[1]
+        self.assertEqual(restored["shared_folders"], {"defaults": ["Music:ro"]})
+        self.assertEqual(restored["version_code"], 1)
+
+    def test_discard_leaves_the_library_apk(self):
+        first = self.apk("v1.apk")
+        directory, _, apk, _ = self.install(first)
+        self.install(self.apk("v2.apk", 2), "update")
+        self.assertIn("Discarded the staged update", self.cli("discard", package).stdout)
+        self.assertFalse((directory / lib.CANDIDATE).exists())
+        self.assertEqual(apk.read_bytes(), first.read_bytes())
+        self.assertIn("No staged update", self.cli("discard", package).stdout)
 
     def test_unsafe_inputs(self):
-        with self.assertRaisesRegex(ValueError, "Invalid package"):
+        with self.assertRaisesRegex(ValueError, "Invalid Android package"):
             self.install(self.apk("bad.apk", pkg="../etc"))
-        with self.assertRaisesRegex(ValueError, "verification failed"):
-            self.install(self.apk("unsigned.apk", key=None))
         path = self.home / "malformed.apk"
         path.write_text("plain text")
         with self.assertRaises(zipfile.BadZipFile):
             self.install(path)
+        valid = self.apk("valid.apk").read_bytes()
+        (self.home / "truncated.apk").write_bytes(valid[:len(valid) // 2])
+        with self.assertRaises(zipfile.BadZipFile):
+            self.install(self.home / "truncated.apk")
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr("../bad", "no")
         with self.assertRaisesRegex(ValueError, "Unsafe archive"):
@@ -202,9 +325,19 @@ class LibraryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "real directory"):
             self.install(self.apk("valid.apk"))
 
-    def test_interruption_after_atomic_replacement(self):
-        directory, _, apk = self.install(self.apk("v1.apk"))
+    def test_missing_or_old_extractor_fails_clearly(self):
+        with patch.dict(os.environ, {"LEPTON_APK_EXTRACTOR": str(self.home / "absent")}):
+            with self.assertRaisesRegex(ValueError, "Reinstall the Lepton bundle"):
+                self.install(self.apk("v1.apk"))
+        old = script(self.home / "old-extractor", "#!/bin/sh\necho \"error: unexpected argument '--json'\" >&2; exit 2\n")
+        with patch.dict(os.environ, {"LEPTON_APK_EXTRACTOR": str(old)}):
+            with self.assertRaisesRegex(ValueError, "Cannot read Android package metadata.*--json"):
+                self.install(self.apk("v1.apk"))
+
+    def test_interrupted_promotion_is_recoverable(self):
+        directory, _, apk, _ = self.install(self.apk("v1.apk"))
         new = self.apk("v2.apk", 2)
+        self.install(new, "update")
         real_atomic = lib.atomic_json
 
         def interrupt(path, obj):
@@ -213,13 +346,32 @@ class LibraryTests(unittest.TestCase):
             real_atomic(path, obj)
 
         with patch.object(lib, "atomic_json", interrupt), self.assertRaisesRegex(OSError, "power loss"):
-            self.install(new, "update")
+            self.promote()
         self.assertEqual(apk.read_bytes(), new.read_bytes())
-        with self.assertRaisesRegex(ValueError, "recover"):
+        with self.assertRaisesRegex(lib.Interrupted, "recover"):
             lib.load_app(self.root, package)
-        lib.commit_update(directory)
+        self.assertIn("Finished", self.cli("recover", package).stdout)
         self.assertEqual(lib.load_app(self.root, package, verify=True)[1]["version_code"], 2)
-        self.assertFalse((directory / ".update").exists())
+        self.assertFalse((directory / lib.JOURNAL).exists())
+        self.assertIn("No interrupted", self.cli("recover", package).stdout)
+
+    def test_interrupted_staging_keeps_the_active_apk(self):
+        first = self.apk("v1.apk")
+        directory, _, apk, _ = self.install(first)
+        self.install(self.apk("v2.apk", 2), "update")
+        real_rename = os.rename
+
+        def interrupt(source, target):
+            if Path(target) == directory / lib.CANDIDATE:
+                raise OSError("power loss")
+            real_rename(source, target)
+
+        with patch.object(lib.os, "rename", interrupt), self.assertRaisesRegex(OSError, "power loss"):
+            self.install(self.apk("v3.apk", 3), "update")
+        self.assertEqual(apk.read_bytes(), first.read_bytes())
+        self.assertEqual(lib.load_app(self.root, package, verify=True)[1]["version_code"], 1)
+        self.assertIsNone(lib.load_candidate(directory, lib.load_app(self.root, package)[1]))
+        self.assertEqual([p.name for p in directory.iterdir() if p.name.startswith(".discarded")], [])
 
     def test_lock_readers_exclude_writers(self):
         path = self.apk("v1.apk")
@@ -230,16 +382,21 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(self.install(path)[1]["version_code"], 1)
 
     def test_configuration_precedence(self):
-        directory, config, apk = self.install(self.apk("v1.apk"))
+        directory, config, apk, _ = self.install(self.apk("v1.apk", activity=".Old"))
         config["shared_folders"] = {"defaults": [], "custom": [
             {"path": str(self.home / "Books and Comics"), "name": "Books", "read_only": True}]}
         lib.atomic_json(directory / "config.json", config)
-        self.assertEqual(lib.runtime_app(self.root, str(apk))[0],
-                         f"none,Books={self.home / 'Books and Comics'}:ro")
+        self.assertEqual(lib.runtime_app(self.root, str(apk))[0], f"none,Books={self.home / 'Books and Comics'}:ro")
         for value in ("", "Music"):
             with patch.dict(os.environ, {"LEPTON_SHARED_FOLDERS": value}):
                 self.assertIsNone(lib.runtime_app(self.root, str(apk))[0])
         self.assertIsNone(lib.runtime_app(self.root, str(self.home / "download.apk")))
+        # The launch starts the activity of the version it installs.
+        self.assertEqual(lib.runtime_app(self.root, str(apk))[3], ".Old")
+        self.install(self.apk("v2.apk", 2, activity=".New"), "update")
+        self.assertEqual(lib.runtime_app(self.root, str(apk))[3], ".New")
+        lib.reject_candidate(directory, lib.load_candidate(directory, config)["config"]["revision"], "refused")
+        self.assertEqual(lib.runtime_app(self.root, str(apk))[3], ".Old")
         config["shared_folders"]["custom"][0]["read_only"] = "no"
         with self.assertRaisesRegex(ValueError, "Invalid custom"):
             lib.sharing(config)
@@ -248,59 +405,269 @@ class LibraryTests(unittest.TestCase):
         path = self.apk("v1.apk")
         obb = self.home / f"main.1.{package}.obb"
         obb.write_text("test OBB")
-        directory, _, _ = self.install(path, obbs=[obb])
+        directory, _, _, _ = self.install(path, obbs=[obb])
         wrong = self.home / "main.2.other.app.obb"
         wrong.write_text("wrong app")
         with self.assertRaisesRegex(ValueError, "Invalid or duplicate OBB"):
             self.install(self.apk("v2.apk", 2), "update", obbs=[wrong])
+        patch_obb = self.home / f"patch.2.{package}.obb"
+        patch_obb.write_text("patch")
+        self.install(self.apk("v2.apk", 2), "update", obbs=[patch_obb])
+        self.assertFalse((directory / "obb" / patch_obb.name).exists())  # with the staged APK
+        self.promote()
+        self.assertEqual((directory / "obb" / patch_obb.name).read_text(), "patch")
         self.assertEqual((directory / "obb" / obb.name).read_text(), "test OBB")
         profile = self.home / "compatdata"
         profile.mkdir()
         (profile / "save").write_text("save")
         transfer = self.root / lib.STORAGE / "transfer"
         transfer.write_text("transfer")
-        subprocess.run([str(tools / "lepton-library"), "remove", package, "--yes"], check=True,
-                       stdout=subprocess.DEVNULL)
+        self.cli("remove", package, "--yes")
         self.assertFalse(directory.exists())
         self.assertEqual((profile / "save").read_text(), "save")
         self.assertEqual(transfer.read_text(), "transfer")
 
+    def test_status_reports_unavailable_library(self):
+        self.install(self.apk("v1.apk"))
+        self.install(self.apk("v2.apk", 2), "update")
+        status = self.cli("status").stdout
+        self.assertIn("(available)", status)
+        self.assertIn("[update 2 (2) staged]", status)
+        self.root.rename(self.home / "away")
+        result = self.cli("status", check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("UNAVAILABLE", result.stdout)
+        self.assertIn("Google Play still start", result.stdout)
+        self.assertFalse(self.root.exists())
 
-class ProfileTests(unittest.TestCase):
-    def test_failed_commit_and_interruption_recovery(self):
-        from unittest.mock import Mock
-        old = {"revision": "old", "code": {"version_code": 1, "base": "old", "splits": []}}
-        target = {"revision": "new", "code": {"version_code": 2, "base": "new", "splits": []}}
-        android = Mock()
-        android.installed.return_value = old["code"]
-        android.install.side_effect = ValueError("Package manager refused")
-        state = {"installed": old, "pending": None}
-        save = Mock()
-        with self.assertRaisesRegex(ValueError, "manager refused"):
-            runtime.finish_install(android, state, target, [], package, save)
-        self.assertEqual(state, {"installed": old, "pending": target})
-        save.assert_called_once()
-        # A subsequent launch verifies the actual package-manager result after
-        # host interruption and must not repeat an already committed update.
-        state["session"] = "42"
-        android.installed.return_value = target["code"]
-        android.install.reset_mock()
-        runtime.finish_install(android, state, target, [], package, save)
-        android.install.assert_not_called()
-        android.abandon.assert_called_once_with("42")
-        self.assertEqual(state, {"installed": target, "pending": None})
-        with self.assertRaisesRegex(ValueError, "newer"):
-            runtime.finish_install(android, state, old, [], package, save)
-        android.install.assert_not_called()
 
-    def test_rejects_missing_split(self):
-        with tempfile.TemporaryDirectory() as folder:
-            base = Path(folder) / "base.apk"
-            base.write_text("base")
-            config = {"format": ".apkm", "version_code": 1,
-                      "apks": {"base.apk": lib.sha256(base), "split_feature.apk": "missing"}}
-            with self.assertRaisesRegex(ValueError, "differ from verified"):
-                runtime.target_code(config, [base])
+class FakeAndroid:
+    """Android's package manager, as far as the runtime installer sees it."""
+    timeout = 5
+
+    def __init__(self, refuse=None):
+        self.code = None
+        self.refuse = refuse
+        self.installs = []
+        self.abandoned = []
+
+    def wait_ready(self):
+        pass
+
+    def installed(self, package):
+        return self.code and {"code": self.code, "dir": "/data/app/~~x==/" + package + "-y=="}
+
+    def checked(self, *args, **kwargs):
+        return ""
+
+    def abandon(self, session):
+        self.abandoned.append(session)
+
+    def obb(self, package, check=False):
+        pass
+
+    def install(self, sources, on_created):
+        on_created("7")
+        hashes = {}
+        for name, size, digest, opener in sources:
+            with opener() as stream:
+                data = stream.read()
+            if len(data) != size:
+                raise ValueError("size differs")
+            hashes[name] = hashlib.sha256(data).hexdigest()
+            if hashes[name] != digest:
+                raise ValueError("changed while installing")
+        if self.refuse:
+            raise runtime.Rejected(self.refuse)
+        self.installs.append(hashes)
+        base = hashes.pop("base.apk")
+        self.code = {"version_code": self.version_for(base), "base": base, "splits": sorted(hashes.values())}
+
+    def version_for(self, digest):
+        return self.versions[digest]
+
+
+class ProfileTests(LibraryCase):
+    def setUp(self):
+        super().setUp()
+        self.android = FakeAndroid()
+        patcher = patch.object(runtime, "Android", lambda context: self.android)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.profiles = {}
+
+    def profile(self, name):
+        baked = self.home / "profiles" / name / "baked"
+        if not baked.exists():
+            baked.mkdir(parents=True)
+            lib.atomic_json(baked / "lepton-managed.json",
+                            dict(schema_version=1, package=package, installed=None, pending=None))
+        return baked
+
+    def launch(self, name="steam", android=None):
+        if android is not None:
+            self.android = android
+        self.android.versions = {}
+        directory = self.root / package
+        for config in [lib.load_app(self.root, package)[1]] + [
+                c["config"] for c in [lib.load_candidate(directory, lib.load_app(self.root, package)[1])] if c]:
+            self.android.versions[config["apks"]["base.apk"]] = config["version_code"]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()) as err:
+            runtime.profile_install(self.root, package, self.profile(name), "ctx", False)
+        self.messages = err.getvalue()
+        return out.getvalue().splitlines()
+
+    def receipt(self, name="steam"):
+        return lib.read_json(self.profile(name) / "lepton-managed.json")
+
+    def test_first_install_and_ndk_code_identity(self):
+        self.install(self.apk("v1.apk"))
+        code_dir, code_id = self.launch()
+        self.assertEqual(code_dir, f"/data/app/~~x==/{package}-y==")
+        self.assertRegex(code_id, "^[0-9a-f]{64}$")
+        self.assertEqual(self.receipt()["installed"]["code"]["version_code"], 1)
+        self.assertEqual(len(self.android.installs), 1)
+        self.assertEqual(self.launch(), [code_dir, code_id])  # nothing to do
+        self.assertEqual(len(self.android.installs), 1)
+
+    def test_accepted_update_is_promoted(self):
+        directory, _, apk, _ = self.install(self.apk("v1.apk"))
+        self.launch()
+        new = self.apk("v2.apk", 2)
+        self.install(new, "update")
+        self.assertTrue(runtime.install_pending(self.root, package, self.profile("steam")))
+        self.launch()
+        self.assertEqual(apk.read_bytes(), new.read_bytes())
+        self.assertFalse((directory / lib.CANDIDATE).exists())
+        self.assertIn("now the library version", self.messages)
+        self.assertFalse(runtime.install_pending(self.root, package, self.profile("steam")))
+
+    def test_refused_update_keeps_the_installed_version(self):
+        first = self.apk("v1.apk")
+        directory, _, apk, _ = self.install(first)
+        self.launch()
+        before = dict(self.android.code)
+        self.install(self.apk("wrong.apk", 2, key="b"), "update")
+        self.android.refuse = "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]"
+        with self.assertRaisesRegex(ValueError, "refused the update.*unchanged; launch again"):
+            self.launch()
+        self.assertEqual(self.android.code, before)
+        self.assertEqual(apk.read_bytes(), first.read_bytes())
+        candidate = lib.load_candidate(directory, lib.load_app(self.root, package)[1])
+        self.assertIn("INSTALL_FAILED_UPDATE_INCOMPATIBLE", candidate["rejected"]["error"])
+        self.android.refuse = None
+        self.launch()  # plays the installed version; the refused update is not retried
+        self.assertEqual(self.android.code, before)
+        self.assertIn("REFUSED by Android", self.cli("info", package).stdout)
+        # A new update replaces the refused one and is tried again.
+        self.install(self.apk("v3.apk", 3), "update")
+        self.launch()
+        self.assertEqual(self.android.code["version_code"], 3)
+
+    def test_transient_failure_is_retried(self):
+        self.install(self.apk("v1.apk"))
+        self.launch()
+        self.install(self.apk("v2.apk", 2), "update")
+        with patch.object(FakeAndroid, "install", side_effect=ValueError("Package upload failed: timeout")):
+            with self.assertRaisesRegex(ValueError, "upload failed"):
+                self.launch()
+        candidate = lib.load_candidate(self.root / package, lib.load_app(self.root, package)[1])
+        self.assertIsNone(candidate["rejected"])
+        self.assertEqual(self.receipt()["pending"]["code"]["version_code"], 2)
+        self.launch()
+        self.assertEqual(self.android.code["version_code"], 2)
+
+    def test_interruption_after_android_commit(self):
+        directory, _, apk, _ = self.install(self.apk("v1.apk"))
+        self.launch()
+        new = self.apk("v2.apk", 2)
+        self.install(new, "update")
+        real_save = lib.atomic_json
+        calls = []
+
+        def crash_after_commit(path, value):
+            # The receipt write after Android's commit never happens.
+            if path.name == "lepton-managed.json" and value.get("installed", {}) and \
+                    value["installed"]["code"]["version_code"] == 2:
+                raise OSError("host interrupted")
+            calls.append(path)
+            real_save(path, value)
+
+        with patch.object(lib, "atomic_json", crash_after_commit), self.assertRaisesRegex(OSError, "interrupted"):
+            self.launch()
+        self.assertEqual(self.android.code["version_code"], 2)
+        self.assertNotEqual(apk.read_bytes(), new.read_bytes())  # not yet promoted
+        installs = len(self.android.installs)
+        self.launch()
+        self.assertEqual(len(self.android.installs), installs)  # verified, not repeated
+        self.assertEqual(self.android.abandoned, ["7"])
+        self.assertEqual(apk.read_bytes(), new.read_bytes())
+        self.assertEqual(self.receipt()["installed"]["code"]["version_code"], 2)
+
+    def test_interruption_after_install_before_promotion(self):
+        directory, _, apk, _ = self.install(self.apk("v1.apk"))
+        self.launch()
+        new = self.apk("v2.apk", 2)
+        self.install(new, "update")
+        with patch.object(lib, "promote_candidate", side_effect=OSError("host interrupted")):
+            with self.assertRaises(OSError):
+                self.launch()
+        self.assertEqual(self.receipt()["installed"]["code"]["version_code"], 2)
+        installs = len(self.android.installs)
+        self.launch()
+        self.assertEqual(len(self.android.installs), installs)
+        self.assertEqual(apk.read_bytes(), new.read_bytes())
+
+    def test_unexplained_installed_code_is_refused(self):
+        self.install(self.apk("v1.apk"))
+        self.android.code = {"version_code": 9, "base": "f" * 64, "splits": []}
+        with self.assertRaisesRegex(ValueError, "differs from the last verified state"):
+            self.launch()
+        self.assertEqual(self.receipt()["installed"], None)
+
+    def test_profiles_update_independently(self):
+        self.install(self.apk("v1.apk"))
+        steam, standalone = FakeAndroid(), FakeAndroid()
+        self.launch("steam", steam)
+        self.launch("standalone", standalone)
+        self.install(self.apk("v2.apk", 2), "update")
+        self.launch("steam", steam)  # accepted and promoted
+        self.assertEqual(standalone.code["version_code"], 1)  # untouched until launched
+        info = json.loads(self.cli("info", package, "--json").stdout)
+        self.assertEqual(sorted(p["installed_version"] for p in info["profiles"]), [1, 2])
+        self.launch("standalone", standalone)
+        self.assertEqual(standalone.code["version_code"], 2)
+
+    def test_profile_newer_than_library_keeps_its_version(self):
+        directory, config, apk, _ = self.install(self.apk("v1.apk"))
+        self.launch()
+        self.install(self.apk("v2.apk", 2), "update")
+        self.launch()
+        lib.restore_previous(directory, lib.load_app(self.root, package)[1], apk, dry_run=False)
+        self.assertFalse(runtime.install_pending(self.root, package, self.profile("steam")))
+        self.launch()
+        self.assertEqual(self.android.code["version_code"], 2)
+        self.assertIn("newer than the library", self.messages)
+
+    def test_apkm_streams_only_selected_members(self):
+        self.install(self.bundle("v1.apkm", 1))
+        self.launch()
+        self.assertEqual(set(self.android.installs[0]), {"split_config.x86_64.apk"})  # base popped
+        directory, config, apk = lib.load_app(self.root, package)
+        sources = runtime.install_sources(config, apk)
+        self.assertEqual([name for name, *_ in sources], ["base.apk", "split_config.x86_64.apk"])
+        with self.assertRaisesRegex(ValueError, "lacks split_config.arm64_v8a.apk"):
+            runtime.install_sources(dict(config, apks={"base.apk": "0" * 64,
+                                                        "split_config.arm64_v8a.apk": "0" * 64}), apk)
+
+    def test_digest_mismatch_aborts_installation(self):
+        self.install(self.apk("v1.apk"))
+        directory, config, apk = lib.load_app(self.root, package)
+        lib.atomic_json(directory / "config.json", dict(config, apks={"base.apk": "0" * 64}))
+        with self.assertRaisesRegex(ValueError, "differ from library metadata|changed while installing"):
+            self.launch()
+        self.assertIsNone(self.android.code)
 
 
 if __name__ == "__main__":

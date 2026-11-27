@@ -24,6 +24,10 @@ eval "$(awk '/^LEPTON_SHARED_[A-Z_]*=/ {p=1; arr=/=\(/} p {print} p && (!arr || 
           "$repo/compat_tool/liblepton/mounting.sh")"
 [[ ${#LEPTON_SHARED_FOLDER_DEFAULTS[@]} == 5 ]] || { echo "FAIL: default folders not loaded"; exit 1; }
 eval "$(sed -n '/^function host_path_in_container()/,/^}/p' "$repo/compat_tool/liblepton/liblepton.sh")"
+for fn in lepton_managed_app lepton_managed_mounts lepton_library_storage_entry; do
+    eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/android_library.sh")"
+    declare -F "$fn" > /dev/null || { echo "FAIL: $fn not found"; exit 1; }
+done
 
 print() { printf '%s' "$*"; }
 println() { printf '%s\n' "$*" >> "$work/messages"; }

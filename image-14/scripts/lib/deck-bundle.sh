@@ -275,6 +275,12 @@ if [[ -x "$repo/compat_tool/liblepton/apk_extractor/bin/apk-info-extractor" ]]; 
     install -D -m 755 "$repo/compat_tool/liblepton/apk_extractor/bin/apk-info-extractor" \
         "$tmp/payload/compat_tool/liblepton/apk_extractor/bin/apk-info-extractor"
 fi
+# The Android Library reads package metadata with --json (no Android SDK).
+"$tmp/payload/compat_tool/liblepton/apk_extractor/bin/apk-info-extractor" --json \
+    "$repo/compat_tool/liblepton/apk_extractor/test/SplitConfig.xml" > /dev/null || {
+    echo 'ERROR: the APK metadata extractor lacks --json. Rebuild it: make -C compat_tool/liblepton/apk_extractor install-native' >&2
+    exit 1
+}
 # The persistent test runner also handles split APKM installs. Ship only its
 # source helpers; profiles, APKs and host build workspaces are never included.
 mkdir -p "$tmp/payload/tests/runtime"

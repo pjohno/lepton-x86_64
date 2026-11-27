@@ -7,6 +7,7 @@ trap 'rm -rf -- "$work"' EXIT
 for fn in app_install_complete_path app_apk_set_matches is_app_baked; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/baking.sh")"
 done
+eval "$(sed -n "/^function lepton_managed_app()/,/^}/p" "$repo/compat_tool/liblepton/android_library.sh")"
 for fn in extract_app_hash extract_app_mount_dir; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/app_metadata.sh")"
 done

@@ -258,7 +258,7 @@ function check_kept_app_data()
     println "Profile: Steam AppID=${SteamAppId:-unknown}; package=$(get_app_id)${LEPTON_LAUNCH_PACKAGE:+(launcher: ${LEPTON_LAUNCH_PACKAGE})}; tool=${LEPTON_ENTRYPOINT:-$LEPTON_DIR}; data=$DIR"
     [[ "${LEPTON_KEEP_APP_DATA:-true}" != false ]] || println "WARNING: LEPTON_KEEP_APP_DATA=false ignored; use an explicit per-game reset"
     if [[ "${LEPTON_RESET_APP_DATA:-false}" == true ]]; then
-        [[ -z "${LEPTON_MANAGED_APP:-}" ]] || die "Refusing LEPTON_RESET_APP_DATA for a managed launch"
+        lepton_managed_refuse_reset
         clear_baked_app_data "LEPTON_RESET_APP_DATA=true" || return 1
     fi
     CURRENT="$(lepton_runtime_fingerprint)" || return 1
@@ -271,9 +271,8 @@ function check_kept_app_data()
             return 1
         fi
         println "Runtime fingerprint match; previous fingerprint known"
-        if [[ -n "${LEPTON_MANAGED_APP:-}" ]]; then
-            lepton_library_helper profile "$DIR" "$(get_app_id)" existing || return 1
-        elif is_app && ! is_app_baked; then
+        lepton_managed_profile "$DIR" existing || return 1
+        if ! lepton_managed_app && is_app && ! is_app_baked; then
             println "ERROR: installation validation failed; profile preserved but not mounted. Restore the original APK or diagnose the installed code/metadata after backup. Automatic repair is not yet validated for this overlay." >&2
             lepton_profile_refused installation
             return 1
@@ -287,9 +286,7 @@ function check_kept_app_data()
         println "Existing profile detected: no; creating new profile; runtime fingerprint=$CURRENT"
         mkdir -p "$DIR"
         print "$CURRENT" > "$FINGERPRINT_FILE"
-        if [[ -n "${LEPTON_MANAGED_APP:-}" ]]; then
-            lepton_library_helper profile "$DIR" "$(get_app_id)" new || return 1
-        fi
+        lepton_managed_profile "$DIR" new || return 1
     fi
 }
 
@@ -381,9 +378,9 @@ function setup_container()
         die "Google sign-in needs a Lepton tool with Google services (a GApps bundle)."
     fi
     if ! is_sysbake; then
-        lepton_library_location
+        lepton_library_resolve
     fi
-    if [[ -n "${LEPTON_MANAGED_APP:-}" ]] && is_context_live; then
+    if lepton_managed_app && is_context_live; then
         die "Managed profile is already running"
     fi
     check_kept_app_data || die "Profile safety check failed; existing data preserved"

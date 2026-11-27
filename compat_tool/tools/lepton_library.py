@@ -1,5 +1,24 @@
 # SPDX-License-Identifier: MIT
-"""Host-side Android Library storage and package validation."""
+"""Host-side Android Library storage, package metadata and update staging.
+
+Library layout (docs/android-library.md describes the design):
+
+  ROOT/.lepton-library.json       identity marker, matched against the settings
+  ROOT/Container Storage/         common folder shared with every profile
+  ROOT/PACKAGE/
+      PACKAGE.apk | PACKAGE.apkm  active APK: the stable Steam shortcut target
+      config.json                 active metadata and per-app settings
+      obb/                        versioned OBB files, mounted read-only
+      .candidate/                 staged update Android has not yet accepted
+      .previous/                  APK replaced by the most recent promotion
+      .update/                    journal of an unfinished file replacement
+      .profiles/                  one receipt per Android profile
+
+Android's package manager is authoritative for signatures, signing-key
+rotation, replacement and downgrades. A staged update becomes the active APK
+only after Android has installed it in a profile, so the active APK is always
+a version Android accepted (or the original import).
+"""
 import contextlib
 import fcntl
 import hashlib
@@ -11,6 +30,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 import uuid
 import zipfile
 
@@ -19,7 +39,26 @@ PACKAGE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+")
 DIGEST = re.compile(r"[a-f0-9]{64}")
 SIGNER = re.compile(r"(?im)^Signer (?:#\d+|\(minSdkVersion=[^\r\n]+\)) certificate SHA-256 digest: ([a-f0-9]{64})[ \t]*$")
 STORAGE = "Container Storage"
+MARKER = ".lepton-library.json"
+CANDIDATE = ".candidate"
+JOURNAL = ".update"
+PREVIOUS = ".previous"
+FORMATS = (".apk", ".apkm")
 DEFAULTS = ("Documents", "Downloads", "Videos", "Music", "Pictures")
+LONG_MIN, LONG_MAX = -(1 << 63), (1 << 63) - 1
+# Package metadata replaced by an update. Everything else in config.json (the
+# per-app shared-folder settings) belongs to the user and is kept.
+METADATA = ("name", "version_name", "version_code", "min_sdk", "signers", "abis", "apks",
+            "splits", "sha256", "launchable_activity", "extract_native_libs", "revision")
+OBB_NAME = r"(?:main|patch)\.[0-9]+\.{}\.obb"
+
+
+class Unavailable(ValueError):
+    """The configured library cannot be reached or is not the same library."""
+
+
+class Interrupted(ValueError):
+    """A library file replacement was interrupted and must be finished first."""
 
 
 def settings_path():
@@ -53,6 +92,10 @@ def atomic_json(path, value):
             sync_dir(path.parent)
         finally:
             temp.unlink(missing_ok=True)
+
+
+def exists(path):
+    return path.exists() or path.is_symlink()
 
 
 def real_dir(path):
@@ -89,34 +132,60 @@ def validate_root(path):
 
 
 @contextlib.contextmanager
-def lock(path, exclusive):
+def lock(path, exclusive, wait=0):
+    """flock on a directory. WAIT seconds to obtain it; 0 fails at once."""
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        try:
-            fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise ValueError("Android Library is busy. Close running managed applications and retry.") from exc
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                if time.monotonic() >= deadline:
+                    raise ValueError("Android Library is busy. Close running managed applications and retry.") from exc
+                time.sleep(0.2)
         yield
     finally:
         os.close(fd)
 
 
-def library():
+# Library location -----------------------------------------------------------
+
+def configured():
+    """(root, settings) from the user's configuration, without checking that
+    the library is reachable. None when no library is configured."""
     conf = settings_path()
-    if not conf.exists() and not conf.is_symlink():
+    if not exists(conf):
         return None
     settings = read_json(conf)
+    if not isinstance(settings.get("path"), str) or not isinstance(settings.get("id"), str):
+        raise ValueError(f"Invalid Android Library configuration in {conf}")
     root = Path(settings["path"])
     validate_root(root)
-    marker = root / ".lepton-library.json"
+    return root, settings
+
+
+def check_available(root, settings):
+    """Raise Unavailable unless ROOT is the configured library, on a connected
+    drive. Never creates anything."""
     try:
         real_dir(root)
         real_dir(root / STORAGE)
-        if read_json(marker)["id"] != settings["id"]:
-            raise ValueError("Library identity changed")
+        if read_json(root / MARKER)["id"] != settings["id"]:
+            raise ValueError("library identity changed")
     except (ValueError, OSError) as exc:
-        raise ValueError(f"Android Library unavailable at {root}. Reconnect its drive or restore the real directory. ({exc})") from exc
-    return root
+        raise Unavailable(f"Android Library unavailable at {root}. Reconnect its drive or restore the "
+                          f"directory, or run lepton-library forget to stop using it. ({exc})") from exc
+
+
+def library():
+    """The configured, available library root; None if none is configured."""
+    found = configured()
+    if found is None:
+        return None
+    check_available(*found)
+    return found[0]
 
 
 def initialize(path, dry_run=False):
@@ -129,18 +198,22 @@ def initialize(path, dry_run=False):
         return path
     conf.parent.mkdir(parents=True, exist_ok=True)
     with lock(conf.parent, True):
-        existing = library()
-        if existing is not None:
-            if existing != path:
-                raise ValueError(f"Library already configured at {existing}")
-            return existing
-        # Require the parent to exist so a mistyped or disconnected mount
-        # does not cause us to create a chain of directories.
+        found = configured()
+        if found is not None:
+            if found[0] != path:
+                raise ValueError(f"Library already configured at {found[0]}. Run lepton-library forget first "
+                                 "to use another location; no files are deleted.")
+            check_available(*found)
+            return path
+        # Only the library directory itself is created, so a mistyped path or
+        # a disconnected drive does not produce a chain of directories.
+        if not path.parent.is_dir():
+            raise ValueError(f"Parent directory does not exist: {path.parent}. Connect the drive or create it first.")
         path.mkdir(mode=0o700, exist_ok=True)
         real_dir(path)
         with lock(path, True):
-            marker = path / ".lepton-library.json"
-            if marker.exists() or marker.is_symlink():
+            marker = path / MARKER
+            if exists(marker):
                 state = read_json(marker)
                 real_dir(path / STORAGE)
             else:
@@ -151,6 +224,20 @@ def initialize(path, dry_run=False):
             atomic_json(conf, dict(state, path=str(path)))
     return path
 
+
+def forget():
+    """Remove the library association. Library files and profiles are kept."""
+    conf = settings_path()
+    found = configured()
+    if found is None:
+        return None
+    with lock(conf.parent, True):
+        conf.unlink()
+        sync_dir(conf.parent)
+    return found[0]
+
+
+# Files ----------------------------------------------------------------------
 
 def sha256(path):
     with path.open("rb") as stream:
@@ -171,15 +258,6 @@ def command(args):
     return result.stdout
 
 
-def sdk_tool(name):
-    # SDK Build Tools can live in a user directory on immutable SteamOS.
-    directory = os.getenv("LEPTON_ANDROID_BUILD_TOOLS")
-    result = str(Path(directory).expanduser() / name) if directory else shutil.which(name)
-    if not result or not os.access(result, os.X_OK):
-        raise ValueError(f"Install Android SDK Build Tools and set LEPTON_ANDROID_BUILD_TOOLS (missing {name})")
-    return result
-
-
 def archive_entries(archive):
     entries = archive.infolist()
     names = {entry.filename for entry in entries}
@@ -195,44 +273,118 @@ def archive_entries(archive):
     return names
 
 
+def obb_files(paths, package):
+    name = re.compile(OBB_NAME.format(re.escape(package)))
+    result = {}
+    for path in paths:
+        path = path.expanduser().absolute()
+        regular(path)
+        if not name.fullmatch(path.name) or path.name in result:
+            raise ValueError(f"Invalid or duplicate OBB filename for {package}: {path.name}")
+        result[path.name] = path
+    return result
+
+
+# Package metadata -----------------------------------------------------------
+
+def extractor():
+    path = os.environ.get("LEPTON_APK_EXTRACTOR") or str(TOOLS.parent / "liblepton/apk_extractor/bin/apk-info-extractor")
+    if not os.access(path, os.X_OK):
+        raise ValueError(f"The bundled APK metadata reader is missing ({path}). Reinstall the Lepton bundle.")
+    return path
+
+
+def manifest(path):
+    """The bundled extractor's JSON description of one APK."""
+    try:
+        data = json.loads(command([extractor(), "--json", str(path)]))
+    except ValueError as exc:
+        raise ValueError(f"Cannot read Android package metadata from {path.name}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Unexpected metadata for {path.name}; reinstall the Lepton bundle")
+    return data
+
+
+def apksigner():
+    """Optional host signature check: LEPTON_APKSIGNER (a path, or none), then
+    LEPTON_ANDROID_BUILD_TOOLS/apksigner, then apksigner on PATH."""
+    choice = os.environ.get("LEPTON_APKSIGNER", "")
+    if choice == "none":
+        return None
+    if choice:
+        candidate = str(Path(choice).expanduser())
+    elif os.environ.get("LEPTON_ANDROID_BUILD_TOOLS"):
+        candidate = str(Path(os.environ["LEPTON_ANDROID_BUILD_TOOLS"]).expanduser() / "apksigner")
+    else:
+        return shutil.which("apksigner")
+    if not os.access(candidate, os.X_OK):
+        raise ValueError(f"apksigner is not executable at {candidate}. Unset LEPTON_APKSIGNER and "
+                         "LEPTON_ANDROID_BUILD_TOOLS to leave signature checks to Android.")
+    return candidate
+
+
+def host_signers(path):
+    """Verified signing-certificate digests, or None when apksigner is not
+    available. Android verifies the signature again on installation."""
+    tool = apksigner()
+    if tool is None:
+        return None
+    try:
+        output = command([tool, "verify", "--print-certs", str(path)])
+    except ValueError as exc:
+        raise ValueError(f"apksigner did not verify {path.name}: {exc}. Set LEPTON_APKSIGNER=none to leave "
+                         "signature checks to Android.") from exc
+    signers = sorted(set(SIGNER.findall(output.lower())))
+    if not signers:
+        # A changed output format must not pass silently as "unsigned".
+        raise ValueError(f"apksigner verified {path.name}, but its output did not list signer digests in "
+                         "a known format. Set LEPTON_APKSIGNER=none to leave signature checks to Android.")
+    return signers
+
+
+def android_sdk():
+    """API level of the bundled Android image (Android 14 for image-14)."""
+    try:
+        text = (TOOLS.parent / "images/rootfs/system/build.prop").read_text(errors="replace")
+        return int(re.search(r"(?m)^ro\.build\.version\.sdk=([0-9]+)$", text)[1])
+    except (OSError, TypeError):
+        return 34
+
+
 def apk_metadata(path):
     with zipfile.ZipFile(path) as archive:
         names = archive_entries(archive)
         if "AndroidManifest.xml" not in names:
-            raise ValueError("APK has no AndroidManifest.xml")
-        abis = sorted({name.split("/")[1] for name in names if re.fullmatch(r"lib/[^/]+/[^/]+\.so", name)})
-    badging = command([sdk_tool("aapt2"), "dump", "badging", str(path)])
-    package_line = next((line for line in badging.splitlines() if line.startswith("package: ")), "")
-    fields = dict(re.findall(r"([A-Za-z]+)='([^']*)'", package_line))
-    package = fields.get("name", "")
-    code = fields.get("versionCode", "")
-    manifest = command([sdk_tool("aapt2"), "dump", "xmltree", str(path), "--file", "AndroidManifest.xml"])
-    major = 0
-    major_attribute = re.search(
-        r"(?m)^[ \t]*A: (?:http://schemas\.android\.com/apk/res/)?android:versionCodeMajor(.*)$", manifest)
-    if major_attribute:
-        major_field = re.fullmatch(r"(?:\(0x[0-9a-f]+\))?=(?:\(type 0x[0-9a-f]+\))?(0x[0-9a-f]+|[0-9]+)",
-                                   major_attribute[1].strip())
-        if major_field is None:
-            raise ValueError(f"Cannot read versionCodeMajor in {path.name}")
-        major = int(major_field[1], 0)
-    if not PACKAGE.fullmatch(package) or not re.fullmatch(r"[0-9]+", code):
-        raise ValueError(f"Invalid package or version in {path.name}")
-    if int(code) > 0xffffffff or major > 0x7fffffff:
-        raise ValueError("Android version code is outside its supported range")
-    result = command([sdk_tool("apksigner"), "verify", "--print-certs", str(path)])
-    signers = sorted(set(SIGNER.findall(result.lower())))
-    if not signers:
-        raise ValueError(f"No verified Android signing certificates in {path.name}")
-    label = re.search(r"(?m)^application-label:'(.*)'$", badging)
-    if label is None:
-        label = re.search(r"(?m)^application: label='(.*)' icon=", badging)
-    return dict(package=package, name=(label[1] if label and label[1] else package), version_name=fields.get("versionName", ""),
-                version_code=(major << 32) | int(code), signers=signers, abis=abis,
-                split=fields.get("split", ""), sha256=sha256(path))
+            raise ValueError(f"{path.name} has no AndroidManifest.xml")
+        damaged = archive.testzip()
+        if damaged is not None:
+            raise ValueError(f"{path.name} is damaged (bad data in {damaged})")
+    data = manifest(path)
+    package = data.get("package")
+    if not isinstance(package, str) or not PACKAGE.fullmatch(package):
+        raise ValueError(f"Invalid Android package name in {path.name}: {package!r}")
+    code = data.get("long_version_code")
+    if type(code) is not int or not LONG_MIN <= code <= LONG_MAX:
+        raise ValueError(f"Cannot read the Android version code of {path.name}")
+    if data.get("min_sdk_codename"):
+        raise ValueError(f"{path.name} targets the preview Android release {data['min_sdk_codename']}")
+    return {
+        "package": package,
+        "name": data.get("label") or package,
+        "version_name": data.get("version_name") or "",
+        "version_code": code,
+        "min_sdk": data.get("min_sdk"),
+        "split": data.get("split") or "",
+        "abis": data.get("abis") or [],
+        "launchable_activity": data.get("launchable_activity"),
+        "extract_native_libs": data.get("extract_native_libs"),
+        "signers": host_signers(path),
+        "sha256": sha256(path),
+    }
 
 
 def inspect(path, suffix):
+    """Metadata for an APK or APKM file, checked for internal consistency."""
     if suffix == ".apk":
         entries = {"base.apk": apk_metadata(path)}
     else:
@@ -249,73 +401,84 @@ def inspect(path, suffix):
                 dest.unlink()
     base = entries["base.apk"]
     if base["split"]:
-        raise ValueError("Expected a base APK")
+        raise ValueError("Expected a base APK, not a split")
     split_ids = set()
     for name, entry in entries.items():
-        if any(entry[key] != base[key] for key in ("package", "version_code", "signers")):
-            raise ValueError(f"Package, version or verified signers differ in {name}")
+        if entry["package"] != base["package"] or entry["version_code"] != base["version_code"]:
+            raise ValueError(f"Package or version differs in {name}")
+        if entry["signers"] != base["signers"]:
+            raise ValueError(f"Verified signers differ in {name}")
         if name != "base.apk":
             if not entry["split"] or entry["split"] in split_ids:
                 raise ValueError(f"Missing or duplicate split ID in {name}")
             split_ids.add(entry["split"])
-    info = {key: base[key] for key in ("package", "name", "version_name", "version_code", "signers")}
-    info.update(format=suffix, sha256=sha256(path), abis=sorted({abi for entry in entries.values() for abi in entry["abis"]}),
-                apks={name: entry["sha256"] for name, entry in entries.items()})
+    if base["min_sdk"] is not None and base["min_sdk"] > android_sdk():
+        raise ValueError(f"{base['package']} needs Android API {base['min_sdk']}; this Lepton image "
+                         f"provides API {android_sdk()}")
+    info = {key: base[key] for key in ("package", "name", "version_name", "version_code", "min_sdk",
+                                       "signers", "launchable_activity", "extract_native_libs")}
+    info.update(format=suffix, sha256=sha256(path),
+                abis=sorted({abi for entry in entries.values() for abi in entry["abis"]}),
+                apks={name: entry["sha256"] for name, entry in entries.items()},
+                splits={name: entry["split"] for name, entry in entries.items() if name != "base.apk"})
     return info
 
 
+def check_metadata(config, package, what):
+    """Raise unless CONFIG holds usable metadata for PACKAGE."""
+    def digest(value):
+        return isinstance(value, str) and DIGEST.fullmatch(value)
 
-def validate_rotation(path, old, new):
-    # apksigner verify has already authenticated every member. Check that each
-    # embeds the successor proof and retains access to its predecessors' data.
-    def accepts(apk):
-        try:
-            proof = command([sdk_tool("apksigner"), "lineage", "--print-certs", "--in", str(apk)])
-        except ValueError:
-            return False
-        certificates = re.split(r"(?m)^Signer #\d+ in lineage certificate SHA-256 digest: ([a-f0-9]{64})[ \t]*$", proof)
-        if len(certificates) < 5:
-            return False
-        lineage = dict(zip(certificates[1::2], certificates[2::2]))
-        successor = next(reversed(lineage))
-        return (successor in new["signers"] and set(new["signers"]).issubset(lineage) and
-                all(digest in lineage and "Has installed data capability: true" in lineage[digest].splitlines()
-                    for digest in old["signers"]))
+    signers = config.get("signers")
+    apks = config.get("apks")
+    checks = {
+        "package": config.get("package") == package,
+        "format": config.get("format") in FORMATS,
+        "name": isinstance(config.get("name"), str),
+        "version_name": isinstance(config.get("version_name"), str),
+        "version_code": type(config.get("version_code")) is int and LONG_MIN <= config["version_code"] <= LONG_MAX,
+        "sha256": digest(config.get("sha256")),
+        "revision": isinstance(config.get("revision"), str) and bool(config["revision"]),
+        # None: no host signature check was available.
+        "signers": signers is None or (isinstance(signers, list) and bool(signers) and all(map(digest, signers))),
+        "apks": isinstance(apks, dict) and "base.apk" in apks and all(map(digest, apks.values())),
+    }
+    failed = [name for name, ok in checks.items() if not ok]
+    if failed:
+        raise ValueError(f"Invalid {what} for {package} ({', '.join(failed)})")
+    return config
 
-    if new["format"] == ".apk":
-        return accepts(path)
-    with zipfile.ZipFile(path) as archive, tempfile.TemporaryDirectory() as folder:
-        for name in new["apks"]:
-            apk = Path(folder) / name
-            with archive.open(name) as source, apk.open("xb") as output:
-                shutil.copyfileobj(source, output)
-            if not accepts(apk):
-                return False
-            apk.unlink()
-    return True
 
 def load_app(root, package, verify=False):
     if not PACKAGE.fullmatch(package):
         raise ValueError(f"Invalid Android package: {package}")
     directory = root / package
     real_dir(directory)
-    if (directory / ".update").exists() or (directory / ".update").is_symlink():
-        raise ValueError(f"Interrupted library update for {package}. Run lepton-library recover {package}.")
-    config = read_json(directory / "config.json")
-    if (config.get("package") != package or config.get("format") not in {".apk", ".apkm"} or
-            not isinstance(config.get("name"), str) or not isinstance(config.get("version_name"), str) or
-            type(config.get("version_code")) is not int or not 0 <= config["version_code"] < (1 << 63) or
-            not isinstance(config.get("sha256"), str) or not DIGEST.fullmatch(config["sha256"]) or
-            not isinstance(config.get("revision"), str) or not config["revision"] or
-            not isinstance(config.get("signers"), list) or not config["signers"] or
-            any(not isinstance(digest, str) or not DIGEST.fullmatch(digest) for digest in config["signers"]) or
-            not isinstance(config.get("apks"), dict) or "base.apk" not in config["apks"]):
-        raise ValueError(f"Invalid application metadata for {package}")
+    if exists(directory / JOURNAL):
+        raise Interrupted(f"Interrupted library update for {package}. Run lepton-library recover {package}.")
+    config = check_metadata(read_json(directory / "config.json"), package, "application metadata")
     apk = directory / (package + config["format"])
     regular(apk)
     if verify and sha256(apk) != config["sha256"]:
         raise ValueError(f"APK contents differ from library metadata: {apk}")
     return directory, config, apk
+
+
+def load_candidate(directory, config, verify=False):
+    """The staged update, or None: {"config", "apk", "rejected"}."""
+    stage = directory / CANDIDATE
+    if not exists(stage):
+        return None
+    real_dir(stage)
+    candidate = check_metadata(read_json(stage / "config.json"), directory.name, "staged update")
+    if candidate["format"] != config["format"]:
+        raise ValueError("Staged update changes between APK and APKM")
+    apk = stage / (directory.name + config["format"])
+    regular(apk)
+    if verify and sha256(apk) != candidate["sha256"]:
+        raise ValueError(f"Staged APK contents differ from its metadata: {apk}")
+    rejected = read_json(stage / "rejected.json") if exists(stage / "rejected.json") else None
+    return {"config": candidate, "apk": apk, "rejected": rejected}
 
 
 def default_share(item):
@@ -325,90 +488,80 @@ def default_share(item):
     return name in DEFAULTS and (not separator or mode in {"ro", "rw"})
 
 
+def custom_share(item):
+    if not isinstance(item, dict):
+        return False
+    name, path, ro = item.get("name"), item.get("path"), item.get("read_only")
+    return (isinstance(name, str) and bool(name) and not any(char in name for char in "=,/:") and
+            isinstance(path, str) and path.startswith("/") and "," not in path and type(ro) is bool and
+            not any(ord(char) < 32 or ord(char) == 127 for char in name + path))
+
+
 def sharing(config):
+    """The LEPTON_SHARED_FOLDERS value for the app's saved settings, or None
+    when the app keeps Lepton's defaults."""
     settings = config.get("shared_folders", {})
     if not isinstance(settings, dict):
         raise ValueError("Invalid shared-folder configuration")
     defaults = settings.get("defaults")
     custom = settings.get("custom", [])
-    if defaults is not None and (not isinstance(defaults, list) or
-            any(not default_share(item) for item in defaults)):
+    if defaults is not None and (not isinstance(defaults, list) or not all(map(default_share, defaults))):
         raise ValueError("Invalid shared-folder defaults")
-    if not isinstance(custom, list):
-        raise ValueError("Invalid custom shared folders")
+    if not isinstance(custom, list) or not all(map(custom_share, custom)):
+        raise ValueError("Invalid custom shared folder")
     items = [] if defaults is None else defaults or ["none"]
-    for item in custom:
-        if not isinstance(item, dict):
-            raise ValueError("Invalid custom shared folder")
-        name, path, ro = item.get("name"), item.get("path"), item.get("read_only")
-        if (not isinstance(name, str) or not name or any(char in name for char in "=,/:") or
-                not isinstance(path, str) or not path.startswith("/") or "," in path or
-                type(ro) is not bool or any(ord(char) < 32 or ord(char) == 127 for char in name + path)):
-            raise ValueError("Invalid custom shared folder")
-        items = [*items, f"{name}={path}:{'ro' if ro else 'rw'}"]
+    items += [f"{item['name']}={item['path']}:{'ro' if item['read_only'] else 'rw'}" for item in custom]
     return ",".join(items) if items else None
 
 
 def steam_shortcuts(apk, *, removing=False):
-    from importlib.machinery import SourceFileLoader
-    from importlib.util import module_from_spec, spec_from_loader
+    from lepton_steam import shortcuts_for, steam_running
 
-    loader = SourceFileLoader("lepton_shortcuts", str(TOOLS / "lepton-add-game"))
-    module = module_from_spec(spec_from_loader(loader.name, loader))
-    loader.exec_module(module)
-    steam = module.manage_module().steam_root(required=False)
-    if steam is None:
-        return
-    if removing and module.steam_running():
+    if removing and steam_running():
         raise ValueError("Exit Steam before removing library apps. Steam may have unsaved shortcuts.")
-    for user, _ in module.steam_users(steam):
-        shortcuts = user / "config/shortcuts.vdf"
-        if not shortcuts.exists():
-            continue
-        entries, _, _ = module.read_binary(shortcuts.read_bytes())
-        for entry in entries.values():
-            if not isinstance(entry, dict):
-                continue
-            exe = entry.get("Exe", "").strip('"')
-            if exe and Path(exe).resolve() == apk:
-                yield {"user": user.name, "appid": entry.get("appid"), "name": entry.get("AppName")}
+    yield from shortcuts_for(apk)
 
 
-def obb_files(paths, package):
-    name = re.compile(rf"(?:main|patch)\.[0-9]+\.{re.escape(package)}\.obb")
-    result = {}
-    for path in paths:
-        path = path.expanduser().absolute()
-        regular(path)
-        if not name.fullmatch(path.name) or path.name in result:
-            raise ValueError(f"Invalid or duplicate OBB filename for {package}: {path.name}")
-        result[path.name] = path
-    return result
+# Library transactions -------------------------------------------------------
+
+def discard_dir(directory, name):
+    """Move NAME out of the way atomically, then delete it."""
+    path = directory / name
+    if not exists(path):
+        return
+    trash = directory / f".discarded-{uuid.uuid4().hex}"
+    os.rename(path, trash)
+    sync_dir(directory)
+    shutil.rmtree(trash)
 
 
 def commit_update(directory):
-    pending = directory / ".update"
+    """Finish the replacement journalled in .update. Idempotent: rerun after an
+    interruption at any point. The journal's config.json holds the incoming
+    metadata. The app's settings come from the active config.json."""
+    pending = directory / JOURNAL
     real_dir(pending)
-    config = read_json(pending / "config.json")
     package = directory.name
-    if config.get("package") != package or config.get("format") not in {".apk", ".apkm"}:
-        raise ValueError("Invalid pending update metadata")
-    apk = directory / (package + config["format"])
+    incoming = check_metadata(read_json(pending / "config.json"), package, "pending update")
+    old = read_json(directory / "config.json")
+    if old.get("package") != package or old.get("format") != incoming["format"]:
+        raise ValueError("Pending update does not match the active library metadata")
+    apk = directory / (package + incoming["format"])
     regular(apk)
     staged = pending / apk.name
-    if staged.exists() or staged.is_symlink():
+    if exists(staged):
         regular(staged)
-        if sha256(staged) != config["sha256"]:
+        if sha256(staged) != incoming["sha256"]:
             raise ValueError("Staged APK contents changed")
-    elif sha256(apk) != config["sha256"]:
+    elif sha256(apk) != incoming["sha256"]:
         raise ValueError("Missing staged APK and active APK does not match the pending update")
     obb = directory / "obb"
     real_dir(obb)
-    for name, digest in config.get("pending_obb", {}).items():
-        if not re.fullmatch(rf"(?:main|patch)\.[0-9]+\.{re.escape(package)}\.obb", name):
+    for name, digest in incoming.get("pending_obb", {}).items():
+        if not re.fullmatch(OBB_NAME.format(re.escape(package)), name):
             raise ValueError("Unsafe pending OBB name")
         src, dst = pending / name, obb / name
-        if dst.exists() or dst.is_symlink():
+        if exists(dst):
             regular(dst)
             if sha256(dst) != digest:
                 raise ValueError(f"Existing OBB differs: {dst}")
@@ -418,11 +571,10 @@ def commit_update(directory):
                 raise ValueError(f"Staged OBB contents changed: {src}")
             os.replace(src, dst)
             sync_dir(obb)
-    if staged.exists():
-        old = read_json(directory / "config.json")
-        if old["package"] != package or old["format"] != config["format"] or sha256(apk) != old["sha256"]:
+    if exists(staged):
+        if sha256(apk) != old["sha256"]:
             raise ValueError("Active APK no longer matches the previous library metadata")
-        backup = directory / ".previous"
+        backup = directory / PREVIOUS
         backup.mkdir(mode=0o700, exist_ok=True)
         real_dir(backup)
         backup_stage = pending / "previous"
@@ -433,121 +585,165 @@ def commit_update(directory):
         os.replace(staged, apk)
         sync_dir(directory)
         sync_dir(pending)
-    config.pop("pending_obb", None)
-    atomic_json(directory / "config.json", config)
+    atomic_json(directory / "config.json", {**old, **{key: incoming.get(key) for key in METADATA}})
     # Rename the journal out of the critical path before deleting its contents.
-    with tempfile.TemporaryDirectory(prefix=".finished-", dir=directory) as trash:
-        os.rename(pending, Path(trash) / "journal")
-        sync_dir(directory)
+    discard_dir(directory, JOURNAL)
+
+
+def journal(directory, name):
+    """Turn the staging directory NAME into the .update journal, then commit."""
+    os.rename(directory / name, directory / JOURNAL)
+    sync_dir(directory)
+    commit_update(directory)
+
+
+def promote_candidate(directory):
+    """Make the staged update the active APK once Android has accepted it.
+    The replaced APK is kept in .previous."""
+    stage = directory / CANDIDATE
+    (stage / "rejected.json").unlink(missing_ok=True)
+    journal(directory, CANDIDATE)
+
+
+def reject_candidate(directory, revision, error):
+    stage = directory / CANDIDATE
+    candidate = read_json(stage / "config.json")
+    if candidate.get("revision") == revision:
+        atomic_json(stage / "rejected.json", {"schema_version": 1, "revision": revision, "error": error,
+                                              "time": int(time.time())})
+
+
+def refuse_replacement(old, incoming, candidate, replace, mode, files):
+    """None if the incoming APK may be staged, "unchanged" for a no-op, or
+    raise with the reason it is refused."""
+    if incoming["format"] != old["format"]:
+        raise ValueError("Changing between APK and APKM is unsupported because it changes the Steam target")
+    if incoming["version_code"] < old["version_code"]:
+        raise ValueError(f"Android version downgrade refused (library has {old['version_code']}, "
+                         f"incoming {incoming['version_code']})")
+    if incoming["sha256"] == old["sha256"] and not files:
+        if mode == "import" or candidate is None:
+            return "unchanged"
+        raise ValueError("This is the library's current APK; run lepton-library discard to drop the staged update")
+    if mode == "import":
+        raise ValueError("Package already imported. To replace it, run lepton-library update FILE.")
+    if incoming["version_code"] == old["version_code"] and incoming["sha256"] != old["sha256"] and not replace:
+        raise ValueError("Same version with different contents; use update --replace-same-version")
+    return None
 
 
 def import_app(root, source, *, mode, replace=False, obbs=(), dry_run=False, verbose=True):
+    """Import a new app as the active APK, or stage an update for an existing
+    one. Returns (directory, metadata, path, staged)."""
     source = source.expanduser().absolute()
     regular(source)
     suffix = source.suffix.lower()
-    if suffix not in {".apk", ".apkm"}:
+    if suffix not in FORMATS:
         raise ValueError("Expected an APK or APKM file")
     with lock(root, not dry_run), tempfile.TemporaryDirectory(
             prefix=".import-", dir=None if dry_run else root) as scratch:
         stage = Path(scratch)
-        candidate = stage / ("candidate" + suffix)
-        copy_file(source, candidate)
-        incoming = inspect(candidate, suffix)
+        candidate_file = stage / ("candidate" + suffix)
+        copy_file(source, candidate_file)
+        incoming = inspect(candidate_file, suffix)
         package = incoming["package"]
         files = obb_files(obbs, package)
         directory = root / package
         apk = directory / (package + suffix)
         staged = stage / apk.name
-        candidate.rename(staged)
-        old = None
-        if directory.exists() or directory.is_symlink():
-            _, old, active = load_app(root, package, verify=True)
-            if verbose:
-                print(f"{package}: library {old['version_name']} ({old['version_code']}), "
-                      f"incoming {incoming['version_name']} ({incoming['version_code']})")
-            if old["signers"] != incoming["signers"] and not validate_rotation(staged, old, incoming):
-                raise ValueError("Incompatible signing certificates or missing Android signing lineage")
-            if incoming["version_code"] < old["version_code"]:
-                raise ValueError("Android version downgrade refused")
-            if active != apk:
-                raise ValueError("Changing between APK and APKM is unsupported because it changes the Steam target")
-            same_version = incoming["version_code"] == old["version_code"]
-            same_file = incoming["sha256"] == old["sha256"]
-            if same_version and not replace:
-                if same_file and mode == "import" and not files:
-                    return directory, old, apk
-                raise ValueError("Identical APK" + ("; use reinstall" if same_file else
-                                 " version with different contents; use update --replace-same-version"))
-            if mode == "import":
-                raise ValueError("Package already imported. To replace it, run lepton-library update FILE.")
-        elif mode == "update":
-            raise ValueError(f"{package} is not imported; run lepton-library import FILE")
-        config = dict(old or {"schema_version": 1, "shared_folders": {"custom": []}},
-                      **incoming, revision=uuid.uuid4().hex)
-        config["pending_obb"] = {}
-        obb_dir = directory / "obb" if old else stage / "obb"
-        if not old:
-            obb_dir.mkdir()
-        else:
-            real_dir(obb_dir)
+        candidate_file.rename(staged)
+        if not exists(directory):
+            if mode == "update":
+                raise ValueError(f"{package} is not imported; run lepton-library import FILE")
+            return new_app(root, stage, directory, apk, incoming, files, dry_run)
+        if exists(directory / JOURNAL):
+            commit_update(directory)
+        _, old, active = load_app(root, package, verify=True)
+        current = load_candidate(directory, old, verify=False)
+        if verbose:
+            print(f"{package}: library {old['version_name']} ({old['version_code']}), "
+                  f"incoming {incoming['version_name']} ({incoming['version_code']})")
+        if refuse_replacement(old, incoming, current, replace, mode, files) == "unchanged":
+            return directory, old, active, False
+        if current and current["config"]["sha256"] == incoming["sha256"] and not files:
+            return directory, current["config"], active, True
+        if verbose and old["signers"] and incoming["signers"] and old["signers"] != incoming["signers"]:
+            print("WARNING: the signing certificate differs from the library APK. Android installs it only "
+                  "if this is a valid signing-key rotation; otherwise the update is refused and the "
+                  "installed version is kept.")
+        if verbose and current:
+            print(f"Replacing the staged update {current['config']['version_name']} "
+                  f"({current['config']['version_code']}), which Android had not accepted.")
+        config = dict(incoming, schema_version=1, revision=uuid.uuid4().hex, pending_obb={})
+        obb_dir = directory / "obb"
+        real_dir(obb_dir)
         for name, src in files.items():
             dst = obb_dir / name
-            if dst.exists() or dst.is_symlink():
+            if exists(dst):
                 regular(dst)
                 if sha256(src) != sha256(dst):
                     raise ValueError(f"Refusing to replace existing OBB {dst}")
                 continue
             if not dry_run:
-                target = (stage if old else obb_dir) / name
-                copy_file(src, target)
-                config["pending_obb"][name] = sha256(target)
+                copy_file(src, stage / name)
+                config["pending_obb"][name] = sha256(stage / name)
         if dry_run:
-            return directory, config, apk
-        if old:
-            atomic_json(stage / "config.json", config)
-            os.rename(stage, directory / ".update")
-            sync_dir(root)
-            sync_dir(directory)
-            commit_update(directory)
-        else:
-            config.pop("pending_obb")
-            sync_dir(obb_dir)
-            atomic_json(stage / "config.json", config)
-            os.rename(stage, directory)
-            sync_dir(root)
-        return directory, config, apk
+            return directory, config, apk, True
+        staged.rename(stage / apk.name)  # same name; keeps the layout explicit
+        atomic_json(stage / "config.json", config)
+        stage.chmod(0o700)
+        # Replace any previous candidate. The active APK is never touched here.
+        discard_dir(directory, CANDIDATE)
+        os.rename(stage, directory / CANDIDATE)
+        sync_dir(directory)
+        return directory, config, apk, True
 
+
+def new_app(root, stage, directory, apk, incoming, files, dry_run):
+    config = dict(incoming, schema_version=1, revision=uuid.uuid4().hex, shared_folders={"custom": []})
+    if dry_run:
+        return directory, config, apk, False
+    obb_dir = stage / "obb"
+    obb_dir.mkdir()
+    for name, src in files.items():
+        copy_file(src, obb_dir / name)
+    sync_dir(obb_dir)
+    atomic_json(stage / "config.json", config)
+    stage.chmod(0o700)
+    os.rename(stage, directory)
+    sync_dir(root)
+    return directory, config, apk, False
 
 
 def restore_previous(directory, config, apk, dry_run):
-    backup = directory / ".previous"
+    """Make the APK kept in .previous the active library APK again. Android
+    profiles that already installed a newer version keep it."""
+    backup = directory / PREVIOUS
     real_dir(backup)
-    previous = read_json(backup / "config.json")
+    previous = check_metadata(read_json(backup / "config.json"), directory.name, "previous APK metadata")
     source = backup / apk.name
     regular(source)
-    if (sha256(source) != previous["sha256"] or previous["package"] != config["package"] or
-            previous["format"] != config["format"]):
+    if sha256(source) != previous["sha256"] or previous["format"] != config["format"]:
         raise ValueError("Previous APK or metadata is invalid")
     if not dry_run:
-        restored = dict(config, **{key: previous[key] for key in (
-            "name", "version_name", "version_code", "signers", "abis", "apks", "sha256")})
-        restored["revision"] = previous["revision"]
-        with tempfile.TemporaryDirectory(prefix=".restore-", dir=directory) as scratch:
-            stage = Path(scratch)
-            copy_file(source, stage / apk.name)
-            atomic_json(stage / "config.json", restored)
-            os.rename(stage, directory / ".update")
-            sync_dir(directory)
-            commit_update(directory)
-    return previous["version_code"]
+        stage = Path(tempfile.mkdtemp(prefix=".restore-", dir=directory))
+        copy_file(source, stage / apk.name)
+        atomic_json(stage / "config.json", {**{key: previous.get(key) for key in METADATA},
+                                            "schema_version": 1, "package": directory.name,
+                                            "format": config["format"]})
+        journal(directory, stage.name)
+    return previous
 
 
 def runtime_app(root, target):
+    """For a launch of TARGET: None if it is not a library APK, else the saved
+    shared-folder option, the app directory, the OBB directory and the
+    launcher activity of the version this launch installs."""
     raw = Path(os.path.abspath(target))
     path = raw.resolve()
     if raw.parent.parent == root and raw != path:
         raise ValueError(f"Managed APK path must contain real files and directories: {raw}")
-    if path.parent.parent != root or path.suffix not in {".apk", ".apkm"}:
+    if path.parent.parent != root or path.suffix not in FORMATS:
         return None
     directory, config, apk = load_app(root, path.parent.name, verify=True)
     if apk != path:
@@ -559,7 +755,9 @@ def runtime_app(root, target):
     for entry in obb.iterdir():
         regular(entry)
         obb_files([entry], config["package"])
-    return value, str(directory), str(obb) if any(obb.iterdir()) else ""
+    candidate = load_candidate(directory, config)
+    target_config = candidate["config"] if candidate and not candidate["rejected"] else config
+    return value, str(directory), str(obb) if any(obb.iterdir()) else "", target_config.get("launchable_activity") or ""
 
 
 def profile_key(baked):
@@ -568,7 +766,7 @@ def profile_key(baked):
 
 def profile_receipts(directory):
     index = directory / ".profiles"
-    if not index.exists():
+    if not exists(index):
         return []
     real_dir(index)
     return [read_json(path) for path in sorted(index.glob("*.json"))]
