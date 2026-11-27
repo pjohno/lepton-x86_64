@@ -626,42 +626,56 @@ setting both to `0` gives the old instant stop.
 
 ## Android Library profiles and recovery
 
-Use [the Android Library quick start](README.md#manage-sideloaded-apps-with-android-library)
-in Fedora or Steam Deck Desktop Mode. The selected directory is remembered
-in `~/.config/lepton-x86_64/android-library.json` (or under
-`XDG_CONFIG_HOME`). Keep the directory on the same mount path. A missing
-drive stops launch and leaves the mount point untouched. Choose a library
-directory outside Steam's library folders and Android profile directories.
+Start with [the Android Library quick start](README.md#manage-sideloaded-apps-with-android-library)
+in Konsole (Desktop Mode) or a Fedora terminal. It needs nothing beyond the
+Lepton bundle: no Java and no Android SDK.
 
-Managed APKs install through Android's package manager in each existing
-**managed** profile. Standalone data is stored under
-`~/.local/share/lepton-compat-data/<package>` by default. Steam data stays
-under its `steamapps/compatdata/<AppID>`. The Android Library contains
-neither profile. Common Container Storage is accessible to apps in the
-shared Google Play instance under the usual Android storage permissions,
-so treat it as shared files across those apps.
+**Where things are.** The library location is remembered in
+`~/.config/lepton-x86_64/android-library.json`. Keep the drive mounted at
+the same path; Steam shortcuts point to the APK inside it. Choose a location
+outside Steam's library folders and Lepton's profile folders. The library
+holds the APKs, OBB files, per-app settings and Container Storage, but no
+Android profiles. A Steam shortcut's profile stays in
+`steamapps/compatdata/<AppID>`, and `lepton-library play` uses
+`~/.local/share/lepton-compat-data/<package>`. Each is a separate Android
+installation and updates when it next launches.
 
-You can keep using `lepton-add-game FILE.apk` and `lepton-play FILE.apk`
-with unmanaged files. Use `lepton-add-game --import FILE.apk` to copy a file
-into the configured library when creating a new shortcut. If you already
-have an unmanaged installation, keep launching the original file to keep
-using its baked profile. This release cannot adopt a legacy baked install
-into a managed profile. Importing a copy leaves your old shortcut and
-profile in place. If you intentionally want a separate managed standalone
-installation of the same package, give `lepton-library play` a different
-`--data-root`. Adding the managed library copy to Steam creates a separate
-shortcut and profile.
+**SD card removed.** Library apps stop with a message naming the missing
+library. Other Lepton games and Google Play keep working, without Container
+Storage. Nothing is created at the card's mount point. Put the card back and
+launch again. To stop using the library (for example, after moving it), run
+`lepton-library forget`, then `lepton-library init --path NEW-LOCATION`.
+No files are deleted, and a library that already exists at the new location
+is used as it is.
 
-If a library file change is interrupted, `lepton-library recover PACKAGE`
-finishes the staged transaction. The previous APK is kept in the package's
-hidden `.previous` directory. If Android rejects the update, use
-`lepton-library info PACKAGE` to check the failed profile and retry the
-launch after fixing the cause. To put the previous APK back at the stable
-path, run `lepton-library restore-apk PACKAGE --dry-run`, then
-`lepton-library restore-apk PACKAGE --yes`. This restores the library file.
-An Android profile that already moved to a newer version will refuse the
-older APK. Restoring an Android installation and its private data to an
-earlier state requires a compatible profile backup.
+**A refused update.** Android checks every update's signature and version.
+If it refuses one, that launch stops with the reason, the installed version
+and its data are unchanged, and the next launch plays it. `lepton-library
+info PACKAGE` shows the refused update; `lepton-library discard PACKAGE`
+removes it. Lepton never uninstalls an app or resets its data to get past a
+refused update. An APK signed with a new key is accepted only with a valid
+Android signing-key rotation.
+
+**Interrupted updates.** If an update is interrupted (Stop during the
+installation, power loss), the next launch checks what Android actually
+installed and either records it or installs again. If the library's own
+files were being replaced, the next launch finishes that, or run
+`lepton-library recover PACKAGE`.
+
+**Going back.** `lepton-library restore-apk PACKAGE --yes` makes the
+previous library APK current again. It is kept after each accepted update.
+Profiles that haven't installed the newer version yet stay on the restored
+one. Profiles that already have the newer version keep it, because Android
+doesn't downgrade apps. Rolling an installed app and its private data back
+needs a backup of the profile made before the update.
+
+**Existing unmanaged games.** Games added with `lepton-add-game FILE.apk` or
+`lepton-play FILE.apk` keep their profiles and keep launching from their
+original files. The library doesn't adopt them: importing the same APK gives
+a new profile, alongside the old one. `lepton-add-game --import FILE.apk`
+imports a file and creates its shortcut in one step. A profile created by
+the library can't be launched from an unmanaged copy of the APK, and Lepton
+says so instead of changing it.
 
 ## Starting again from a clean slate
 

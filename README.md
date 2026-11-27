@@ -112,86 +112,99 @@ first: window closing does not guarantee unsaved progress has been written.
 
 ## Manage sideloaded apps with Android Library
 
-After installing a Lepton bundle, open a terminal on Fedora or Konsole in
-Steam Deck Desktop Mode. For APK imports and updates, install the Android SDK
-Build Tools using Google's SDK Manager. Lepton uses `aapt2` to read metadata
-and `apksigner` to verify APK signatures. If the tools are outside your
-`PATH`, point Lepton at the Build Tools directory for your SDK installation.
-On Steam Deck, install the SDK under your home directory.
+The Android Library keeps your sideloaded APKs in one folder and updates them
+without losing the game's saves. Android installs each app natively, checks
+its signature and keeps its data. You don't need Java or the Android SDK.
+
+### Quick start
+
+In Konsole (Steam Deck Desktop Mode) or a Fedora terminal:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-export LEPTON_ANDROID_BUILD_TOOLS="$HOME/Android/Sdk/build-tools/34.0.0"
-lepton-library init
-lepton-library import "$HOME/Downloads/Example Game.apk"
-lepton-library list
-lepton-library play com.example.game
-```
-
-For an SD card or another drive, choose the location during setup. Mount the
-drive before you initialise it and reconnect it before launching Lepton.
-
-```bash
-lepton-library init --path "/run/media/$USER/My SD Card/Android_Library"
-```
-
-Use the package name printed by `list` in the commands below. Exit Steam
-completely before adding a shortcut, then restart Steam. The shortcut can
-also be launched in Steam Deck Gaming Mode.
-
-```bash
+lepton-library import ~/Downloads/game.apk
 lepton-library add-to-steam com.example.game
-lepton-library status
-lepton-library config com.example.game share-add --name Books --path "$HOME/Books" --read-only
-lepton-library config com.example.game defaults none
+```
+
+The first import creates the library at `~/Android_Library`. To use another
+place, such as an SD card, run this once before importing:
+
+```bash
+lepton-library init --path "/run/media/deck/MySDCard/Android_Library"
+```
+
+`import` prints the app's package name (here `com.example.game`). Exit Steam
+before `add-to-steam`, then start Steam again: the game is under
+**Non-Steam games**. To play without Steam, run `lepton-library play
+com.example.game`. APKM bundles work the same way. Add OBB files with
+`--obb main.123.com.example.game.obb`.
+
+### Updating an app
+
+```bash
+lepton-library update ~/Downloads/game-new.apk
+```
+
+The update is staged. Android installs it the next time each profile
+launches (the Steam shortcut and `play` are separate profiles), or straight
+away with `lepton-library apply com.example.game`. Saves, settings and
+sign-ins are kept. The Steam shortcut, its AppID, artwork, controller layout
+and launch options don't change, because the library APK keeps its path.
+
+The library keeps the version you already had until Android accepts the
+update. If Android refuses it (for example, an APK signed by someone else),
+the game says so once and keeps the installed version and its data. `update`
+itself refuses damaged files, older versions and apps that need a newer
+Android. Remove a refused update with `discard`:
+
+```bash
+lepton-library info com.example.game      # what is installed, staged or refused
+lepton-library discard com.example.game   # drop a staged or refused update
+```
+
+Downgrades, and switching between APK and APKM, are refused. Android never
+downgrades an installed app. `restore-apk` puts the previous library APK
+back for profiles that haven't updated yet; it can't roll back an installed
+app or its data. If a library file change was interrupted (power loss), the
+next launch finishes it, or run `lepton-library recover com.example.game`.
+
+APK updates are separate from Lepton updates. A new Lepton version can come
+with a different Android image, and profiles then need that image's
+compatibility checks ([game data](INSTALL-STEAM-DECK.md#game-data-between-launches)).
+Your library apps and their updates don't change that.
+
+### Container Storage
+
+`Android_Library/Container Storage` is one folder shared with every Lepton
+game while the library's drive is connected. Android apps see it as
+`Container Storage` in their storage, and you can open it in Dolphin or
+Nautilus to move files in and out. It stays shared when optional shared
+folders are off (`LEPTON_SHARED_FOLDERS=none`). If the drive is missing,
+library apps stop with a message, and other games and Google Play start
+without Container Storage.
+
+### Shared folders per app
+
+```bash
+lepton-library config com.example.game defaults none            # no standard folders
+lepton-library config com.example.game share-add --name Books --path ~/Books --read-only
 lepton-library config com.example.game show
 ```
 
-The library stores your imported APKs or APKMs, OBB files and settings.
-**Container Storage** is a separate folder inside the library. Open it in
-Dolphin or Nautilus, or find it at `/storage/emulated/0/Container Storage`
-in Android. It is available even with optional shared folders set to
-`none`, including in unmanaged and shared Google Play sessions. Optional
-folders can be read-only or read-write. Custom folders are added to the
-standard folders unless you choose defaults explicitly. A Steam launch
-option such as `LEPTON_SHARED_FOLDERS=none %command%` or
-`lepton-library play com.example.game --shared-folders none` overrides the
-optional settings for one launch.
+Steam launch options (`LEPTON_SHARED_FOLDERS=... %command%`) and
+`play --shared-folders` take precedence over these saved settings.
+`lepton-library info` shows the saved settings and any Steam launch option
+that overrides them.
 
-Close running managed apps before updating. Importing copies the source
-file. Use `--obb FILE` to include each versioned OBB explicitly.
+### Library and unmanaged apps
 
-```bash
-lepton-library update "$HOME/Downloads/Example Game v2.apk" --dry-run
-lepton-library update "$HOME/Downloads/Example Game v2.apk"
-lepton-library apply com.example.game
-lepton-library info com.example.game
-lepton-library remove com.example.game --dry-run
-```
-
-Steam and standalone profiles are separate Android installations. Each
-applies the replacement on its next launch. Use `apply` to update an
-existing standalone profile without opening the app, or skip it to update
-when you next play. `info` shows the library
-version and the last verified version of each launched profile. Android's
-package manager preserves saves, settings and sign-ins during replacement.
-Steam retains the existing AppID, artwork, controller settings, launch
-options and compatibility-tool selection. `reinstall` schedules a
-replacement with the current library APK. For a different APK with the
-same version, use `update --replace-same-version`. Android version downgrades
-and APK/APKM format changes are refused. Signing-key rotation requires a
-verified Android signing lineage that preserves access to existing data.
-
-Ordinary removal deletes the library copy, its OBBs and library settings.
-It preserves Steam and standalone compatibility profiles, Android app data
-and Container Storage. Remove any Steam shortcut first, exit Steam, then
-run `lepton-library remove com.example.game --yes`. APK updates keep the
-Android-image compatibility checks in place, so changing the Android image
-can still require a different profile. Steam-distributed apps and Play Store
-apps continue receiving updates through their stores.
-
-See the [installation guide](INSTALL-STEAM-DECK.md#android-library-profiles-and-recovery)
-for recovery and existing unmanaged profiles.
+Apps you add with **Lepton: Add Android game** or `lepton-add-game FILE.apk`
+keep working as before, as do Steam-distributed games and apps installed from
+Google Play. The library doesn't take over existing profiles: importing an
+APK you already play creates a new, separate profile. `lepton-library status`
+shows the library, its apps and pending updates. `lepton-library forget`
+stops using the library without deleting anything. `remove` deletes an app's
+library files but keeps its profiles and Container Storage. How the library
+works: [compat_tool/android-library.md](compat_tool/android-library.md).
 
 ## Launch options
 
@@ -265,6 +278,7 @@ Compatibility varies from game to game: see the [tested games](GAMES.md).
 | Guide | For |
 | --- | --- |
 | [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md) | Installing, updating, several installs side by side, game data, troubleshooting |
+| [compat_tool/android-library.md](compat_tool/android-library.md) | How the Android Library installs, updates and recovers apps |
 | [GAMES.md](GAMES.md) | Games tested with Lepton, and how to report one |
 | [BUILDING.md](BUILDING.md) | Building Android and the Deck bundles from source |
 | [GAPPS.md](GAPPS.md) | Optional Google Play services, ARM64 translation and Widevine bundles |

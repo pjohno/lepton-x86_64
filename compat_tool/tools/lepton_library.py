@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Host-side Android Library storage, package metadata and update staging.
 
-Library layout (docs/android-library.md describes the design):
+Library layout (compat_tool/android-library.md describes the design):
 
   ROOT/.lepton-library.json       identity marker, matched against the settings
   ROOT/Container Storage/         common folder shared with every profile
