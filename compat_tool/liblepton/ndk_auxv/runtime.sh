@@ -53,10 +53,16 @@ function configure_ndk_compat()
     if [[ -z "$tmode" ]]; then
         # Games installed before this existed: prepare them now, before Android
         # starts, so this launch already loads the patched libraries.
-        if [[ ! -f "$(ndk_game_mode_file)" && -d "$(app_datadir)/lib/arm64" ]]; then
+        if ! lepton_managed_app && [[ ! -f "$(ndk_game_mode_file)" && -d "$(app_datadir)/lib/arm64" ]]; then
             ndk_prepare_installed_app | sed 's/ from next launch//'
         fi
         game_mode="$(cat "$(ndk_game_mode_file)" 2>/dev/null || true)"
+        # A library app whose code Android replaces during this launch is
+        # prepared afterwards; the old code's choice does not apply to it.
+        if lepton_managed_app && lepton_managed_install_pending; then
+            game_mode=""
+            println "Android Library update pending: light NDK translation mode for this launch"
+        fi
         if [[ "$game_mode" == tiered || "$game_mode" == light-translate-or-interpret ]]; then
             tmode="$game_mode"; LEPTON_NDK_MODE_SOURCE=game
         else
@@ -84,12 +90,12 @@ function ndk_game_mode_file() { print "$(get_baked_app_data_dir)/lepton-ndk-mode
 # After installing an ARM64 game: turn the wait hints SEVL/SEV/WFE into NOP in
 # its extracted libraries and record whether it can use the fast tiered mode
 # (from the next launch). Only with the reviewed translator; never fatal.
+# LIB_DIR defaults to the legacy app overlay's extracted libraries.
 function ndk_prepare_installed_app()
 {
     local rootfs="${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}"
-    local lib_dir mode
+    local lib_dir="${1:-$(app_datadir)/lib/arm64}" mode
     [[ "${LEPTON_NDK_COMPAT:-auto}" != false ]] && ndk_compat_supported "$rootfs" || return 0
-    lib_dir="$(app_datadir)/lib/arm64"
     if [[ ! -d "$lib_dir" ]]; then
         rm -f -- "$(ndk_game_mode_file)"
         return 0
@@ -102,6 +108,30 @@ function ndk_prepare_installed_app()
         print light-translate-or-interpret > "$(ndk_game_mode_file)"
     fi
     return 0
+}
+
+# Android Library apps: Android installs the code natively under /data/app,
+# in a new directory for every update. CODE_DIR is that guest path and
+# CODE_ID identifies the installed APKs. The extracted libraries are prepared
+# once per installed code; the APKs themselves are never changed, so Android's
+# signature checks and Lepton's installed-APK hashes are unaffected. Apps
+# that load libraries straight from the APK (extractNativeLibs=false) have
+# nothing to patch and keep the light mode, as legacy installs do.
+function ndk_game_code_file() { print "$(get_baked_app_data_dir)/lepton-ndk-code"; }
+
+function ndk_prepare_managed_app()
+{
+    local code_dir="$1" code_id="$2" host_dir
+    local rootfs="${LEPTON_TEST_ROOTFS:-${LEPTON_DIR}/../images/rootfs}"
+    [[ "${LEPTON_NDK_COMPAT:-auto}" != false ]] && ndk_compat_supported "$rootfs" || return 0
+    if [[ ! "$code_dir" =~ ^/data/app(/[A-Za-z0-9_.=~-]+)+$ || "/$code_dir/" == */../* || ! "$code_id" =~ ^[0-9a-f]{64}$ ]]; then
+        println "WARNING: unexpected Android code path ${code_dir}; ARM64 libraries not prepared"
+        return 0
+    fi
+    [[ "$(cat "$(ndk_game_code_file)" 2>/dev/null)" != "$code_id" ]] || return 0
+    host_dir="$(data_mount_path)${code_dir#/data}"
+    ndk_prepare_installed_app "$host_dir/lib/arm64"
+    print "$code_id" > "$(ndk_game_code_file)"
 }
 
 # A game that exits early while running in the automatically chosen tiered mode

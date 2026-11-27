@@ -16,6 +16,10 @@ print() { printf '%s' "$*"; }
 println() { printf '%s\n' "$*"; }
 get_baked_app_data_dir() { print "$work/baked"; }
 app_datadir() { print "$work/baked/app_overlay"; }
+data_mount_path() { print "$work/baked/data_overlay"; }
+managed=false pending=false
+lepton_managed_app() { [[ "$managed" == true ]]; }
+lepton_managed_install_pending() { [[ "$pending" == true ]]; }
 mkdir -p "$work/baked"
 cp "$HERE/arm64_hints.py" "$LEPTON_DIR/ndk_auxv/"
 sha256sum() { printf '%s  %s\n' "$test_sha" "$1"; }
@@ -127,4 +131,44 @@ LEPTON_NDK_MODE_SOURCE=game LEPTON_NDK_ACTIVE_MODE=tiered ndk_note_early_exit > 
 echo tiered > "$work/baked/lepton-ndk-mode"
 LEPTON_NDK_MODE_SOURCE=setting LEPTON_NDK_ACTIVE_MODE=tiered ndk_note_early_exit > /dev/null
 [[ "$(cat "$work/baked/lepton-ndk-mode")" == tiered ]]   # an explicit setting is respected
+# Android Library apps: Android's native code directory is prepared after
+# each installation that changed the code, and only then.
+managed=true
+code=/data/app/~~AbC==/org.example.game-XyZ==
+managed_lib="$work/baked/data_overlay/app/~~AbC==/org.example.game-XyZ==/lib/arm64"
+mkdir -p "$managed_lib"; rm -f "$work/baked/lepton-ndk-mode" "$work/baked/lepton-ndk-code"
+make_lib "$managed_lib/libunity.so" d50320bf d503205f
+printf 'PK-apk' > "$work/base.apk"; cp "$work/base.apk" "$work/base-before.apk"
+id1=1111111111111111111111111111111111111111111111111111111111111111
+ndk_prepare_managed_app "$code" "$id1" > "$work/managed.log"
+[[ "$(cat "$work/baked/lepton-ndk-mode")" == tiered && "$(cat "$work/baked/lepton-ndk-code")" == "$id1" ]]
+[[ "$(words "$managed_lib/libunity.so")" == 'd503201f d503201f d50320bf' ]]
+cmp "$work/base.apk" "$work/base-before.apk"                 # APKs are never touched
+# An early exit chose light; the same code keeps that choice...
+echo light-translate-or-interpret > "$work/baked/lepton-ndk-mode"
+ndk_prepare_managed_app "$code" "$id1" > /dev/null
+[[ "$(cat "$work/baked/lepton-ndk-mode")" == light-translate-or-interpret ]]
+# ...and an update (new code directory and identity) is evaluated afresh.
+code2=/data/app/~~DeF==/org.example.game-UvW==
+lib2="$work/baked/data_overlay/app/~~DeF==/org.example.game-UvW==/lib/arm64"; mkdir -p "$lib2"
+make_lib "$lib2/libunity.so" d503205f
+ndk_prepare_managed_app "$code2" 2222222222222222222222222222222222222222222222222222222222222222 > /dev/null
+[[ "$(cat "$work/baked/lepton-ndk-mode")" == tiered && "$(words "$lib2/libunity.so")" == 'd503201f d50320bf' ]]
+# An update to a build that loads its libraries from the APK records no choice.
+ndk_prepare_managed_app /data/app/~~G==/org.example.game-H== 3333333333333333333333333333333333333333333333333333333333333333 > /dev/null
+[[ ! -e "$work/baked/lepton-ndk-mode" ]]
+ndk_prepare_managed_app '/data/app/../../etc' "$id1" | grep -q 'unexpected Android code path'
+# Without the reviewed translator nothing is recorded, so a later NDK bundle
+# still prepares the installed code.
+rm -f "$work/baked/lepton-ndk-code"
+LEPTON_NDK_COMPAT=false ndk_prepare_managed_app "$code" "$id1"
+[[ ! -e "$work/baked/lepton-ndk-code" ]]
+# While Android replaces the code during a launch, the old choice is ignored.
+echo tiered > "$work/baked/lepton-ndk-mode"
+pending=true; : > "$rc"; configure_ndk_compat "$rc" > "$work/pending.log"
+[[ "$LEPTON_NDK_ACTIVE_MODE" == light-translate-or-interpret && "$LEPTON_NDK_MODE_SOURCE" == default ]]
+pending=false; : > "$rc"; configure_ndk_compat "$rc" > /dev/null
+[[ "$LEPTON_NDK_ACTIVE_MODE" == tiered && "$LEPTON_NDK_MODE_SOURCE" == game ]]
+managed=false
+echo 'PASS: Android Library NDK preparation per installed code, update re-evaluation, pending-update light mode'
 echo 'PASS: default matching-bridge activation, native/unknown skip, opt-out, missing binary, conflicting settings; per-game translator mode, ARM64 hint patching (executable code only), shim-only read detection, early-exit fallback'

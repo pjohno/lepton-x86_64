@@ -140,7 +140,15 @@ function lepton_library_storage_entry()
         "${LEPTON_SHARED_GUEST_ROOT}/Container Storage"
 }
 
-# Install or update the app with Android's package manager.
+# Will this launch install or replace the app's code? An install is followed
+# by NDK preparation, so the previous translator choice does not apply.
+function lepton_managed_install_pending()
+{
+    lepton_library_helper pending "$LEPTON_LIBRARY_ROOT" "$(get_app_id)" "$(get_baked_app_data_dir)"
+}
+
+# Install or update the app with Android's package manager, then prepare its
+# installed ARM64 libraries for NDK translation.
 function lepton_managed_install()
 {
     local -a OPTIONS=() RESULT=()
@@ -159,4 +167,5 @@ function lepton_managed_install()
             "Nothing has been deleted. Run lepton-library info $(get_app_id) for details."
         return 1
     fi
+    ndk_prepare_managed_app "${RESULT[0]}" "${RESULT[1]}"
 }
