@@ -281,7 +281,7 @@ function check_kept_app_data()
         APP_REUSE_VALIDATED=yes
     else
         if [[ "${LEPTON_LIBRARY_APPLY_ONLY:-false}" == true ]]; then
-            die "No installed managed profile at $DIR. Launch the app with leptron play first."
+            die "No installed managed profile at $DIR. Launch the app with leptron run first."
         fi
         println "Existing profile detected: no; creating new profile; runtime fingerprint=$CURRENT"
         mkdir -p "$DIR"

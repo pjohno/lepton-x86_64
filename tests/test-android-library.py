@@ -14,6 +14,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -141,7 +142,7 @@ class LibraryTests(LibraryCase):
         result = self.cli("init", "--dry-run")
         self.assertIn(str(self.home / "Android_Library"), result.stdout)
         self.assertFalse((self.home / "Android_Library").exists())
-        result = self.cli("import", str(self.apk("first.apk")))
+        result = self.cli("install", str(self.apk("first.apk")))
         self.assertIn("Creating the Android Library at", result.stdout)
         self.assertEqual(lib.library(), self.home / "Android_Library")
         self.assertTrue((self.home / "Android_Library" / package / f"{package}.apk").is_file())
@@ -150,7 +151,7 @@ class LibraryTests(LibraryCase):
         lib.settings_path().unlink()
         (self.home / "Android_Library").mkdir()
         (self.home / "Android_Library/notes.txt").write_text("mine")
-        result = self.cli("import", str(self.apk("first.apk")), check=False)
+        result = self.cli("install", str(self.apk("first.apk")), check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("is not an Android Library", result.stderr)
         self.assertEqual(sorted(p.name for p in (self.home / "Android_Library").iterdir()), ["notes.txt"])
@@ -160,7 +161,7 @@ class LibraryTests(LibraryCase):
         directory, one, apk, staged = self.install(first)
         self.assertFalse(staged)
         self.assertEqual(self.install(first)[1], one)
-        with self.assertRaisesRegex(ValueError, "already imported"):
+        with self.assertRaisesRegex(ValueError, "already in the library"):
             self.install(new)
         _, two, active, staged = self.install(new, "update")
         self.assertTrue(staged)
@@ -279,7 +280,7 @@ class LibraryTests(LibraryCase):
             self.assertIn('Steam shortcut "Renamed in Steam"', info)
             self.assertIn("up to date", info)
             self.assertIn("LEPTON_SHARED_FOLDERS=none, which overrides", info)
-            result = self.cli("remove", package, "--yes", check=False)
+            result = self.cli("uninstall", package, "--yes", check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertTrue(apk.is_file())
 
@@ -438,7 +439,7 @@ class LibraryTests(LibraryCase):
         (profile / "save").write_text("save")
         transfer = self.root / lib.STORAGE / "transfer"
         transfer.write_text("transfer")
-        self.cli("remove", package, "--yes")
+        self.cli("uninstall", package, "--yes")
         self.assertFalse(directory.exists())
         self.assertEqual((profile / "save").read_text(), "save")
         self.assertEqual(transfer.read_text(), "transfer")
@@ -720,6 +721,82 @@ class ProfileTests(LibraryCase):
         with self.assertRaisesRegex(ValueError, "differ from library metadata|changed while installing"):
             self.launch()
         self.assertIsNone(self.android.code)
+
+
+RECORDER = r'''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["RECORD"], "a") as log:
+    log.write(json.dumps(dict(tool=os.environ.get("TOOL") or os.path.basename(sys.argv[0]), argv=sys.argv[1:],
+                              apply_only=os.environ.get("LEPTON_LIBRARY_APPLY_ONLY"))) + "\n")
+'''
+COMMANDS = {"init", "status", "list", "forget", "install", "update", "info", "run", "apply", "add-to-steam",
+            "discard", "recover", "restore-apk", "reinstall", "uninstall", "config"}
+
+
+class CommandTests(LibraryCase):
+    """The leptron command line: its commands, documentation and hand-off to the launch tools."""
+
+    def setUp(self):
+        super().setUp()
+        install = tempfile.TemporaryDirectory()  # an install directory outside HOME and the library
+        self.addCleanup(install.cleanup)
+        self.tools = Path(install.name) / "compat_tool/tools"
+        self.tools.mkdir(parents=True)
+        for name in ("leptron", "android_library.py", "lepton_steam.py", "lepton-manage-installs"):
+            (self.tools / name).write_bytes((tools / name).read_bytes())
+            (self.tools / name).chmod(0o755)
+        # lepton-play runs under bash and lepton-add-game under Python; both record their arguments.
+        script(self.tools / "lepton-add-game", RECORDER)
+        script(self.tools / "lepton-play", 'TOOL=lepton-play exec python3 "$(dirname "$0")/lepton-add-game" "$@"\n')
+        self.record = self.home / "record"
+        os.environ["RECORD"] = str(self.record)
+
+    def leptron(self, *args, check=True):
+        return subprocess.run([str(self.tools / "leptron"), *args], text=True, capture_output=True, check=check)
+
+    def calls(self):
+        calls = [json.loads(line) for line in self.record.read_text().splitlines()]
+        self.record.unlink()
+        return calls
+
+    def test_help_lists_exactly_the_documented_commands(self):
+        result = self.leptron("--help")
+        self.assertTrue(result.stdout.startswith("usage: leptron "), result.stdout)
+        listed = set(re.findall(r"(?m)^    ([a-z][a-z-]*)", result.stdout))
+        self.assertEqual(listed, COMMANDS)
+        repo = tools.parents[1]
+        for doc in ("README.md", "INSTALL-STEAM-DECK.md", "compat_tool/android-library.md", "PENDING_TESTS.md",
+                    "compat_tool/tools/leptron"):
+            text = (repo / doc).read_text()
+            used = set(re.findall(r"\bleptron ([a-z][a-z-]*)", text))
+            self.assertLessEqual(used, COMMANDS, doc)
+        for old in ("import", "play", "remove"):
+            self.assertNotEqual(self.leptron(old, package, check=False).returncode, 0, old)
+
+    def test_run_apply_and_add_to_steam_use_the_library_apk(self):
+        result = self.leptron("install", str(self.apk("game.apk")))
+        self.assertIn(f"Next: leptron add-to-steam {package}, or leptron run {package}", result.stdout)
+        apk = str(self.root / package / f"{package}.apk")
+        self.leptron("run", package, "--shared-folders", "none")
+        self.leptron("apply", package)
+        self.leptron("add-to-steam", package, "--userdata", str(self.home / "userdata"))
+        run, apply, steam = self.calls()
+        self.assertEqual((run["tool"], run["argv"], run["apply_only"]),
+                         ("lepton-play", [apk, "--shared-folders", "none"], None))
+        self.assertEqual((apply["tool"], apply["argv"], apply["apply_only"]), ("lepton-play", [apk], "true"))
+        self.assertEqual((steam["tool"], steam["apply_only"]), ("lepton-add-game", None))
+        self.assertEqual(steam["argv"], [apk, "--userdata", str(self.home / "userdata"), "--name", package])
+
+    def test_uninstall_keeps_profiles_and_container_storage(self):
+        self.leptron("install", str(self.apk("game.apk")))
+        refused = self.leptron("uninstall", package, check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("Confirm with --yes", refused.stderr)
+        self.assertTrue(refused.stderr.startswith("leptron: "), refused.stderr)
+        (self.root / lib.STORAGE / "keep").write_text("kept")
+        self.leptron("uninstall", package, "--yes")
+        self.assertFalse((self.root / package).exists())
+        self.assertEqual((self.root / lib.STORAGE / "keep").read_text(), "kept")
 
 
 if __name__ == "__main__":

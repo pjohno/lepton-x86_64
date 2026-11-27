@@ -48,8 +48,8 @@ through the overlay bind mount. If that mount were missing while Android
 scanned packages, Android would treat the package as removed and could
 delete its data. A safe conversion needs a launch that keeps the legacy
 mount until a native `install -r` has committed, plus a backup step. It is
-deferred, and the library never adopts a legacy profile: importing an APK
-you already play creates a separate profile.
+deferred, and the library never adopts a legacy profile: `leptron install` of
+an APK you already play creates a separate profile.
 
 ## Library layout
 
@@ -230,7 +230,7 @@ Other cases:
 - **Library unavailable, then back.** While it is unavailable, Lepton removes
   its own link and nothing is mounted. Apps can't write into a stand-in. The
   link returns on the next launch with the library.
-- **Removing or renaming an app.** `remove` deletes only `ROOT/PACKAGE`.
+- **Removing or renaming an app.** `uninstall` deletes only `ROOT/PACKAGE`.
   Container Storage and profiles are kept.
 - **Changing the association.** `leptron forget` removes the settings
   file only. `init --path` adopts an existing library by its marker.

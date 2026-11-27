@@ -642,7 +642,7 @@ def refuse_replacement(old, incoming, candidate, replace, mode, files):
             return "unchanged"
         raise ValueError("This is the library's current APK; run leptron discard to drop the staged update")
     if mode == "import":
-        raise ValueError("Package already imported. To replace it, run leptron update FILE.")
+        raise ValueError("Package already in the library. To replace it, run leptron update FILE.")
     if incoming["version_code"] == old["version_code"] and incoming["sha256"] != old["sha256"] and not replace:
         raise ValueError("Same version with different contents; use update --replace-same-version")
     return None
@@ -670,7 +670,7 @@ def import_app(root, source, *, mode, replace=False, obbs=(), dry_run=False, ver
         candidate_file.rename(staged)
         if not exists(directory):
             if mode == "update":
-                raise ValueError(f"{package} is not imported; run leptron import FILE")
+                raise ValueError(f"{package} is not in the library; run leptron install FILE")
             return new_app(root, stage, directory, apk, incoming, files, dry_run)
         if exists(directory / JOURNAL):
             commit_update(directory)

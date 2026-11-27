@@ -636,7 +636,7 @@ the same path; Steam shortcuts point to the APK inside it. Choose a location
 outside Steam's library folders and Lepton's profile folders. The library
 holds the APKs, OBB files, per-app settings and Container Storage, but no
 Android profiles. A Steam shortcut's profile stays in
-`steamapps/compatdata/<AppID>`, and `leptron play` uses
+`steamapps/compatdata/<AppID>`, and `leptron run` uses
 `~/.local/share/lepton-compat-data/<package>`. Each is a separate Android
 installation and updates when it next launches.
 
@@ -671,8 +671,8 @@ needs a backup of the profile made before the update.
 
 **Existing unmanaged games.** Games added with `lepton-add-game FILE.apk` or
 `lepton-play FILE.apk` keep their profiles and keep launching from their
-original files. The library doesn't adopt them: importing the same APK gives
-a new profile, alongside the old one. `lepton-add-game --import FILE.apk`
+original files. The library doesn't adopt them: `leptron install` of the same
+APK gives a new profile, alongside the old one. `lepton-add-game --import FILE.apk`
 imports a file and creates its shortcut in one step. A profile created by
 the library can't be launched from an unmanaged copy of the APK, and Lepton
 says so instead of changing it.

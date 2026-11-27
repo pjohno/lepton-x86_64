@@ -121,20 +121,20 @@ its signature and keeps its data. You don't need Java or the Android SDK.
 In Konsole (Steam Deck Desktop Mode) or a Fedora terminal:
 
 ```bash
-leptron import ~/Downloads/game.apk
+leptron install ~/Downloads/game.apk
 leptron add-to-steam com.example.game
 ```
 
-The first import creates the library at `~/Android_Library`. To use another
-place, such as an SD card, run this once before importing:
+The first install creates the library at `~/Android_Library`. To use another
+place, such as an SD card, run this once before installing:
 
 ```bash
 leptron init --path "/run/media/deck/MySDCard/Android_Library"
 ```
 
-`import` prints the app's package name (here `com.example.game`). Exit Steam
+`install` prints the app's package name (here `com.example.game`). Exit Steam
 before `add-to-steam`, then start Steam again: the game is under
-**Non-Steam games**. To play without Steam, run `leptron play
+**Non-Steam games**. To play without Steam, run `leptron run
 com.example.game`. APKM bundles work the same way. Add OBB files with
 `--obb main.123.com.example.game.obb`.
 
@@ -145,7 +145,7 @@ leptron update ~/Downloads/game-new.apk
 ```
 
 The update is staged. Android installs it the next time each profile
-launches (the Steam shortcut and `play` are separate profiles), or straight
+launches (the Steam shortcut and `run` are separate profiles), or straight
 away with `leptron apply com.example.game`. Saves, settings and
 sign-ins are kept. The Steam shortcut, its AppID, artwork, controller layout
 and launch options don't change, because the library APK keeps its path.
@@ -191,7 +191,7 @@ leptron config com.example.game show
 ```
 
 Steam launch options (`LEPTON_SHARED_FOLDERS=... %command%`) and
-`play --shared-folders` take precedence over these saved settings.
+`run --shared-folders` take precedence over these saved settings.
 `leptron info` shows the saved settings and any Steam launch option
 that overrides them.
 
@@ -199,10 +199,10 @@ that overrides them.
 
 Apps you add with **Lepton: Add Android game** or `lepton-add-game FILE.apk`
 keep working as before, as do Steam-distributed games and apps installed from
-Google Play. The library doesn't take over existing profiles: importing an
+Google Play. The library doesn't take over existing profiles: installing an
 APK you already play creates a new, separate profile. `leptron status`
 shows the library, its apps and pending updates. `leptron forget`
-stops using the library without deleting anything. `remove` deletes an app's
+stops using the library without deleting anything. `uninstall` deletes an app's
 library files but keeps its profiles and Container Storage. How the library
 works: [compat_tool/android-library.md](compat_tool/android-library.md).
 

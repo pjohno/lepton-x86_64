@@ -3,11 +3,11 @@
 """Manage sideloaded Android apps and the common Container Storage folder.
 
 Routine use:
-  leptron import ~/Downloads/game.apk     copy an APK or APKM into the library
+  leptron install ~/Downloads/game.apk    copy an APK or APKM into the library
   leptron add-to-steam com.example.game   add a Steam shortcut for it
-  leptron play com.example.game           or play it without Steam
+  leptron run com.example.game            or run it without Steam
   leptron update ~/Downloads/game-new.apk stage a newer version
-  leptron apply com.example.game          install it now, without playing
+  leptron apply com.example.game          install it now, without running it
 
 Updates are installed by Android on each profile's next launch (or apply).
 Android checks the signature and keeps the app's data. A refused update
@@ -159,7 +159,7 @@ def print_info(report):
     print(f"  Shared folders: {report['saved_sharing'] or 'Lepton defaults'} (saved for this app)")
     print("  Container Storage is shared with every profile while the library is available.")
     if not report["profiles"]:
-        print("  Profiles:       none yet. Run leptron play or add-to-steam.")
+        print("  Profiles:       none yet. Run leptron run or add-to-steam.")
     for profile in report["profiles"]:
         shortcut = profile["shortcut"]
         if shortcut:
@@ -188,7 +188,7 @@ def print_info(report):
 
 def print_status(found):
     if found is None:
-        print("Android Library: not configured. Run leptron init, or import an APK to create "
+        print("Android Library: not configured. Run leptron init, or install an APK to create "
               f"{DEFAULT_LIBRARY}.")
         return 0
     root, settings = found
@@ -251,8 +251,8 @@ def main():
     commands.add_parser("status", help="Show the library, Container Storage and apps")
     commands.add_parser("list", help="List apps and check their library files")
     commands.add_parser("forget", help="Stop using the configured library; no files are deleted")
-    for name in ("import", "update"):
-        action = commands.add_parser(name, help="Copy an APK or APKM into the library" if name == "import" else
+    for name in ("install", "update"):
+        action = commands.add_parser(name, help="Copy an APK or APKM into the library" if name == "install" else
                                      "Stage a newer APK; Android installs it on each profile's next launch")
         action.add_argument("file", type=Path)
         action.add_argument("--obb", type=Path, action="append", default=[], help="Add a versioned OBB (repeatable)")
@@ -261,14 +261,14 @@ def main():
             action.add_argument("--replace-same-version", action="store_true")
     for name, description in {
         "info": "Show versions, staged updates, profiles, Steam shortcuts and shared folders",
-        "play": "Launch in a standalone profile",
+        "run": "Launch in a standalone profile",
         "apply": "Install a staged update in the standalone profile without opening the app",
         "add-to-steam": "Create a Steam shortcut pointing to the stable library APK",
         "discard": "Drop a staged update; installed apps are not changed",
         "recover": "Finish an interrupted library file transaction",
         "restore-apk": "Make the previous library APK active again (installed apps are not downgraded)",
         "reinstall": "Reinstall the current APK in each profile on its next launch, keeping data",
-        "remove": "Remove library files while keeping Android profiles and Container Storage",
+        "uninstall": "Remove library files while keeping Android profiles and Container Storage",
         "config": "Inspect and edit per-app shared folders",
     }.items():
         action = commands.add_parser(name, help=description)
@@ -277,9 +277,9 @@ def main():
             action.add_argument("--json", action="store_true")
         else:
             action.add_argument("--dry-run", action="store_true")
-        if name in {"remove", "restore-apk"}:
+        if name in {"uninstall", "restore-apk"}:
             action.add_argument("--yes", action="store_true", help="Confirm the file operation")
-        if name in {"play", "apply"}:
+        if name in {"run", "apply"}:
             action.add_argument("--tool")
             action.add_argument("--data-root", type=Path)
             action.add_argument("--shared-folders")
@@ -313,16 +313,16 @@ def main():
         print(f"{'Proposed library' if dry_run else 'Android Library'} at {root}")
         print(f"Container Storage at {root / lib.STORAGE}")
         return 0
-    if cmd == "import":
+    if cmd == "install":
         root = library_for_import(dry_run)
     else:
         root = lib.library()
         if root is None:
-            raise ValueError("No Android Library is configured. Import an APK, or run leptron init.")
-    if cmd in {"import", "update"}:
+            raise ValueError("No Android Library is configured. Install an APK, or run leptron init.")
+    if cmd in {"install", "update"}:
         directory, config, apk, staged = lib.import_app(
-            root, args.file, mode=cmd, replace=getattr(args, "replace_same_version", False), obbs=args.obb,
-            dry_run=dry_run)
+            root, args.file, mode="update" if cmd == "update" else "import",
+            replace=getattr(args, "replace_same_version", False), obbs=args.obb, dry_run=dry_run)
         package = config["package"]
         if staged:
             print(f"{'Would stage' if dry_run else 'Staged'} {package} {version(config)}. The library keeps "
@@ -333,9 +333,9 @@ def main():
             if config["name"] == package:
                 print("The app's display name could not be read; add-to-steam uses the package name unless "
                       "you pass --name.")
-            print(f"Next: leptron add-to-steam {package}, or leptron play {package}")
+            print(f"Next: leptron add-to-steam {package}, or leptron run {package}")
         return 0
-    exclusive = (cmd in {"recover", "reinstall", "remove", "restore-apk", "config", "discard"} and not dry_run
+    exclusive = (cmd in {"recover", "reinstall", "uninstall", "restore-apk", "config", "discard"} and not dry_run
                  and getattr(args, "action", "") != "show")
     with lib.lock(root, exclusive):
         if cmd == "list":
@@ -362,7 +362,7 @@ def main():
                 lib.commit_update(directory)
             print(f"{'Would finish' if dry_run else 'Finished'} the library file transaction for {args.package}")
             return 0
-        directory, config, apk = lib.load_app(root, args.package, verify=cmd not in {"remove", "info"})
+        directory, config, apk = lib.load_app(root, args.package, verify=cmd not in {"uninstall", "info"})
         if cmd == "info":
             report = app_report(root, directory, config, apk)
             if args.json:
@@ -392,7 +392,7 @@ def main():
                 lib.atomic_json(directory / "config.json", dict(config, revision=uuid.uuid4().hex))
             print(f"{'Would schedule' if dry_run else 'Scheduled'} reinstallation on the next launch of each "
                   "managed profile. App data is kept.")
-        elif cmd == "remove":
+        elif cmd == "uninstall":
             if list(lib.steam_shortcuts(apk, removing=True)):
                 raise ValueError("Steam still points to this APK. Remove the shortcut in Steam and exit Steam first.")
             if not dry_run:
@@ -409,7 +409,7 @@ def main():
         elif cmd == "config":
             edit_config(args, root, directory, config)
         else:
-            tool = lib.TOOLS / ("lepton-play" if cmd in {"apply", "play"} else "lepton-add-game")
+            tool = lib.TOOLS / ("lepton-play" if cmd in {"apply", "run"} else "lepton-add-game")
             interpreter = sys.executable if cmd == "add-to-steam" else "bash"
             argv = [interpreter, str(tool), str(apk)]
             for option in ("tool", "data_root", "tool_id", "userdata", "name", "shared_folders"):
