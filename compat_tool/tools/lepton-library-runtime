@@ -216,7 +216,10 @@ def reconcile(android, state, package, save):
     live = android.installed(package)
     code = live and live["code"]
     old, pending = state.get("installed"), state.get("pending")
-    if pending is not None and code == pending["code"]:
+    # Reinstalling identical APKs leaves the same code identity; only a new
+    # code directory shows that Android committed it.
+    moved = live and live["dir"] != state.get("pending_from")
+    if pending is not None and code == pending["code"] and (not old or code != old["code"] or moved):
         # Android committed before the receipt was written.
         state.update(installed=pending, pending=None)
     elif code != (old["code"] if old else None):
@@ -225,11 +228,12 @@ def reconcile(android, state, package, save):
         android.abandon(state["session"])
         state.pop("session")
     state["pending"] = None
+    state.pop("pending_from", None)
     save()
     return live
 
 
-def finish_install(android, state, target, sources, package, save):
+def finish_install(android, state, target, sources, package, save, live=None):
     """Journal before the PM commit; verify the result before recording it.
     Returns "current", "installed", or "newer" when the profile keeps a newer
     version than TARGET (Android never downgrades it)."""
@@ -243,7 +247,7 @@ def finish_install(android, state, target, sources, package, save):
         state["session"] = session
         save()
 
-    state.update(pending=target)
+    state.update(pending=target, pending_from=live and live["dir"])
     save()
     android.install(sources, record_session)
     live = android.installed(package)
@@ -252,6 +256,7 @@ def finish_install(android, state, target, sources, package, save):
     android.checked("/system/bin/toybox", "sync")
     state.update(installed=target, pending=None)
     state.pop("session", None)
+    state.pop("pending_from", None)
     save()
     return "installed"
 
@@ -309,7 +314,7 @@ def profile_install(root, package, baked, context, obb):
             attempted.update(revision=chosen["revision"], version_code=chosen["version_code"])
             target = {"revision": chosen["revision"], "code": target_code(chosen)}
             try:
-                result = finish_install(android, state, target, install_sources(chosen, files), package, save)
+                result = finish_install(android, state, target, install_sources(chosen, files), package, save, live)
             except Rejected as exc:
                 if not usable:
                     raise

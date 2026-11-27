@@ -642,6 +642,35 @@ class ProfileTests(LibraryCase):
         self.assertEqual(len(self.android.installs), installs)
         self.assertEqual(apk.read_bytes(), new.read_bytes())
 
+    def test_interrupted_identical_reinstall_is_retried(self):
+        self.install(self.apk("v1.apk"))
+        self.launch()
+        self.cli("reinstall", package)
+        with patch.object(FakeAndroid, "install", side_effect=OSError("host interrupted")):
+            with self.assertRaises(OSError):
+                self.launch()
+        self.assertIsNotNone(self.receipt()["pending"])
+        # Same APKs, same directory: not committed, so it is installed again.
+        self.launch()
+        self.assertEqual(len(self.android.installs), 2)
+        self.assertIsNone(self.receipt().get("pending_from"))
+
+    def test_interrupted_identical_reinstall_after_commit(self):
+        self.install(self.apk("v1.apk"))
+        self.launch()
+        self.cli("reinstall", package)
+        real_install = FakeAndroid.install
+
+        def commit_then_crash(fake, sources, on_created):
+            real_install(fake, sources, on_created)
+            raise OSError("host interrupted after commit")
+
+        with patch.object(FakeAndroid, "install", commit_then_crash), self.assertRaises(OSError):
+            self.launch()
+        self.launch()  # new directory: recognised as committed, not repeated
+        self.assertEqual(len(self.android.installs), 2)
+        self.assertEqual(self.receipt()["installed"]["revision"], lib.load_app(self.root, package)[1]["revision"])
+
     def test_unexplained_installed_code_is_refused(self):
         self.install(self.apk("v1.apk"))
         self.android.code = {"version_code": 9, "base": "f" * 64, "splits": []}
