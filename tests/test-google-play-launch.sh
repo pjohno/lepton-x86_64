@@ -22,6 +22,7 @@ mkdir -p "$LEPTON_DIR" "$STEAM_COMPAT_DATA_PATH" "$STEAM_COMPAT_INSTALL_PATH"
 source "$repo/compat_tool/liblepton/utils.sh"
 source "$repo/compat_tool/liblepton/app_metadata.sh"
 source "$repo/compat_tool/liblepton/google_games.sh"
+source "$repo/compat_tool/liblepton/android_library.sh"
 [[ -z "$LEPTON_LAUNCH_PACKAGE" ]] || fail 'inherited LEPTON_LAUNCH_PACKAGE kept'
 [[ ! "$(declare -p LEPTON_LAUNCH_PACKAGE)" =~ -x ]] || fail 'LEPTON_LAUNCH_PACKAGE exported'
 not google_play_mode
