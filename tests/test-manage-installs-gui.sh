@@ -108,11 +108,12 @@ mv "$work/config-aside" "$home/.config/lepton-x86_64"; mv "$work/vdf-aside" "$ho
 make_install lepton_b 'Lepton B'
 mkdir -p "$home/.local/bin" "$home/.local/share/applications"
 ln -s "$home/.local/share/lepton_a/compat_tool/tools/lepton-add-game" "$home/.local/bin/lepton-add-game"
+ln -s "$home/.local/share/lepton_a/compat_tool/tools/leptron" "$home/.local/bin/leptron"
 touch "$home/.local/share/applications/lepton-x86_64-add-game.desktop"
 reset; DIALOG=kdialog PICK=lepton_b manage --gui
 [[ ! -e "$home/.local/share/lepton_b" ]]
 manage --remove lepton_a --execute > "$work/last.log"
 grep -q 'Default install: none' "$work/last.log"
-[[ ! -e "$home/.config/lepton-x86_64/default.env" && ! -L "$home/.local/bin/lepton-add-game" ]]
+[[ ! -e "$home/.config/lepton-x86_64/default.env" && ! -L "$home/.local/bin/lepton-add-game" && ! -L "$home/.local/bin/leptron" ]]
 [[ ! -e "$home/.local/share/applications/lepton-x86_64-add-game.desktop" ]]
 echo 'PASS: manage-installs windows: choose target, cancel/confirm, exclude, running-install guard, default handling, kdialog'
