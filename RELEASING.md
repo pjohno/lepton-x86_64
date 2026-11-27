@@ -1,4 +1,4 @@
-# Releasing Lepton x86_64
+# Releasing Leptron
 
 This guide publishes a tested base bundle as a GitHub Release at
 <https://github.com/pjohno/lepton-x86_64/releases>. Users install a release

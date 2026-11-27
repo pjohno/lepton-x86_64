@@ -1,6 +1,6 @@
 # Tested games
 
-Android games known to run with Lepton x86_64. Compatibility varies from game
+Android games known to run with Leptron. Compatibility varies from game
 to game, and a game that works in one version may break in an update of the
 game or of Lepton.
 

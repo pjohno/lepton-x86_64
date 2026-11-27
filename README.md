@@ -1,16 +1,32 @@
-# Lepton x86_64
+# Leptron
 
-Run Android games from Steam on a Steam Deck.
+**Run Android games and applications on Linux and Steam Deck.**
 
-Lepton x86_64 is a community port of [Valve's Lepton](https://gitlab.steamos.cloud/frame-public/lepton)
-to x86_64 Linux. Each Android game becomes a normal Steam shortcut: you press
-Play, and Lepton starts Android 14 in a container, shows the game (full screen
-in Gaming Mode, in a window in Desktop Mode) with the Deck's controls and
-touchscreen, and keeps its saves between launches.
+```bash
+leptron install ~/Downloads/game.apk
 
-> **Unofficial and experimental.** This project is not affiliated with,
-> supported by, or endorsed by Valve. It targets the Steam Deck; other
-> computers are experimental.
+# Optionally add the application to Steam
+leptron add-to-steam com.example.game
+
+# Or launch directly without Steam
+leptron run com.example.game
+```
+
+Leptron runs Android 14 in a container on your computer. Each app can be a
+normal Steam shortcut: you press Play, and Android starts, shows the game
+(full screen in Gaming Mode, in a window in Desktop Mode) with the Deck's
+controls and touchscreen, and keeps its saves between launches. Apps update
+without losing their data, and you don't need Java or the Android SDK.
+
+Leptron builds upon [Valve's Lepton](https://gitlab.steamos.cloud/frame-public/lepton)
+and the [Waydroid](https://waydro.id) project. It ports Lepton to x86_64 PCs
+and the Steam Deck and adds the `leptron` command for managing your Android
+apps. Lepton is still the compatibility tool that runs them, so Steam and
+Leptron's desktop shortcuts show the name **Lepton**.
+
+> **Independent community project.** Leptron is not affiliated with,
+> supported by, or endorsed by Valve. It is experimental. It targets the
+> Steam Deck; other computers are experimental.
 >
 > **AI Assistance Disclosure.** AI tools have been used to aid development
 > in this repo. I (as author) maintain responsibility for the code, and
@@ -29,7 +45,7 @@ touchscreen, and keeps its saves between launches.
 - The **Android games** you want to play, as `.apk` files or split-APK bundles
   (`.apkm`).
 
-**Desktop PCs** with a **Wayland** desktop can install Lepton too. On Fedora
+**Desktop PCs** with a **Wayland** desktop can install Leptron too. On Fedora
 GNOME and KDE Plasma, games run full screen with mouse and keyboard input.
 
 Steam Deck / AMD RADV is the established hardware-accelerated path. Intel Gen9
@@ -69,6 +85,9 @@ Later versions, updates and repairs: double-tap
 ([details](INSTALL-STEAM-DECK.md#later-versions-updates-and-repair)).
 
 ## Add and play a game
+
+From a terminal, use [`leptron`](#manage-sideloaded-apps-with-android-library),
+as at the top of this page. Without a terminal:
 
 1. Double-tap **Lepton: Add Android game** and pick the game's `.apk` or
    `.apkm`.
@@ -112,8 +131,8 @@ first: window closing does not guarantee unsaved progress has been written.
 
 ## Manage sideloaded apps with Android Library
 
-The Android Library keeps your sideloaded APKs in one folder and updates them
-without losing the game's saves. Android installs each app natively, checks
+The `leptron` command keeps your sideloaded APKs in one folder, the Android
+Library, and updates them without losing the game's saves. Android installs each app natively, checks
 its signature and keeps its data. You don't need Java or the Android SDK.
 
 ### Quick start
@@ -123,6 +142,8 @@ In Konsole (Steam Deck Desktop Mode) or a Fedora terminal:
 ```bash
 leptron install ~/Downloads/game.apk
 leptron add-to-steam com.example.game
+leptron list
+leptron info com.example.game
 ```
 
 The first install creates the library at `~/Android_Library`. To use another
@@ -132,7 +153,8 @@ place, such as an SD card, run this once before installing:
 leptron init --path "/run/media/deck/MySDCard/Android_Library"
 ```
 
-`install` prints the app's package name (here `com.example.game`). Exit Steam
+`install` prints the app's package name (here `com.example.game`); `list`
+shows every app in the library. Exit Steam
 before `add-to-steam`, then start Steam again: the game is under
 **Non-Steam games**. To play without Steam, run `leptron run
 com.example.game`. APKM bundles work the same way. Add OBB files with
@@ -202,8 +224,9 @@ keep working as before, as do Steam-distributed games and apps installed from
 Google Play. The library doesn't take over existing profiles: installing an
 APK you already play creates a new, separate profile. `leptron status`
 shows the library, its apps and pending updates. `leptron forget`
-stops using the library without deleting anything. `uninstall` deletes an app's
-library files but keeps its profiles and Container Storage. How the library
+stops using the library without deleting anything. `leptron uninstall
+com.example.game --yes` deletes an app's library files but keeps its profiles
+and Container Storage. `leptron --help` lists every command. How the library
 works: [compat_tool/android-library.md](compat_tool/android-library.md).
 
 ## Launch options
@@ -279,7 +302,7 @@ Compatibility varies from game to game: see the [tested games](GAMES.md).
 | --- | --- |
 | [INSTALL-STEAM-DECK.md](INSTALL-STEAM-DECK.md) | Installing, updating, several installs side by side, game data, troubleshooting |
 | [compat_tool/android-library.md](compat_tool/android-library.md) | How the Android Library installs, updates and recovers apps |
-| [GAMES.md](GAMES.md) | Games tested with Lepton, and how to report one |
+| [GAMES.md](GAMES.md) | Games tested with Leptron, and how to report one |
 | [BUILDING.md](BUILDING.md) | Building Android and the Deck bundles from source |
 | [GAPPS.md](GAPPS.md) | Optional Google Play services, ARM64 translation and Widevine bundles |
 | [CUSTOMIZING.md](CUSTOMIZING.md) | Customizing and repackaging bundles without an AOSP build |
@@ -342,9 +365,11 @@ found when merging Valve's updates.
 
 ## Upstream, attribution and licences
 
-This is a community modification of
+Leptron is an independent community modification of
 [Valve's public Lepton project](https://gitlab.steamos.cloud/frame-public/lepton),
-which remains the authoritative upstream. Keep Valve's copyright notices,
+which remains the authoritative upstream for the Lepton runtime. Its Android
+image uses components from the [Waydroid](https://github.com/waydroid) project.
+Leptron is not affiliated with or endorsed by Valve. Keep Valve's copyright notices,
 third-party attribution and licence headers in files taken from upstream.
 
 **The repository is not covered by one licence.** See:
@@ -367,6 +392,6 @@ Platform-Tools from Google and checks it against a pinned checksum
 ## Contributing
 
 Bug reports and patches are welcome. Please include your hardware and OS, the
-Lepton version, the game, how you launched it, and the relevant part of
+Leptron version, the game, how you launched it, and the relevant part of
 `~/.steam/steam/logs/lepton-*.log`. Don't upload game files, Android images,
 Steam binaries, credentials or personal data.

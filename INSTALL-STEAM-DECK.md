@@ -1,7 +1,9 @@
-# Install Lepton on a Steam Deck
+# Install Leptron on a Steam Deck
 
 This guide gets Android games running from Steam on a Steam Deck with AMD
-hardware graphics. There are two ways to install:
+hardware graphics. Leptron installs the **Lepton** compatibility tool, so
+Steam, the desktop shortcuts and this guide call it Lepton; the `leptron`
+command manages your Android apps. There are two ways to install:
 
 - **[From GitHub Releases](#install-from-github-releases)**: for most people. No
   SSH, Git or developer tools are needed.

@@ -1,4 +1,4 @@
-# Build Lepton x86_64 from source
+# Build Leptron from source
 
 This guide goes from a fresh clone to Steam Deck bundles: a **base** bundle
 and, optionally, a **GApps + NDK** bundle (Google Play services and ARM64 app

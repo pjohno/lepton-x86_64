@@ -366,7 +366,7 @@ PY
     prerelease_flag=()
     [[ "$PRERELEASE" == false ]] || prerelease_flag=(--prerelease)
     gh release create "$VERSION" --repo "$REPO" --draft --target "$COMMIT" \
-        --title "Lepton x86_64 $VERSION" --notes-file "$NOTES_FILE" "${prerelease_flag[@]}" >/dev/null
+        --title "Leptron $VERSION" --notes-file "$NOTES_FILE" "${prerelease_flag[@]}" >/dev/null
     pass "Created draft release $VERSION (target $COMMIT)"
     gh api --paginate "repos/$REPO/releases?per_page=100" --jq '.[]' > "$WORK/releases.jsonl"
     python3 - "$WORK/releases.jsonl" "$VERSION" > "$WORK/release.json" <<'PY'

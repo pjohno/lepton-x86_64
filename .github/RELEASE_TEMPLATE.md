@@ -1,8 +1,12 @@
-# Lepton x86_64 {{VERSION}}
+# Leptron {{VERSION}}
 
-**Experimental.** Lepton x86_64 is a community Steam compatibility tool that runs
-Android 14 games (APK and APKM) from Steam on x86_64 Linux. It is not made or
-supported by Valve.
+**Run Android games and applications on Linux and Steam Deck.**
+
+**Experimental.** Leptron is an independent community project that runs
+Android 14 games and apps (APK and APKM) on x86_64 Linux, from Steam or with
+the `leptron` command. It builds on Valve's Lepton, installed as a Steam
+compatibility tool, and on Waydroid. It is not affiliated with or endorsed by
+Valve.
 
 - Version: `{{VERSION}}`
 - Source commit: `{{COMMIT}}`
