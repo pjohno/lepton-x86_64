@@ -16,7 +16,7 @@ import sys
 import time
 import zipfile
 
-import lepton_library as lib
+import android_library as lib
 
 CHUNK = 1 << 20
 PODMAN_SETTINGS = {"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME",
@@ -323,7 +323,7 @@ def profile_install(root, package, baked, context, obb):
                 kept = f"version {installed['code']['version_code']}" if installed else "the previous state"
                 raise ValueError(f"Android refused the update to {describe(chosen)}: {exc}. {package} "
                                  f"{kept} and its data are unchanged; launch again to play it. Run "
-                                 f"lepton-library info {package} for details.") from exc
+                                 f"leptron info {package} for details.") from exc
             if result == "newer":
                 print(f"WARNING: this profile keeps {package} version {state['installed']['code']['version_code']}, "
                       f"which is newer than the library's {describe(chosen)}. Android does not downgrade apps.",

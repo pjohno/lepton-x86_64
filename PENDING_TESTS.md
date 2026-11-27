@@ -86,7 +86,7 @@ drive in a path with spaces, standing in for an SD card.
 
 ### Standard Steam Deck installation (candidate bundle)
 
-- Confirm `lepton-library --help`, `import`, `update` and `info` work with no
+- Confirm `leptron --help`, `import`, `update` and `info` work with no
   Java or SDK Build Tools installed.
 - First `import` creates `~/Android_Library`; `add-to-steam`; launch in Gaming
   Mode; `update` a newer APK; confirm saved data, Steam AppID, artwork and

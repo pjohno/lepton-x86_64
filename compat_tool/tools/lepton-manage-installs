@@ -44,7 +44,7 @@ LINKS = {
     "lepton-add-game-gui": "compat_tool/tools/lepton-add-game-gui",
     "lepton-in-terminal": "compat_tool/tools/lepton-in-terminal",
     "lepton-manage-installs": "compat_tool/tools/lepton-manage-installs",
-    "lepton-library": "compat_tool/tools/lepton-library",
+    "leptron": "compat_tool/tools/leptron",
     "lepton-play": "compat_tool/tools/lepton-play",
     "lepton-run-apk": "tests/runtime/run-apk.sh",
 }

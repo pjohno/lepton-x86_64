@@ -26,7 +26,7 @@ python3 -B - "$repo/compat_tool/tools" "$library" <<'PY'
 import sys, uuid
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-import lepton_library as lib
+import android_library as lib
 root = lib.initialize(Path(sys.argv[2]))
 app = root / "org.example.game"
 (app / "obb").mkdir(parents=True)

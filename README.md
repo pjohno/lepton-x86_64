@@ -121,32 +121,32 @@ its signature and keeps its data. You don't need Java or the Android SDK.
 In Konsole (Steam Deck Desktop Mode) or a Fedora terminal:
 
 ```bash
-lepton-library import ~/Downloads/game.apk
-lepton-library add-to-steam com.example.game
+leptron import ~/Downloads/game.apk
+leptron add-to-steam com.example.game
 ```
 
 The first import creates the library at `~/Android_Library`. To use another
 place, such as an SD card, run this once before importing:
 
 ```bash
-lepton-library init --path "/run/media/deck/MySDCard/Android_Library"
+leptron init --path "/run/media/deck/MySDCard/Android_Library"
 ```
 
 `import` prints the app's package name (here `com.example.game`). Exit Steam
 before `add-to-steam`, then start Steam again: the game is under
-**Non-Steam games**. To play without Steam, run `lepton-library play
+**Non-Steam games**. To play without Steam, run `leptron play
 com.example.game`. APKM bundles work the same way. Add OBB files with
 `--obb main.123.com.example.game.obb`.
 
 ### Updating an app
 
 ```bash
-lepton-library update ~/Downloads/game-new.apk
+leptron update ~/Downloads/game-new.apk
 ```
 
 The update is staged. Android installs it the next time each profile
 launches (the Steam shortcut and `play` are separate profiles), or straight
-away with `lepton-library apply com.example.game`. Saves, settings and
+away with `leptron apply com.example.game`. Saves, settings and
 sign-ins are kept. The Steam shortcut, its AppID, artwork, controller layout
 and launch options don't change, because the library APK keeps its path.
 
@@ -157,15 +157,15 @@ itself refuses damaged files, older versions and apps that need a newer
 Android. Remove a refused update with `discard`:
 
 ```bash
-lepton-library info com.example.game      # what is installed, staged or refused
-lepton-library discard com.example.game   # drop a staged or refused update
+leptron info com.example.game      # what is installed, staged or refused
+leptron discard com.example.game   # drop a staged or refused update
 ```
 
 Downgrades, and switching between APK and APKM, are refused. Android never
 downgrades an installed app. `restore-apk` puts the previous library APK
 back for profiles that haven't updated yet; it can't roll back an installed
 app or its data. If a library file change was interrupted (power loss), the
-next launch finishes it, or run `lepton-library recover com.example.game`.
+next launch finishes it, or run `leptron recover com.example.game`.
 
 APK updates are separate from Lepton updates. A new Lepton version can come
 with a different Android image, and profiles then need that image's
@@ -185,14 +185,14 @@ without Container Storage.
 ### Shared folders per app
 
 ```bash
-lepton-library config com.example.game defaults none            # no standard folders
-lepton-library config com.example.game share-add --name Books --path ~/Books --read-only
-lepton-library config com.example.game show
+leptron config com.example.game defaults none            # no standard folders
+leptron config com.example.game share-add --name Books --path ~/Books --read-only
+leptron config com.example.game show
 ```
 
 Steam launch options (`LEPTON_SHARED_FOLDERS=... %command%`) and
 `play --shared-folders` take precedence over these saved settings.
-`lepton-library info` shows the saved settings and any Steam launch option
+`leptron info` shows the saved settings and any Steam launch option
 that overrides them.
 
 ### Library and unmanaged apps
@@ -200,8 +200,8 @@ that overrides them.
 Apps you add with **Lepton: Add Android game** or `lepton-add-game FILE.apk`
 keep working as before, as do Steam-distributed games and apps installed from
 Google Play. The library doesn't take over existing profiles: importing an
-APK you already play creates a new, separate profile. `lepton-library status`
-shows the library, its apps and pending updates. `lepton-library forget`
+APK you already play creates a new, separate profile. `leptron status`
+shows the library, its apps and pending updates. `leptron forget`
 stops using the library without deleting anything. `remove` deletes an app's
 library files but keeps its profiles and Container Storage. How the library
 works: [compat_tool/android-library.md](compat_tool/android-library.md).

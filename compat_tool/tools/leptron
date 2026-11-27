@@ -3,11 +3,11 @@
 """Manage sideloaded Android apps and the common Container Storage folder.
 
 Routine use:
-  lepton-library import ~/Downloads/game.apk     copy an APK or APKM into the library
-  lepton-library add-to-steam com.example.game   add a Steam shortcut for it
-  lepton-library play com.example.game           or play it without Steam
-  lepton-library update ~/Downloads/game-new.apk stage a newer version
-  lepton-library apply com.example.game          install it now, without playing
+  leptron import ~/Downloads/game.apk     copy an APK or APKM into the library
+  leptron add-to-steam com.example.game   add a Steam shortcut for it
+  leptron play com.example.game           or play it without Steam
+  leptron update ~/Downloads/game-new.apk stage a newer version
+  leptron apply com.example.game          install it now, without playing
 
 Updates are installed by Android on each profile's next launch (or apply).
 Android checks the signature and keeps the app's data. A refused update
@@ -25,7 +25,7 @@ import time
 import uuid
 import zipfile
 
-import lepton_library as lib
+import android_library as lib
 
 DEFAULT_LIBRARY = Path.home() / "Android_Library"
 
@@ -72,7 +72,7 @@ def edit_config(args, root, directory, config):
             LEPTON_NONINTERACTIVE=1
             lepton_tell_player() { :; }
             lepton_shared_folder_entries
-        ''', "lepton-library", str(lib.TOOLS.parent / "liblepton"), str(root), option], check=True)
+        ''', "leptron", str(lib.TOOLS.parent / "liblepton"), str(root), option], check=True)
     if not args.dry_run:
         lib.atomic_json(directory / "config.json", config)
     print(json.dumps(settings, indent=4))
@@ -147,7 +147,7 @@ def print_info(report):
             rejected = candidate["rejected"]
             print(f"  Staged update:  {line} REFUSED by Android at {when(rejected.get('time'))}:")
             print(f"                  {rejected.get('error')}")
-            print(f"                  The installed version was kept. Run lepton-library discard "
+            print(f"                  The installed version was kept. Run leptron discard "
                   f"{report['package']}, then update with a correctly signed newer APK.")
         else:
             print(f"  Staged update:  {line}, {'checked by apksigner, ' if candidate['host_verified'] else ''}"
@@ -155,11 +155,11 @@ def print_info(report):
     if report["previous"]:
         previous = report["previous"]
         print(f"  Previous APK:   {previous['version_name'] or '-'} ({previous['version_code']}), "
-              "kept for lepton-library restore-apk")
+              "kept for leptron restore-apk")
     print(f"  Shared folders: {report['saved_sharing'] or 'Lepton defaults'} (saved for this app)")
     print("  Container Storage is shared with every profile while the library is available.")
     if not report["profiles"]:
-        print("  Profiles:       none yet. Run lepton-library play or add-to-steam.")
+        print("  Profiles:       none yet. Run leptron play or add-to-steam.")
     for profile in report["profiles"]:
         shortcut = profile["shortcut"]
         if shortcut:
@@ -188,7 +188,7 @@ def print_info(report):
 
 def print_status(found):
     if found is None:
-        print("Android Library: not configured. Run lepton-library init, or import an APK to create "
+        print("Android Library: not configured. Run leptron init, or import an APK to create "
               f"{DEFAULT_LIBRARY}.")
         return 0
     root, settings = found
@@ -236,9 +236,9 @@ def library_for_import(dry_run):
         return root
     if lib.exists(DEFAULT_LIBRARY) and not (DEFAULT_LIBRARY / lib.MARKER).is_file():
         raise ValueError(f"{DEFAULT_LIBRARY} already exists and is not an Android Library. Choose a location "
-                         "with lepton-library init --path DIR.")
+                         "with leptron init --path DIR.")
     print(f"Creating the Android Library at {DEFAULT_LIBRARY} (to choose another location, run "
-          "lepton-library init --path DIR first)")
+          "leptron init --path DIR first)")
     return lib.initialize(DEFAULT_LIBRARY, dry_run)
 
 
@@ -304,7 +304,7 @@ def main():
     if cmd == "forget":
         old = lib.forget()
         print(f"Stopped using the Android Library at {old}. Its files, Container Storage and Android profiles "
-              "were kept. Run lepton-library init --path DIR to use it (or another location) again." if old else
+              "were kept. Run leptron init --path DIR to use it (or another location) again." if old else
               "No Android Library is configured.")
         return 0
     if cmd == "init":
@@ -318,7 +318,7 @@ def main():
     else:
         root = lib.library()
         if root is None:
-            raise ValueError("No Android Library is configured. Import an APK, or run lepton-library init.")
+            raise ValueError("No Android Library is configured. Import an APK, or run leptron init.")
     if cmd in {"import", "update"}:
         directory, config, apk, staged = lib.import_app(
             root, args.file, mode=cmd, replace=getattr(args, "replace_same_version", False), obbs=args.obb,
@@ -327,13 +327,13 @@ def main():
         if staged:
             print(f"{'Would stage' if dry_run else 'Staged'} {package} {version(config)}. The library keeps "
                   f"the current APK until Android accepts the update.")
-            print(f"Android installs it when a profile next launches, or now with lepton-library apply {package}.")
+            print(f"Android installs it when a profile next launches, or now with leptron apply {package}.")
         else:
             print(f"{'Would store' if dry_run else 'Library APK'} {apk} ({version(config)})")
             if config["name"] == package:
                 print("The app's display name could not be read; add-to-steam uses the package name unless "
                       "you pass --name.")
-            print(f"Next: lepton-library add-to-steam {package}, or lepton-library play {package}")
+            print(f"Next: leptron add-to-steam {package}, or leptron play {package}")
         return 0
     exclusive = (cmd in {"recover", "reinstall", "remove", "restore-apk", "config", "discard"} and not dry_run
                  and getattr(args, "action", "") != "show")
@@ -431,6 +431,6 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except lib.Interrupted as exc:
-        sys.exit(f"lepton-library: {exc}")
+        sys.exit(f"leptron: {exc}")
     except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile, subprocess.CalledProcessError) as exc:
-        sys.exit(f"lepton-library: {exc}")
+        sys.exit(f"leptron: {exc}")

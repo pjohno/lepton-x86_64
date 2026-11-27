@@ -8,9 +8,9 @@ recovery is in the
 
 | Code | Responsibility |
 | --- | --- |
-| `tools/lepton-library` | Command line: argument parsing, messages, `info` and `status` reports |
-| `tools/lepton_library.py` | Library storage: location, metadata, staging, the `.update` journal |
-| `tools/lepton-library-runtime` | Called by the launcher: launch decisions, Android package-manager installs, receipts |
+| `tools/leptron` | Command line: argument parsing, messages, `info` and `status` reports |
+| `tools/android_library.py` | Library storage: location, metadata, staging, the `.update` journal |
+| `tools/android-library-runtime` | Called by the launcher: launch decisions, Android package-manager installs, receipts |
 | `tools/lepton_steam.py` | Reading Steam shortcuts (shared with `lepton-add-game`) |
 | `liblepton/android_library.sh` | Launcher integration: every managed-route decision goes through its functions |
 | `liblepton/ndk_auxv/runtime.sh` | NDK preparation for both routes |
@@ -20,7 +20,7 @@ recovery is in the
 
 | Route | Used for | How the app is installed | Who updates it |
 | --- | --- | --- | --- |
-| **Managed** | APKs imported into the Android Library | Android's package manager, natively, into `/data/app` in the profile | `lepton-library update`; Android verifies and keeps data |
+| **Managed** | APKs imported into the Android Library | Android's package manager, natively, into `/data/app` in the profile | `leptron update`; Android verifies and keeps data |
 | **Legacy (baked overlay)** | Other sideloaded APKs, Steam-distributed games, every existing profile | Valve's route: installed once, code moved into the `app_overlay` and bind-mounted back | Replaced when the APK file changes |
 | **Google Play** | Apps installed from the Play Store in the shared Google Play profile | The Play Store | The Play Store |
 
@@ -232,7 +232,7 @@ Other cases:
   link returns on the next launch with the library.
 - **Removing or renaming an app.** `remove` deletes only `ROOT/PACKAGE`.
   Container Storage and profiles are kept.
-- **Changing the association.** `lepton-library forget` removes the settings
+- **Changing the association.** `leptron forget` removes the settings
   file only. `init --path` adopts an existing library by its marker.
 
 ## Launcher changes outside the library
@@ -245,4 +245,4 @@ Each has a focused test:
 | `/lepton/profile-external` alias for profiles under `/mnt` and `/tmp` (`test-shared-folders.sh`) | Android's init mounts tmpfs over both, so a profile there (such as a secondary Steam library on a `/mnt` drive) had dangling shared storage. Previously aliased only when a library was configured | No; needed for Container Storage to be reachable in such profiles |
 | Streamed install when Android can't read the Steam APK path (`test-steamlaunch-install-route.sh`) | Valve's `pm install` shortcut fails for APKs under a hidden `/mnt` library | No; legacy route |
 | Vulkan layers remounted after a failed legacy install (`system/bin/cmd`) | The wrapper unmounts every app's layers before installing; a failed install left them unmounted | No; legacy route |
-| Shared APKM unpacking (`lepton-library-runtime unpack`) | One implementation of the ABI split choice, used by legacy APKM launches and the library's split selection | Shared code |
+| Shared APKM unpacking (`android-library-runtime unpack`) | One implementation of the ABI split choice, used by legacy APKM launches and the library's split selection | Shared code |

@@ -23,9 +23,9 @@ import zipfile
 
 tools = Path(__file__).resolve().parents[1] / "compat_tool/tools"
 sys.path.insert(0, str(tools))
-import lepton_library as lib  # noqa: E402
+import android_library as lib  # noqa: E402
 
-loader = importlib.machinery.SourceFileLoader("library_runtime", str(tools / "lepton-library-runtime"))
+loader = importlib.machinery.SourceFileLoader("library_runtime", str(tools / "android-library-runtime"))
 runtime = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
 loader.exec_module(runtime)
 package = "org.example.game"
@@ -96,7 +96,7 @@ class LibraryCase(unittest.TestCase):
         lib.promote_candidate(self.root / package)
 
     def cli(self, *args, check=True):
-        return subprocess.run([str(tools / "lepton-library"), *args], text=True, capture_output=True, check=check)
+        return subprocess.run([str(tools / "leptron"), *args], text=True, capture_output=True, check=check)
 
 
 class LibraryTests(LibraryCase):

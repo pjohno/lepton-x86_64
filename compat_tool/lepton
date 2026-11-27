@@ -206,7 +206,7 @@ case "${COMMAND}" in
 
         lepton_library_resolve "${3:-}"
         if [[ "${LEPTON_LIBRARY_APPLY_ONLY:-false}" == true ]] && ! lepton_managed_app; then
-            die "lepton-library apply works only for an Android Library APK"
+            die "leptron apply works only for an Android Library APK"
         fi
         determine_app --start "${3:-}"
 

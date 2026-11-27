@@ -642,9 +642,9 @@ ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game-gui" "$bin_dir/lepton-add-ga
 ln -sfn -- "$DEST/compat_tool/tools/lepton-in-terminal" "$bin_dir/lepton-in-terminal"
 ln -sfn -- "$DEST/compat_tool/tools/lepton-manage-installs" "$bin_dir/lepton-manage-installs"
 ln -sfn -- "$DEST/compat_tool/tools/lepton-play" "$bin_dir/lepton-play"
-if [[ -x "$DEST/compat_tool/tools/lepton-library" ]]; then
-    ln -sfn -- "$DEST/compat_tool/tools/lepton-library" "$bin_dir/lepton-library"
-    pass "Android Library command: $bin_dir/lepton-library"
+if [[ -x "$DEST/compat_tool/tools/leptron" ]]; then
+    ln -sfn -- "$DEST/compat_tool/tools/leptron" "$bin_dir/leptron"
+    pass "Android Library command: $bin_dir/leptron"
 fi
 pass "Commands: $bin_dir/lepton-add-game, $bin_dir/lepton-add-game-gui, $bin_dir/lepton-run-apk, $bin_dir/lepton-play"
 

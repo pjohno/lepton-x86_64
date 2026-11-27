@@ -314,10 +314,10 @@ install -m 755 "$repo/compat_tool/tools/lepton-in-terminal" \
     "$tmp/payload/compat_tool/tools/lepton-in-terminal"
 install -m 755 "$repo/compat_tool/tools/lepton-play" \
     "$tmp/payload/compat_tool/tools/lepton-play"
-for tool in lepton-library lepton-library-runtime; do
+for tool in leptron android-library-runtime; do
     install -m 755 "$repo/compat_tool/tools/$tool" "$tmp/payload/compat_tool/tools/$tool"
 done
-for module in lepton_library.py lepton_steam.py; do
+for module in android_library.py lepton_steam.py; do
     install -m 644 "$repo/compat_tool/tools/$module" "$tmp/payload/compat_tool/tools/$module"
 done
 install -m 755 "$repo/compat_tool/tools/lepton-manage-installs" \
@@ -402,7 +402,7 @@ for script in "${runtime_scripts[@]}"; do
 done
 for tool in lepton-add-game lepton-release-manager lepton-manage-installs lepton-customize lepton_customize_inject.py \
             lepton_customize_package.py lepton_bundle_lib.py lepton-compare-bundles \
-            lepton-library lepton-library-runtime lepton_library.py lepton_steam.py; do
+            leptron android-library-runtime android_library.py lepton_steam.py; do
     python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$tmp/payload/compat_tool/tools/$tool"
 done
 grep -Fq 'no-force-stop' "$tmp/payload/compat_tool/liblepton/google_games.sh"

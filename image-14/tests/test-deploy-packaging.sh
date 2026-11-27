@@ -181,8 +181,8 @@ grep -Fq '"from_oslist" "android"' "$vdf"
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_fixture.env ]]
 ( source "$deck_home/.config/lepton-x86_64/lepton_x86_64_fixture.env"; [[ "$LEPTON_X86_INSTALL_DIR" == "$dest" ]] )
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$dest/compat_tool/tools/lepton-add-game" ]]
-[[ "$(readlink -f "$deck_home/.local/bin/lepton-library")" == "$dest/compat_tool/tools/lepton-library" ]]
-[[ -x "$dest/compat_tool/tools/lepton-library-runtime" && -f "$dest/compat_tool/tools/lepton_library.py" && -f "$dest/compat_tool/tools/lepton_steam.py" ]]
+[[ "$(readlink -f "$deck_home/.local/bin/leptron")" == "$dest/compat_tool/tools/leptron" ]]
+[[ -x "$dest/compat_tool/tools/android-library-runtime" && -f "$dest/compat_tool/tools/android_library.py" && -f "$dest/compat_tool/tools/lepton_steam.py" ]]
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-run-apk")" == "$dest/tests/runtime/run-apk.sh" ]]
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game-gui")" == "$dest/compat_tool/tools/lepton-add-game-gui" ]]
 grep -Fqx "Exec=\"$deck_home/.local/bin/lepton-add-game-gui\"" "$deck_home/.local/share/applications/lepton-x86_64-add-game.desktop"
@@ -275,8 +275,8 @@ manage --remove lepton_x86_64_dev --execute > "$work/remove-default.log"
 [[ ! -e "$legacy" && ! -e "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf" ]]
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_fixture.env ]]
 [[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$dest/compat_tool/tools/lepton-add-game" ]]
-[[ "$(readlink -f "$deck_home/.local/bin/lepton-library")" == "$dest/compat_tool/tools/lepton-library" ]]
-[[ -x "$dest/compat_tool/tools/lepton-library-runtime" && -f "$dest/compat_tool/tools/lepton_library.py" && -f "$dest/compat_tool/tools/lepton_steam.py" ]]
+[[ "$(readlink -f "$deck_home/.local/bin/leptron")" == "$dest/compat_tool/tools/leptron" ]]
+[[ -x "$dest/compat_tool/tools/android-library-runtime" && -f "$dest/compat_tool/tools/android_library.py" && -f "$dest/compat_tool/tools/lepton_steam.py" ]]
 grep -q 'Default install: lepton fixture x86_64 (community)' "$work/remove-default.log"
 # Installer --remove: validated before any change, applied after success.
 mkdir -p "$legacy/compat_tool/liblepton" && printf '#!/bin/sh\n' > "$legacy/compat_tool/lepton"

@@ -248,7 +248,7 @@ The installer:
    **lepton v0.2.0-alpha x86_64 (community, GApps + NDK)**;
 5. writes `~/.config/lepton-x86_64/<tool id>.env` and makes it the default;
 6. links `lepton-add-game`, `lepton-add-game-gui`, `lepton-run-apk`,
-   `lepton-play` and `lepton-library` into `~/.local/bin`;
+   `lepton-play` and `leptron` into `~/.local/bin`;
 7. adds **Lepton: Add Android game**, **Lepton: Check graphics** and **Lepton:
    Remove installs** to the desktop and the application menu (Games); GApps
    bundles also add **Lepton: Add Google game**, **Lepton: Google sign-in**,
@@ -636,7 +636,7 @@ the same path; Steam shortcuts point to the APK inside it. Choose a location
 outside Steam's library folders and Lepton's profile folders. The library
 holds the APKs, OBB files, per-app settings and Container Storage, but no
 Android profiles. A Steam shortcut's profile stays in
-`steamapps/compatdata/<AppID>`, and `lepton-library play` uses
+`steamapps/compatdata/<AppID>`, and `leptron play` uses
 `~/.local/share/lepton-compat-data/<package>`. Each is a separate Android
 installation and updates when it next launches.
 
@@ -644,14 +644,14 @@ installation and updates when it next launches.
 library. Other Lepton games and Google Play keep working, without Container
 Storage. Nothing is created at the card's mount point. Put the card back and
 launch again. To stop using the library (for example, after moving it), run
-`lepton-library forget`, then `lepton-library init --path NEW-LOCATION`.
+`leptron forget`, then `leptron init --path NEW-LOCATION`.
 No files are deleted, and a library that already exists at the new location
 is used as it is.
 
 **A refused update.** Android checks every update's signature and version.
 If it refuses one, that launch stops with the reason, the installed version
-and its data are unchanged, and the next launch plays it. `lepton-library
-info PACKAGE` shows the refused update; `lepton-library discard PACKAGE`
+and its data are unchanged, and the next launch plays it. `leptron
+info PACKAGE` shows the refused update; `leptron discard PACKAGE`
 removes it. Lepton never uninstalls an app or resets its data to get past a
 refused update. An APK signed with a new key is accepted only with a valid
 Android signing-key rotation.
@@ -660,9 +660,9 @@ Android signing-key rotation.
 installation, power loss), the next launch checks what Android actually
 installed and either records it or installs again. If the library's own
 files were being replaced, the next launch finishes that, or run
-`lepton-library recover PACKAGE`.
+`leptron recover PACKAGE`.
 
-**Going back.** `lepton-library restore-apk PACKAGE --yes` makes the
+**Going back.** `leptron restore-apk PACKAGE --yes` makes the
 previous library APK current again. It is kept after each accepted update.
 Profiles that haven't installed the newer version yet stay on the restored
 one. Profiles that already have the newer version keep it, because Android

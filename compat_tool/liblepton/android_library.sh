@@ -24,7 +24,7 @@ LEPTON_LIBRARY_RESOLVED=
 
 function lepton_library_helper()
 {
-    python3 -E "${LEPTON_DIR}/../tools/lepton-library-runtime" "$@"
+    python3 -E "${LEPTON_DIR}/../tools/android-library-runtime" "$@"
 }
 
 function lepton_managed_app()
@@ -78,7 +78,7 @@ function lepton_managed_resolve()
     local DETAILS
     exec {LEPTON_LIBRARY_LOCKFD}<"$LEPTON_LIBRARY_ROOT"
     flock -sn "$LEPTON_LIBRARY_LOCKFD" ||
-        die "The Android Library is busy (lepton-library is changing it). Try again when it has finished."
+        die "The Android Library is busy (leptron is changing it). Try again when it has finished."
     DETAILS="$(lepton_library_helper app "$1" 2>&1)" ||
         die "The Android Library could not check this game. Nothing was changed." "${DETAILS##*$'\n'}"
     [[ -n "$DETAILS" ]] || return 0
@@ -108,7 +108,7 @@ function lepton_managed_profile()
     if ! lepton_managed_app; then
         [[ ! -e "$DIR/lepton-managed.json" ]] && return 0
         die "This profile belongs to an Android Library app, but the launch is not a library launch. Nothing was changed." \
-            "Launch it from its library shortcut, or run lepton-library status to check the library location."
+            "Launch it from its library shortcut, or run leptron status to check the library location."
     fi
     lepton_library_helper profile "$DIR" "$(get_app_id)" "$MODE"
 }
@@ -162,9 +162,9 @@ function lepton_managed_install()
     REASON="$(sed -n 's/^Android Library: //p' "$ERR" | tail -n 1)"
     rm -f -- "$OUT" "$ERR"
     if ((STATUS != 0 || ${#RESULT[@]} != 2)); then
-        println "ERROR: Android Library installation failed; profile preserved. See lepton-library info $(get_app_id)." >&2
+        println "ERROR: Android Library installation failed; profile preserved. See leptron info $(get_app_id)." >&2
         lepton_tell_player "$(get_app_id) can't start: ${REASON:-its installation failed}" \
-            "Nothing has been deleted. Run lepton-library info $(get_app_id) for details."
+            "Nothing has been deleted. Run leptron info $(get_app_id) for details."
         return 1
     fi
     ndk_prepare_managed_app "${RESULT[0]}" "${RESULT[1]}"

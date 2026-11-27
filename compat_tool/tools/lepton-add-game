@@ -735,10 +735,10 @@ def add_game(locks):
         fail("Lepton is not registered with Steam (no %s.vdf or self-contained %s in %s); "
              "reinstall the tool and restart Steam" % (TOOL, TOOL, STEAM / "compatibilitytools.d"))
     if args.import_apk:
-        from lepton_library import import_app, library, load_app, lock
+        from android_library import import_app, library, load_app, lock
         root = library()
         if root is None:
-            fail("Run lepton-library init before using --import")
+            fail("Run leptron init before using --import")
         _, managed, apk, _ = import_app(root, apk, mode="import", dry_run=args.dry_run)
         if not args.dry_run:
             locks.enter_context(lock(root, False))

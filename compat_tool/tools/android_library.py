@@ -177,7 +177,7 @@ def check_available(root, settings):
             raise ValueError("library identity changed")
     except (ValueError, OSError) as exc:
         raise Unavailable(f"Android Library unavailable at {root}. Reconnect its drive or restore the "
-                          f"directory, or run lepton-library forget to stop using it. ({exc})") from exc
+                          f"directory, or run leptron forget to stop using it. ({exc})") from exc
 
 
 def library():
@@ -202,7 +202,7 @@ def initialize(path, dry_run=False):
         found = configured()
         if found is not None:
             if found[0] != path:
-                raise ValueError(f"Library already configured at {found[0]}. Run lepton-library forget first "
+                raise ValueError(f"Library already configured at {found[0]}. Run leptron forget first "
                                  "to use another location; no files are deleted.")
             check_available(*found)
             return path
@@ -471,7 +471,7 @@ def load_app(root, package, verify=False):
     directory = root / package
     real_dir(directory)
     if exists(directory / JOURNAL):
-        raise Interrupted(f"Interrupted library update for {package}. Run lepton-library recover {package}.")
+        raise Interrupted(f"Interrupted library update for {package}. Run leptron recover {package}.")
     config = check_metadata(read_json(directory / "config.json"), package, "application metadata")
     apk = directory / (package + config["format"])
     regular(apk)
@@ -640,9 +640,9 @@ def refuse_replacement(old, incoming, candidate, replace, mode, files):
     if incoming["sha256"] == old["sha256"] and not files:
         if mode == "import" or candidate is None:
             return "unchanged"
-        raise ValueError("This is the library's current APK; run lepton-library discard to drop the staged update")
+        raise ValueError("This is the library's current APK; run leptron discard to drop the staged update")
     if mode == "import":
-        raise ValueError("Package already imported. To replace it, run lepton-library update FILE.")
+        raise ValueError("Package already imported. To replace it, run leptron update FILE.")
     if incoming["version_code"] == old["version_code"] and incoming["sha256"] != old["sha256"] and not replace:
         raise ValueError("Same version with different contents; use update --replace-same-version")
     return None
@@ -670,7 +670,7 @@ def import_app(root, source, *, mode, replace=False, obbs=(), dry_run=False, ver
         candidate_file.rename(staged)
         if not exists(directory):
             if mode == "update":
-                raise ValueError(f"{package} is not imported; run lepton-library import FILE")
+                raise ValueError(f"{package} is not imported; run leptron import FILE")
             return new_app(root, stage, directory, apk, incoming, files, dry_run)
         if exists(directory / JOURNAL):
             commit_update(directory)
