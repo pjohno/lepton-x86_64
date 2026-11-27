@@ -560,6 +560,18 @@ function lepton_shared_link_is_ours()
     return 1
 }
 
+# Android's init mounts tmpfs over these, hiding host paths mounted there.
+LEPTON_SHARED_HIDDEN_ROOTS=(/mnt /tmp)
+
+function lepton_android_hides()
+{
+    local ROOT
+    for ROOT in "${LEPTON_SHARED_HIDDEN_ROOTS[@]}"; do
+        [[ "$1" != "$ROOT"/* ]] || return 0
+    done
+    return 1
+}
+
 # Bring shared storage folder TARGET (the profile's /data/media/0) in line
 # with LEPTON_SHARED_FOLDERS. Checks the whole option, and every link it would
 # change, before changing anything.
@@ -773,11 +785,10 @@ function setup_mounts()
             local MEDIA_PATH="$(data_mount_path)/media/0"
             if [[ -z "$EXTERNAL_ALIAS" ]] && {
                 [[ -L "$MEDIA_PATH" && "$(readlink -- "$MEDIA_PATH")" == /lepton/profile-external ]] ||
-                [[ -n "${LEPTON_LIBRARY_ROOT:-}" && "$GUEST_EXTERNAL_PATH" == /mnt/* ]] ||
-                [[ -n "${LEPTON_LIBRARY_ROOT:-}" && "$GUEST_EXTERNAL_PATH" == /tmp/* ]];
+                lepton_android_hides "$GUEST_EXTERNAL_PATH";
             }; then
-                # Android hides these host paths during boot. The alias mounts
-                # the same directory, so existing external files stay in place.
+                # The alias mounts the same directory elsewhere, so existing
+                # external files stay in place.
                 EXTERNAL_ALIAS=/lepton/profile-external
                 if [[ -L "$MEDIA_PATH" && "$(readlink -- "$MEDIA_PATH")" == "$GUEST_EXTERNAL_PATH" ]]; then
                     ln -sfnT -- "$EXTERNAL_ALIAS" "$MEDIA_PATH" || die "Could not update Lepton's external-storage link"
@@ -785,12 +796,11 @@ function setup_mounts()
             fi
             if [[ -n "$EXTERNAL_ALIAS" ]]; then
                 [[ "$EXTERNAL_ALIAS" == /lepton/* && "$EXTERNAL_ALIAS" != *'/../'* && "$EXTERNAL_ALIAS" != */.. ]] || die 'Invalid profile external-storage path'
-                if [[ -n "${LEPTON_LIBRARY_ROOT:-}" ]]; then
-                    EXTERNAL_ALIAS="$(realpath -sm -- "$EXTERNAL_ALIAS")"
-                    [[ "$EXTERNAL_ALIAS" != /lepton && "$EXTERNAL_ALIAS" != /lepton/shared &&
-                       "$EXTERNAL_ALIAS" != /lepton/shared/* && "$EXTERNAL_ALIAS" != /lepton/managed-obb &&
-                       "$EXTERNAL_ALIAS" != /lepton/managed-obb/* ]] || die "External-storage alias overlaps Android Library mounts"
-                fi
+                # Shared folders and library OBBs use their own /lepton paths.
+                EXTERNAL_ALIAS="$(realpath -sm -- "$EXTERNAL_ALIAS")"
+                [[ "$EXTERNAL_ALIAS" != /lepton && "$EXTERNAL_ALIAS" != /lepton/shared &&
+                   "$EXTERNAL_ALIAS" != /lepton/shared/* && "$EXTERNAL_ALIAS" != /lepton/managed-obb &&
+                   "$EXTERNAL_ALIAS" != /lepton/managed-obb/* ]] || die "External-storage alias overlaps Lepton's shared-folder mounts"
                 GUEST_EXTERNAL_PATH="$EXTERNAL_ALIAS"
                 podman_mount_entry "${STEAM_COMPAT_DATA_PATH}/external" "$GUEST_EXTERNAL_PATH" rw
             elif ! host_path_in_container "${GUEST_EXTERNAL_PATH}"; then
@@ -798,8 +808,6 @@ function setup_mounts()
                 # are not otherwise mounted, which left /data/media/0 dangling:
                 # no shared storage and no OBB link. Mount it at its own path
                 # so the existing link stays valid.
-                [[ "${GUEST_EXTERNAL_PATH}" != /mnt/* ]] ||
-                    println "WARNING: Android hides host /mnt; shared storage for a profile in ${STEAM_COMPAT_DATA_PATH} will not work. Keep the profile outside /mnt." >&2
                 podman_mount_entry "${GUEST_EXTERNAL_PATH}" "${GUEST_EXTERNAL_PATH}" rw
             fi
             safe_storage_link "$GUEST_EXTERNAL_PATH" "$(data_mount_path)/media/0" || die "Shared storage preserved; launch stopped"

@@ -8,8 +8,9 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 work="$(mktemp -d)"
 work="$(realpath -e -- "$work")"
 trap 'chmod -R u+rwx -- "$work" 2>/dev/null; rm -rf -- "$work"' EXIT
+hidden="$work/hidden"
 
-for fn in podman_cmdline podman_mount_entry podman_mount_entry_optional safe_storage_link \
+for fn in lepton_android_hides podman_cmdline podman_mount_entry podman_mount_entry_optional safe_storage_link \
           lepton_xdg_user_dir lepton_shared_folder_entries lepton_trim lepton_array_has \
           lepton_shared_protected_paths lepton_shared_check_defaults lepton_shared_check_custom \
           lepton_shared_name_ok lepton_shared_folder_ok lepton_shared_host_ok \
@@ -23,6 +24,9 @@ done
 eval "$(awk '/^LEPTON_SHARED_[A-Z_]*=/ {p=1; arr=/=\(/} p {print} p && (!arr || /\)[[:space:]]*$/) {p=0}' \
           "$repo/compat_tool/liblepton/mounting.sh")"
 [[ ${#LEPTON_SHARED_FOLDER_DEFAULTS[@]} == 5 ]] || { echo "FAIL: default folders not loaded"; exit 1; }
+[[ "${LEPTON_SHARED_HIDDEN_ROOTS[*]}" == "/mnt /tmp" ]] || { echo "FAIL: hidden roots not loaded"; exit 1; }
+# The fixtures live under /tmp; only $hidden stands for a path Android hides.
+LEPTON_SHARED_HIDDEN_ROOTS=(/mnt "$hidden")
 eval "$(sed -n '/^function host_path_in_container()/,/^}/p' "$repo/compat_tool/liblepton/liblepton.sh")"
 for fn in lepton_managed_app lepton_managed_mounts lepton_library_storage_entry; do
     eval "$(sed -n "/^function $fn()/,/^}/p" "$repo/compat_tool/liblepton/android_library.sh")"
@@ -528,6 +532,22 @@ all_defaults_shared || fail "lepton-play default folders"
 LEPTON_SHARED_FOLDERS="Music,$books" run_mounts || fail "lepton-play custom stopped"
 shared Music "$HOME/Music" && shared Books "$books" || fail "lepton-play custom folders"
 
+# A profile under /mnt or /tmp is hidden by Android's tmpfs: it is mounted
+# at the alias instead, without a library, and its existing link follows.
+export STEAM_COMPAT_DATA_PATH="$hidden/lepton-compat-data/org.example.hidden"
+mkdir -p "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/media"
+ext="$STEAM_COMPAT_DATA_PATH/external"
+mkdir -p "$ext"; printf 'kept\n' > "$ext/keep.txt"
+ln -s -- "$ext" "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/media/0"
+run_mounts || fail "hidden-path profile stopped"
+mounted_at "$ext" /lepton/profile-external || fail "hidden-path profile not aliased"
+! mounted "$ext" || fail "hidden-path profile mounted where Android hides it"
+link_is /lepton/profile-external "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/media/0" || fail "hidden-path link not moved"
+grep -qx kept "$ext/keep.txt" || fail "hidden-path profile files changed"
+for alias in /lepton/shared/x /lepton/managed-obb /lepton; do
+    if LEPTON_PROFILE_EXTERNAL_STORAGE="$alias" run_mounts; then fail "overlapping alias $alias accepted"; fi
+done
+
 # The experimental /lepton alias (run-apk.sh) keeps its own mount only.
 export STEAM_COMPAT_DATA_PATH="$work/lepton-compat-data/org.example.alias"
 mkdir -p "$STEAM_COMPAT_DATA_PATH"
@@ -554,8 +574,11 @@ snapshot > "$work/links.good"
 invalid "container storage=$books" "Container Storage is reserved"
 invalid "Whole=$LEPTON_LIBRARY_ROOT" "holds Lepton's own data"
 
-# Legacy external-storage links under /tmp need the alias once the library
-# is configured. The backing host directory and its files are kept.
+# With a library configured, the same alias is used for a hidden profile.
+# The backing host directory and its files are kept.
+export STEAM_COMPAT_DATA_PATH="$hidden/lepton-compat-data/org.example.library"
+mkdir -p "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/media" "$STEAM_COMPAT_DATA_PATH/external"
+ext="$STEAM_COMPAT_DATA_PATH/external"
 printf 'kept
 ' > "$ext/keep.txt"
 ln -sfnT -- "$ext" "$STEAM_COMPAT_DATA_PATH/baked/data_overlay/media/0"
