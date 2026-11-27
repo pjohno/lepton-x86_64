@@ -31,12 +31,21 @@ fn only_child<'a>(node: &'a Node, name: &'a str) -> Result<&'a Node, String> {
     }
 }
 
-fn read_xml(file_path: &str) -> Result<Vec<u8>, ZipError> {
+fn read_xml(file_path: &str, abis: &mut Vec<String>) -> Result<Vec<u8>, ZipError> {
     let file = File::open(file_path)?;
     let mut manifest_data = Vec::new();
     // First, try to load it as a `.zip`
     match ZipArchive::new(file) {
         Ok(mut zip) => {
+            // Native libraries are lib/<abi>/<name>.so entries.
+            for name in zip.file_names() {
+                let parts: Vec<&str> = name.split('/').collect();
+                if parts.len() == 3 && parts[0] == "lib" && !parts[1].is_empty() && parts[2].ends_with(".so")
+                        && !abis.iter().any(|abi| abi == parts[1]) {
+                    abis.push(parts[1].to_string());
+                }
+            }
+            abis.sort();
             let mut manifest_file = zip.by_name("AndroidManifest.xml")?;
             manifest_file.read_to_end(&mut manifest_data)?;
         }
@@ -50,6 +59,50 @@ fn read_xml(file_path: &str) -> Result<Vec<u8>, ZipError> {
         }
     };
     return Ok(manifest_data);
+}
+
+// axmldecoder 0.5 renders TYPE_INT_DEC as the unsigned 32-bit value and
+// TYPE_INT_HEX as "0x" followed by the *decimal* digits of the same value.
+// Both carry the raw 32-bit word, so read either form as that word.
+fn int_word(value: &str) -> Option<u32> {
+    value.strip_prefix("0x").unwrap_or(value).parse::<u32>().ok()
+}
+
+// A literal string attribute. Resource references and other typed values are
+// rendered as "ResourceValueType::<kind>/<data>" and resolving them would need
+// resources.arsc, so they are reported as unknown.
+fn literal(value: Option<&String>) -> Option<&str> {
+    value.map(String::as_str).filter(|v| !v.starts_with("ResourceValueType::"))
+}
+
+fn json_string(value: Option<&str>) -> String {
+    let value = match value {
+        Some(value) => value,
+        None => return "null".to_string(),
+    };
+    let mut out = String::from("\"");
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn json_number<T: std::fmt::Display>(value: Option<T>) -> String {
+    value.map_or("null".to_string(), |v| v.to_string())
+}
+
+fn json_bool(value: Option<&String>) -> String {
+    match value.map(String::as_str) {
+        Some("true") => "true".to_string(),
+        Some("false") => "false".to_string(),
+        _ => "null".to_string(),
+    }
 }
 
 fn vprint(msg: String, verbose: bool) {
@@ -94,6 +147,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                  .action(clap::ArgAction::SetTrue)
         )
         .arg(
+            Arg::new("json")
+                 .long("json")
+                 .help("Print package metadata as one JSON object (also for split APKs)")
+                 .action(clap::ArgAction::SetTrue)
+        )
+        .arg(
             Arg::new("verbose")
                 .short('v')
                 .long("verbose")
@@ -108,17 +167,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let print_app_version = matches.get_flag("print-app-version");
     let print_min_sdk_version = matches.get_flag("print-min-sdk-version");
     let verbose = matches.get_flag("verbose");
+    let json = matches.get_flag("json");
 
-    if !print_activity_name && !print_app_id && !print_app_version && !print_min_sdk_version {
+    if json && (print_activity_name || print_app_id || print_app_version || print_min_sdk_version) {
+        return Err("--json cannot be combined with the --print options".into())
+    }
+    if !json && !print_activity_name && !print_app_id && !print_app_version && !print_min_sdk_version {
         return Err("Must provide one of --print-app-id, --print-activity-name, --print-app-version --print-min-sdk-version!".into())
     }
 
     // Support running on either an `.apk` or a `.xml` file directly
-    let manifest_data = read_xml(apk_path)?;
+    let mut abis = Vec::new();
+    let manifest_data = read_xml(apk_path, &mut abis)?;
 
     // Use `axmldecoder` to parse the input binary XML file
     let xml = axmldecoder::parse(&manifest_data)?;
-    let manifest = xml.get_root().as_ref().unwrap();
+    let manifest = xml.get_root().as_ref().ok_or("AndroidManifest.xml has no root element")?;
+    if json {
+        return print_json(manifest, &abis);
+    }
 
     // Get package name from top-level manifest element
     let package_name = &peel_element(manifest)?.get_attributes()["package"];
@@ -134,9 +201,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Search for launchable activity
     let application = only_child(manifest, "application")?;
-    // Launcher intent filters may live on an alias rather than its target.
-    let activities = filter_children(application, "activity")?
-        .chain(filter_children(application, "activity-alias")?);
     let uses_sdk = only_child(manifest, "uses-sdk")?;
 
     // Get the minimum sdk version from the uses-sdk element
@@ -145,7 +209,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", min_sdk_version.unwrap_or("none"));
     }
 
-    'activities: for activity in activities {
+    if print_activity_name {
+        if let Some(name) = launcher_activity(application, verbose)? {
+            println!("{}", name);
+        }
+    }
+    return Ok(());
+}
+
+// The first enabled activity or alias with a MAIN/LAUNCHER intent filter.
+fn launcher_activity(application: &Node, verbose: bool) -> Result<Option<String>, String> {
+    // Launcher intent filters may live on an alias rather than its target.
+    let activities = filter_children(application, "activity")?
+        .chain(filter_children(application, "activity-alias")?);
+    for activity in activities {
         // Ignore aliases/activities disabled by default. Apps can expose
         // alternative launcher icons without making each one launchable.
         if matches!(peel_element(activity)?.get_attributes()
@@ -210,12 +287,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         
-            // Otherwise, report this activity name and break out
-            if print_activity_name {
-                println!("{}", activity_name);
-                break 'activities;
-            }
+            // Otherwise, report this activity name
+            return Ok(Some(activity_name.clone()));
         }
     }
-    return Ok(());
+    Ok(None)
+}
+
+// Structured metadata for the Android Library. Unlike the --print options this
+// accepts split APKs, which may have no <uses-sdk>, launcher or full
+// <application> element. Unknown or non-literal values are null.
+fn print_json(manifest: &Node, abis: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let attributes = peel_element(manifest)?.get_attributes();
+    let package = literal(attributes.get("package")).ok_or("Manifest has no literal package attribute")?;
+    let code = match attributes.get("android:versionCode") {
+        Some(value) => Some(int_word(value).ok_or_else(|| format!("Cannot read android:versionCode {:?}", value))?),
+        None => None,
+    };
+    // versionCodeMajor is a signed int; versionCode supplies the low 32 bits
+    // of the long version code (PackageInfo.getLongVersionCode()).
+    let major = match attributes.get("android:versionCodeMajor") {
+        Some(value) => int_word(value).ok_or_else(|| format!("Cannot read android:versionCodeMajor {:?}", value))? as i32,
+        None => 0,
+    };
+    let long_code = ((major as i64) << 32) | code.unwrap_or(0) as i64;
+    let sdk = filter_children(manifest, "uses-sdk")?.next().map(peel_element).transpose()?;
+    let sdk_value = |name: &str| sdk.and_then(|e| e.get_attributes().get(name));
+    let min_sdk = sdk_value("android:minSdkVersion");
+    let target_sdk = sdk_value("android:targetSdkVersion");
+    let application = filter_children(manifest, "application")?.next();
+    let application_attribute = |name: &str| -> Result<Option<&String>, String> {
+        Ok(match application {
+            Some(node) => peel_element(node)?.get_attributes().get(name),
+            None => None,
+        })
+    };
+    let launcher = match application {
+        Some(node) => launcher_activity(node, false)?,
+        None => None,
+    };
+    let abi_list: Vec<String> = abis.iter().map(|abi| json_string(Some(abi))).collect();
+    let fields = [
+        ("package", json_string(Some(package))),
+        ("split", json_string(literal(attributes.get("split")))),
+        ("config_for_split", json_string(literal(attributes.get("configForSplit")))),
+        ("is_feature_split", json_bool(attributes.get("android:isFeatureSplit").or(attributes.get("isFeatureSplit")))),
+        ("version_code", json_number(code)),
+        ("version_code_major", major.to_string()),
+        ("long_version_code", long_code.to_string()),
+        ("version_name", json_string(literal(attributes.get("android:versionName")))),
+        ("min_sdk", json_number(min_sdk.and_then(|v| int_word(v)))),
+        ("min_sdk_codename", json_string(literal(min_sdk).filter(|v| int_word(v).is_none()))),
+        ("target_sdk", json_number(target_sdk.and_then(|v| int_word(v)))),
+        ("label", json_string(literal(application_attribute("android:label")?))),
+        ("launchable_activity", json_string(launcher.as_deref())),
+        ("extract_native_libs", json_bool(application_attribute("android:extractNativeLibs")?)),
+        ("abis", format!("[{}]", abi_list.join(", "))),
+    ];
+    let body: Vec<String> = fields.iter().map(|(key, value)| format!("\"{}\": {}", key, value)).collect();
+    println!("{{{}}}", body.join(", "));
+    Ok(())
 }

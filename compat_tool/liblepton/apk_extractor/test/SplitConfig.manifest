@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Compiled to SplitConfig.xml with aapt2 link -I android.jar (API 34). A
+     configuration split has no <uses-sdk>, launcher or application label. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.lepton.boundary"
+    split="config.arm64_v8a" configForSplit="" android:versionCode="7">
+    <application android:hasCode="false"/>
+</manifest>

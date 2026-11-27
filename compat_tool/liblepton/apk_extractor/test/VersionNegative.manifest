@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Compiled to VersionNegative.xml with aapt2 link -I android.jar (API 34). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.lepton.boundary"
+    android:versionCode="-1" android:versionCodeMajor="0x7fffffff" android:versionName="v &quot;VersionNegative&quot;">
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
+    <application android:label="Boundary \\ Test" android:extractNativeLibs="true"/>
+</manifest>
