@@ -652,8 +652,26 @@ function start_early_debug_container()
             /system/bin/sh
 }
 
+# Podman's own settings: where it finds its configuration, storage, runtime
+# directory and helpers. Commands run in Android get Android's PATH via
+# --env; the game's environment (Steam's LD_PRELOAD and runtime library
+# paths) stays out of Podman.
+function lepton_podman_environment()
+{
+    local NAME
+    LEPTON_PODMAN_ENV=()
+    for NAME in PATH HOME USER LOGNAME TMPDIR XDG_RUNTIME_DIR XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME \
+                DBUS_SESSION_BUS_ADDRESS $(compgen -e | grep -E '^(CONTAINERS|CONTAINER|PODMAN)_'); do
+        if [[ -v "$NAME" ]]; then
+            LEPTON_PODMAN_ENV+=("$NAME=${!NAME}")
+        fi
+    done
+}
+
 function podman_attach_no_context_check()
 {
+    local -a LEPTON_PODMAN_ENV
+    lepton_podman_environment
     ANDROID_PATH=(
         /product/bin
         /apex/com.android.runtime/bin
@@ -675,7 +693,8 @@ function podman_attach_no_context_check()
     fi
 
     function join_by { local IFS="$1"; shift; println "$*"; }
-    podman exec "${TERM_ARGS}" --env "PATH=$(join_by ":" "${ANDROID_PATH[@]}")" "lepton-${LEPTON_CONTEXT}" "$@"
+    env -i "${LEPTON_PODMAN_ENV[@]}" podman exec "${TERM_ARGS}" \
+        --env "PATH=$(join_by ":" "${ANDROID_PATH[@]}")" "lepton-${LEPTON_CONTEXT}" "$@"
 }
 
 function podman_attach()

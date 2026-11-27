@@ -19,6 +19,14 @@ import zipfile
 import lepton_library as lib
 
 CHUNK = 1 << 20
+PODMAN_SETTINGS = {"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME",
+                   "XDG_DATA_HOME", "XDG_CACHE_HOME", "DBUS_SESSION_BUS_ADDRESS"}
+
+
+def podman_environment():
+    """Podman's own settings only, as lepton_podman_environment in liblepton.sh."""
+    return {key: value for key, value in os.environ.items()
+            if key in PODMAN_SETTINGS or key.startswith(("CONTAINERS_", "CONTAINER_", "PODMAN_"))}
 
 
 class Rejected(ValueError):
@@ -40,7 +48,7 @@ class Android:
 
     def run(self, *args, timeout=30):
         return subprocess.run(self.argv(*args), stdin=subprocess.DEVNULL, text=True, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE, timeout=timeout)
+                              stderr=subprocess.PIPE, timeout=timeout, env=podman_environment())
 
     def checked(self, *args, timeout=30):
         result = self.run(*args, timeout=timeout)
@@ -106,7 +114,8 @@ class Android:
         name, size, digest, opener = source
         process = subprocess.Popen(
             self.argv("/system/bin/cmd_real", "package", "install-write", "-S", str(size), session, name, "-",
-                      stdin=True), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                      stdin=True), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=podman_environment())
         hasher = hashlib.sha256()
         try:
             with opener() as stream:
