@@ -12,7 +12,7 @@
 # installs, backups and unfinished installs in compatibilitytools.d (only
 # folders containing Lepton; Proton and other tools are never touched);
 # ~/.config/lepton-x86_64;
-# ~/.local/bin/lepton-* ; Lepton menu/desktop icons; downloaded bundles in
+# ~/.local/bin/leptron and lepton-*; ~/.local/share/lepton-commands; Lepton menu/desktop icons; downloaded bundles in
 # ~/Downloads; stopped lepton-* Podman containers. With --game-data, also
 # Android app data that Lepton stored in Steam's compatdata (saves are lost).
 #
@@ -94,7 +94,7 @@ for path in "$steam"/compatibilitytools.d/*; do
         add "$path"
     fi
 done
-for path in "$steam"/compatibilitytools.d/lepton*.vdf "$HOME"/.local/bin/lepton-* \
+for path in "$steam"/compatibilitytools.d/lepton*.vdf "$HOME"/.local/bin/lepton-* "$HOME"/.local/bin/leptron \
             "$share"/applications/lepton-x86_64-*.desktop "$share"/applications/lepton-release-manager.desktop \
             "$HOME"/Desktop/lepton-*.desktop \
             "$HOME"/Downloads/lepton-x86_64-*.tar.gz* \
@@ -103,6 +103,7 @@ for path in "$steam"/compatibilitytools.d/lepton*.vdf "$HOME"/.local/bin/lepton-
 done
 add "$HOME/.config/lepton-x86_64"
 add "$share/lepton-release-manager"   # Lepton: Install / Update / Repair
+add "$share/lepton-commands"          # links used by the menu entries
 add "$HOME/Downloads/lepton-deck-bundles"
 game_data=()
 for path in "$steam"/steamapps/compatdata/*; do

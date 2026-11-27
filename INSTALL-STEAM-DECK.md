@@ -220,7 +220,7 @@ on the Deck's desktop.
 **Updating an existing install over SSH.** Add `--replace TOOL_ID` to install
 straight away, overwriting that install (its games keep working; no game from
 it may be running). The Deck needs internet access for this, because the
-installer downloads Google's `adb`. Tool IDs are shown by `lepton-manage-installs --list` on
+installer downloads Google's `adb`. Tool IDs are shown by `~/.local/share/lepton-commands/lepton-manage-installs --list` on
 the Deck.
 
 **By USB drive.** Copy the three files into one folder on the Deck.
@@ -249,8 +249,11 @@ The installer:
    GApps, NDK or Widevine add them after it, for example
    **lepton v0.2.0-alpha x86_64 (community, GApps + NDK)**;
 5. writes `~/.config/lepton-x86_64/<tool id>.env` and makes it the default;
-6. links `lepton-add-game`, `lepton-add-game-gui`, `lepton-run-apk`,
-   `lepton-play` and `leptron` into `~/.local/bin`;
+6. links `leptron` into `~/.local/bin`, the only command it puts on your
+   `PATH`, and the tools the menu entries use (`lepton-add-game`,
+   `lepton-run-apk`, `lepton-manage-installs` and others) into
+   `~/.local/share/lepton-commands/`. It removes the `lepton-*` commands
+   earlier versions put in `~/.local/bin` (only links into Lepton installs);
 7. adds **Lepton: Add Android game**, **Lepton: Check graphics** and **Lepton:
    Remove installs** to the desktop and the application menu (Games); GApps
    bundles also add **Lepton: Add Google game**, **Lepton: Google sign-in**,
@@ -260,7 +263,7 @@ The installer:
    Steam, asks **Would you like to add Google Play to your Steam library?**
    ([Google Play in Steam](GAPPS.md#google-play-in-steam)). Declining changes
    nothing else. Otherwise it prints the command to add it later
-   (`lepton-add-game --google-play`).
+   (`compat_tool/tools/lepton-add-game --google-play` in the install).
 
 When started from the desktop icon and other Lepton installs exist, the
 installer first asks whether to **install as a new tool** or **replace** one of
@@ -305,7 +308,7 @@ install; `--remove TOOL_ID` (repeatable) removes others after installing;
 ### 4. Check graphics
 
 Double-tap **Lepton: Check graphics**, or run
-`~/.local/bin/lepton-run-apk --gpu-check --execute`. This boots Android once
+`~/.local/share/lepton-commands/lepton-run-apk --gpu-check --execute`. This boots Android once
 without any app (about a minute) and must end with
 `[PASS] Hardware acceleration: ANGLE on Vulkan/RADV`. On a Steam Deck the
 graphics line names `RADV VANGOGH`.
@@ -336,7 +339,7 @@ the file to another folder first. A re-added game uses the current Lepton
 tool automatically, and, if you keep the same name, continues with its saved
 game data; choose a different name to start fresh.
 
-From a terminal, with Steam exited: `~/.local/bin/lepton-add-game ~/Downloads/my-game.apk`
+From a terminal, with Steam exited: `~/.local/share/lepton-commands/lepton-add-game ~/Downloads/my-game.apk`
 (add `--dry-run` to check first, which also works while Steam runs, and
 `--name "Title"` to change the Steam name).
 
@@ -408,13 +411,14 @@ bash lepton-x86_64-VERSION.install.sh --steam-compat --into TOOL_ID   # or --rep
 
 It keeps the tool ID (so game shortcuts keep working), moves saved app profiles
 (such as a Google sign-in) into the new copy, removes the old standalone
-registration and updates `~/.config/lepton-x86_64/<tool id>.env` and the
-`~/.local/bin` commands. The old copy stays as
+registration and updates `~/.config/lepton-x86_64/<tool id>.env`, `leptron`
+and the menu entries' tools. The old copy stays as
 `~/.local/share/<directory>.previous-<date>` until the move has succeeded; if
 anything fails, the old copy and its registration are put back.
 
 **Uninstalling** works the same for both: **Lepton: Remove installs** or
-`lepton-manage-installs --remove TOOL_ID --execute` removes the folder with its
+`~/.local/share/lepton-commands/lepton-manage-installs --remove TOOL_ID --execute`
+removes the folder with its
 registration (and, for `~/.local/share` installs, the standalone `.vdf`).
 If two installs ever register the same tool ID, Lepton lists both as
 **DUPLICATE TOOL ID**, refuses to replace either, and removes one only when you
@@ -440,9 +444,9 @@ folders, with the number of Steam shortcuts using each. It never lists or
 removes other compatibility tools such as Proton or GE-Proton. In a terminal:
 
 ```bash
-~/.local/bin/lepton-manage-installs --list
-~/.local/bin/lepton-manage-installs --remove TOOL_ID            # shows what would happen
-~/.local/bin/lepton-manage-installs --remove TOOL_ID --execute
+~/.local/share/lepton-commands/lepton-manage-installs --list
+~/.local/share/lepton-commands/lepton-manage-installs --remove TOOL_ID            # shows what would happen
+~/.local/share/lepton-commands/lepton-manage-installs --remove TOOL_ID --execute
 ```
 
 An install that is running a game or test is never replaced or removed. If the
@@ -671,11 +675,11 @@ one. Profiles that already have the newer version keep it, because Android
 doesn't downgrade apps. Rolling an installed app and its private data back
 needs a backup of the profile made before the update.
 
-**Existing unmanaged games.** Games added with `lepton-add-game FILE.apk` or
-`lepton-play FILE.apk` keep their profiles and keep launching from their
+**Existing unmanaged games.** Games added with **Lepton: Add Android game**,
+`lepton-add-game FILE.apk` or `lepton-play FILE.apk` keep their profiles and keep launching from their
 original files. The library doesn't adopt them: `leptron install` of the same
-APK gives a new profile, alongside the old one. `lepton-add-game --import FILE.apk`
-imports a file and creates its shortcut in one step. A profile created by
+APK gives a new profile, alongside the old one. `leptron install FILE.apk`
+followed by `leptron add-to-steam PACKAGE` creates a library shortcut. A profile created by
 the library can't be launched from an unmanaged copy of the APK, and Lepton
 says so instead of changing it.
 

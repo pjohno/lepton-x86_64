@@ -426,7 +426,7 @@ class SysbakePackageTests(Harness, unittest.TestCase):
         self.assertTrue((dest / 'compat_tool/sysbake/system/packages.xml').is_file())
         self.assertTrue((home / '.local/share/Steam/compatibilitytools.d/lepton_custom_my_build.vdf').is_file())
         self.assertTrue((dest / 'tools/platform-tools/adb').is_file())
-        self.assertTrue((home / '.local/bin/lepton-run-apk').resolve().is_file(), 'lepton-run-apk must resolve')
+        self.assertTrue((home / '.local/share/lepton-commands/lepton-run-apk').resolve().is_file(), 'lepton-run-apk must resolve')
         for helper in ('run-apk.sh', 'unpack-apkm.py', 'read-gsf-id.py'):
             self.assertIn('./tests/runtime/' + helper, members)
         self.assertTrue((self.stage / 'compat_tool/sysbake/system/ndebugsocket').is_socket())

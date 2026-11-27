@@ -73,7 +73,7 @@ user in GNOME Wayland, stop their running Lepton games and commands. List the
 installed tools if needed:
 
 ```bash
-"$HOME/.local/bin/lepton-manage-installs" --list
+"$HOME/.local/share/lepton-commands/lepton-manage-installs" --list
 ```
 
 The following example targets the `fullscreen-test-r2` bundle from the

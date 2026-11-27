@@ -82,7 +82,7 @@ grep -qx local-desktop "$dest/compat_tool/install-profile"
 [[ -x "$dest/compat_tool/tools/lepton-direct-wayland" ]]
 ! tar -tzf "$out/lepton-x86_64-local.tar.gz" | grep -q '/install-profile$'
 grep -Fq "\"$dest/compat_tool\"" "$home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_local.vdf"
-grep -Fqx "Exec=\"$home/.local/bin/lepton-add-game-gui\"" "$home/.local/share/applications/lepton-x86_64-add-game.desktop"
+grep -Fqx "Exec=\"$home/.local/share/lepton-commands/lepton-add-game-gui\"" "$home/.local/share/applications/lepton-x86_64-add-game.desktop"
 # The existing bundle is reused; installing again needs --replace.
 if local_install --execute; then fail 'overwrote an existing install'; fi
 grep -q 'Using existing bundle' "$work/out" && grep -q -- '--replace' "$work/out"

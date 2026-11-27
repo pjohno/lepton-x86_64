@@ -65,7 +65,8 @@ bash ~/Downloads/lepton-deck-bundles/lepton-x86_64-gapps-v1.install.sh
 ```
 
 The installer verifies the checksum, extracts to a new directory named after the
-tool ID, registers the tool and makes it the default for `~/.local/bin/lepton-*`.
+tool ID, registers the tool and makes it the default for `leptron` and the tools in
+`~/.local/share/lepton-commands/`.
 Restart Steam afterwards. Each bundle needs its own `--tool-id`; conflicting
 registrations and existing destination directories are refused unless you choose
 to replace an install (`--replace`, `--into TOOL_ID`, or the choice offered by the
@@ -94,7 +95,7 @@ launcher app, only Android's own Play Store and home screen.
   terminal, with Steam exited:
 
   ```bash
-  ~/.local/bin/lepton-add-game --google-play --tool-id TOOL_ID
+  ~/.local/share/lepton-commands/lepton-add-game --google-play --tool-id TOOL_ID
   ```
 
   Add `--dry-run` to check first (this works while Steam runs). With several
@@ -196,7 +197,7 @@ never touch artwork. Steam must be closed for the import.
 From a terminal, with Steam exited:
 
 ```bash
-~/.local/bin/lepton-add-game --google-play --artwork-only \
+~/.local/share/lepton-commands/lepton-add-game --google-play --artwork-only \
   --artwork portrait=~/Downloads/cover.png --artwork hero=~/Downloads/hero.png
 ```
 
@@ -286,7 +287,7 @@ rendering selection on the desktop (AMD if no selection is saved); pass
 an Intel-enabled bundle on Gen9+ hardware (experimental).
 
 ```bash
-~/.local/bin/lepton-run-apk --profile playgames-native --setup-only \
+~/.local/share/lepton-commands/lepton-run-apk --profile playgames-native --setup-only \
   --network-sysctls --seconds 1800 --execute
 ```
 
@@ -302,7 +303,7 @@ pkill -INT -f '[/]tests/runtime/run-apk.sh.*--profile playgames-native'
 Install/play with the same profile; subsequent runs reuse unchanged packages:
 
 ```bash
-~/.local/bin/lepton-run-apk --profile playgames-native --app --expect-abi x86_64 \
+~/.local/share/lepton-commands/lepton-run-apk --profile playgames-native --app --expect-abi x86_64 \
   --apk "$HOME/Downloads/com.google.android.play.games.apkm" \
   --network-sysctls --until-exit --execute
 ```
@@ -310,7 +311,7 @@ Install/play with the same profile; subsequent runs reuse unchanged packages:
 Stop the running session, fully exit Steam, and add the saved-profile shortcut:
 
 ```bash
-~/.local/bin/lepton-add-game "$HOME/Downloads/com.google.android.play.games.apkm" \
+~/.local/share/lepton-commands/lepton-add-game "$HOME/Downloads/com.google.android.play.games.apkm" \
   --runtime-profile playgames-native --expect-abi x86_64 \
   --name "Google Play Games (Lepton GApps)"
 ```

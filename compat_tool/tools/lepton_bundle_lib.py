@@ -566,8 +566,9 @@ Then use the new desktop/menu entries (no typing needed):
   "Lepton: Add Android game"    picks an APK/APKM; asks you to exit Steam, then
                                 says when it is safe to start Steam again
 Terminal equivalents:
-  ~/.local/bin/lepton-run-apk --gpu-check --execute
-  ~/.local/bin/lepton-add-game ~/path/to/game.apk   # with Steam exited
+  ~/.local/share/lepton-commands/lepton-run-apk --gpu-check --execute
+  leptron install ~/path/to/game.apk               # then, with Steam exited:
+  leptron add-to-steam PACKAGE
 
 Enable Touchscreen Native Support in the game's controller
 layout (Controller Settings > Edit Layout > Default Action Set >

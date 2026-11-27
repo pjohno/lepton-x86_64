@@ -154,7 +154,7 @@ deck_home="$work/deck-home"
 mkdir -p "$deck_home/.local/share/Steam"   # a native Steam install
 # LEPTON_INSTALL_IN_TERMINAL stops the installer reopening itself in Konsole.
 deck() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME LEPTON_INSTALL_IN_TERMINAL=1 LEPTON_NO_DIALOGS=1 HOME="$deck_home" bash "$pinned" --allow-non-amd "$@"; }
-manage() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$deck_home" python3 "$deck_home/.local/bin/lepton-manage-installs" "$@"; }
+manage() { env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$deck_home" python3 "$deck_home/.local/share/lepton-commands/lepton-manage-installs" "$@"; }
 mkdir -p "$deck_home/Desktop"
 deck --check > "$work/install-check.log"
 not grep -q 'Press Enter' "$work/install-check.log"
@@ -180,22 +180,28 @@ grep -Fq '"lepton fixture x86_64 (community)"' "$vdf"
 grep -Fq '"from_oslist" "android"' "$vdf"
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_fixture.env ]]
 ( source "$deck_home/.config/lepton-x86_64/lepton_x86_64_fixture.env"; [[ "$LEPTON_X86_INSTALL_DIR" == "$dest" ]] )
-[[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$dest/compat_tool/tools/lepton-add-game" ]]
+[[ "$(readlink -f "$deck_home/.local/share/lepton-commands/lepton-add-game")" == "$dest/compat_tool/tools/lepton-add-game" ]]
 [[ "$(readlink -f "$deck_home/.local/bin/leptron")" == "$dest/compat_tool/tools/leptron" ]]
 [[ -x "$dest/compat_tool/tools/android-library-runtime" && -f "$dest/compat_tool/tools/android_library.py" && -f "$dest/compat_tool/tools/lepton_steam.py" ]]
-[[ "$(readlink -f "$deck_home/.local/bin/lepton-run-apk")" == "$dest/tests/runtime/run-apk.sh" ]]
-[[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game-gui")" == "$dest/compat_tool/tools/lepton-add-game-gui" ]]
-grep -Fqx "Exec=\"$deck_home/.local/bin/lepton-add-game-gui\"" "$deck_home/.local/share/applications/lepton-x86_64-add-game.desktop"
+[[ "$(readlink -f "$deck_home/.local/share/lepton-commands/lepton-run-apk")" == "$dest/tests/runtime/run-apk.sh" ]]
+[[ "$(readlink -f "$deck_home/.local/share/lepton-commands/lepton-add-game-gui")" == "$dest/compat_tool/tools/lepton-add-game-gui" ]]
+grep -Fqx "Exec=\"$deck_home/.local/share/lepton-commands/lepton-add-game-gui\"" "$deck_home/.local/share/applications/lepton-x86_64-add-game.desktop"
 grep -Fq -- '--gpu-check --execute' "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
-grep -Fq "lepton-in-terminal\" \"$deck_home/.local/bin/lepton-run-apk\"" "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
+grep -Fq "lepton-in-terminal\" \"$deck_home/.local/share/lepton-commands/lepton-run-apk\"" "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
 not grep -q -- '--hold' "$deck_home/.local/share/applications/lepton-x86_64-gpu-check.desktop"
-[[ "$(readlink -f "$deck_home/.local/bin/lepton-in-terminal")" == "$dest/compat_tool/tools/lepton-in-terminal" ]]
+[[ "$(readlink -f "$deck_home/.local/share/lepton-commands/lepton-in-terminal")" == "$dest/compat_tool/tools/lepton-in-terminal" ]]
 [[ -x "$deck_home/Desktop/lepton-x86_64-add-game.desktop" && -x "$deck_home/Desktop/lepton-x86_64-gpu-check.desktop" ]]
+# Clean install: leptron is the only command on PATH, and the only one tab
+# completion offers (bash, PATH = ~/.local/bin only).
+completions() { env -i HOME="$deck_home" PATH="$deck_home/.local/bin" /bin/bash --norc --noprofile -c 'compgen -c lept' | sort -u; }
+[[ "$(ls -A "$deck_home/.local/bin")" == leptron ]]
+[[ "$(completions)" == leptron ]]
+env -i HOME="$deck_home" PATH="$deck_home/.local/bin:/usr/bin:/bin" leptron --help | grep -q '^usage: leptron '
 if command -v desktop-file-validate >/dev/null; then
     desktop-file-validate "$deck_home/.local/share/applications/"lepton-x86_64-*.desktop
 fi
 # The linked helper resolves its own install without flags.
-HOME="$deck_home" python3 - "$deck_home/.local/bin/lepton-add-game" "$dest" <<'PYADD'
+HOME="$deck_home" python3 - "$deck_home/.local/share/lepton-commands/lepton-add-game" "$dest" <<'PYADD'
 import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader('add_game', sys.argv[1])
 module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
@@ -255,8 +261,23 @@ if deck --into lepton_x86_64_dev > "$work/into-busy.log" 2>&1; then echo 'FAIL: 
 grep -q 'is running' "$work/into-busy.log"
 if manage --remove lepton_x86_64_dev --execute > "$work/remove-busy.log" 2>&1; then echo 'FAIL: removed a running install'; exit 1; fi
 kill "$busy"; wait "$busy" 2>/dev/null || true
+# Upgrade over an older version's commands in ~/.local/bin: its links into
+# Lepton installs (even dangling ones) go; other programs' files stay.
+bin="$deck_home/.local/bin"
+ln -sfn "$legacy/compat_tool/tools/lepton-add-game" "$bin/lepton-add-game"
+ln -sfn "$dest/compat_tool/tools/lepton-play" "$bin/lepton-play"
+ln -sfn "$deck_home/.local/share/gone/compat_tool/tools/lepton-library" "$bin/lepton-library"
+ln -sfn "$deck_home/.local/share/lepton-release-manager/lepton-release-manager" "$bin/lepton-release-manager"
+ln -sfn /usr/bin/true "$bin/lepton-run-apk"                 # someone else's program
+printf '#!/bin/sh\n' > "$bin/lepton-manage-installs"; chmod +x "$bin/lepton-manage-installs"   # a real file
+printf '#!/bin/sh\n' > "$bin/other-tool"; chmod +x "$bin/other-tool"
 # Overwrite the legacy install: same tool ID and directory, new contents and name.
 deck --into lepton_x86_64_dev > "$work/into.log"
+[[ "$(ls -A "$bin" | sort | tr '\n' ' ')" == "lepton-manage-installs lepton-run-apk leptron other-tool " ]]
+[[ "$(readlink "$bin/lepton-run-apk")" == /usr/bin/true ]]
+grep -Fq "Removed old command: $bin/lepton-library" "$work/into.log"
+rm -f "$bin/lepton-run-apk" "$bin/lepton-manage-installs" "$bin/other-tool"
+[[ "$(completions)" == leptron ]]
 [[ -f "$legacy/BUNDLE.json" && ! -e "$deck_home/.local/share/lepton_x86_64_dev" ]]
 python3 - "$legacy/BUNDLE.json" <<'PYINTO'
 import json, sys
@@ -267,14 +288,14 @@ grep -Fq "\"$legacy/compat_tool\"" "$deck_home/.local/share/Steam/compatibilityt
 grep -Fq '"lepton fixture x86_64 (community)"' "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf"
 not compgen -G "$legacy.previous-*" > /dev/null
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_dev.env ]]
-[[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$legacy/compat_tool/tools/lepton-add-game" ]]
+[[ "$(readlink -f "$deck_home/.local/share/lepton-commands/lepton-add-game")" == "$legacy/compat_tool/tools/lepton-add-game" ]]
 # --into requires an existing install.
 if deck --into lepton_missing > "$work/into-missing.log" 2>&1; then echo 'FAIL: --into missing accepted'; exit 1; fi
 # Remove the default install: default moves to the remaining install.
 manage --remove lepton_x86_64_dev --execute > "$work/remove-default.log"
 [[ ! -e "$legacy" && ! -e "$deck_home/.local/share/Steam/compatibilitytools.d/lepton_x86_64_dev.vdf" ]]
 [[ "$(readlink "$deck_home/.config/lepton-x86_64/default.env")" == lepton_x86_64_fixture.env ]]
-[[ "$(readlink -f "$deck_home/.local/bin/lepton-add-game")" == "$dest/compat_tool/tools/lepton-add-game" ]]
+[[ "$(readlink -f "$deck_home/.local/share/lepton-commands/lepton-add-game")" == "$dest/compat_tool/tools/lepton-add-game" ]]
 [[ "$(readlink -f "$deck_home/.local/bin/leptron")" == "$dest/compat_tool/tools/leptron" ]]
 [[ -x "$dest/compat_tool/tools/android-library-runtime" && -f "$dest/compat_tool/tools/android_library.py" && -f "$dest/compat_tool/tools/lepton_steam.py" ]]
 grep -q 'Default install: lepton fixture x86_64 (community)' "$work/remove-default.log"
@@ -407,7 +428,7 @@ grep -Fq 'lepton-add-game --google-play' "$work/gapps-offer.out"
 "$g_dest/tools/platform-tools/adb" version | grep -x 'Version 37.0.1-15733141' > /dev/null
 tar -tzf "$out/lepton-x86_64-gapps-fixture.tar.gz" > "$work/gapps-contents"
 not grep -Eq '(^|/)adb$|platform-tools' "$work/gapps-contents"
-env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$g_home" python3 "$g_home/.local/bin/lepton-manage-installs" \
+env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME="$g_home" python3 "$g_home/.local/share/lepton-commands/lepton-manage-installs" \
     --remove lepton_gapps_gapps_fixture --execute > /dev/null
 not compgen -G "$g_home/.local/share/applications/lepton-x86_64-google-*" > /dev/null
 not compgen -G "$g_home/Desktop/lepton-x86_64-google-*" > /dev/null

@@ -18,7 +18,8 @@ Two installation layouts are recognised, also side by side:
 ~/.config/lepton-x86_64/<id>.env, as "<dir>.previous-<date>" backups, and as
 unregistered Lepton directories.
 Removing deletes the directory, its registration and its env file, and moves
-the default (~/.local/bin links) to the newest remaining install. Steam does
+the default (~/.local/bin/leptron and the menu entries' links) to the newest
+remaining install. Steam does
 not need to be closed; restart it afterwards to refresh its tool list. An
 install that is currently running is never removed. This tool never closes
 or starts Steam. Other programs (Proton, GE-Proton...) are never listed or
@@ -39,15 +40,23 @@ HOME = Path.home()
 DATA = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share")
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "lepton-x86_64"
 BIN = HOME / ".local/bin"
+# leptron is the only command on the user's PATH. The menu entries and tools
+# reach the default install's other programs through private links.
+PUBLIC_LINKS = {"leptron": "compat_tool/tools/leptron"}
+PRIVATE_BIN = DATA / "lepton-commands"
 LINKS = {
     "lepton-add-game": "compat_tool/tools/lepton-add-game",
     "lepton-add-game-gui": "compat_tool/tools/lepton-add-game-gui",
     "lepton-in-terminal": "compat_tool/tools/lepton-in-terminal",
     "lepton-manage-installs": "compat_tool/tools/lepton-manage-installs",
-    "leptron": "compat_tool/tools/leptron",
     "lepton-play": "compat_tool/tools/lepton-play",
     "lepton-run-apk": "tests/runtime/run-apk.sh",
 }
+# Commands earlier installers linked into ~/.local/bin, with the targets they
+# used. Only such symlinks are removed, never files or other programs' links.
+OBSOLETE_COMMANDS = dict({name: (relative,) for name, relative in LINKS.items()},
+                         **{"lepton-library": ("compat_tool/tools/lepton-library",),
+                            "lepton-release-manager": ("lepton-release-manager/lepton-release-manager",)})
 DESKTOP_ENTRIES = ("lepton-x86_64-add-game.desktop", "lepton-x86_64-gpu-check.desktop",
                    "lepton-x86_64-manage-installs.desktop")
 TITLE = "Lepton: Manage installs"
@@ -75,11 +84,12 @@ class NotFound(ValueError):
 
 def use_home(home):
     """Work on another home directory (other programs and tests import this file)."""
-    global HOME, DATA, CONFIG, BIN
+    global HOME, DATA, CONFIG, BIN, PRIVATE_BIN
     HOME = Path(home)
     DATA = HOME / ".local/share"
     CONFIG = HOME / ".config/lepton-x86_64"
     BIN = HOME / ".local/bin"
+    PRIVATE_BIN = DATA / "lepton-commands"
     _STEAM_ROOT.clear()
 
 
@@ -423,13 +433,45 @@ def remove_tree(directory):
     shutil.rmtree(directory)
 
 
+def default_links():
+    """(link, path inside an install) for every link that follows the default install."""
+    return ([(PRIVATE_BIN / name, relative) for name, relative in LINKS.items()] +
+            [(BIN / name, relative) for name, relative in PUBLIC_LINKS.items()])
+
+
+def remove_obsolete_commands():
+    """Remove the lepton-* commands earlier installers put in ~/.local/bin."""
+    removed = []
+    for name, targets in OBSOLETE_COMMANDS.items():
+        link = BIN / name
+        if not link.is_symlink():
+            continue
+        try:
+            target = Path(os.readlink(link))
+        except OSError:
+            continue
+        target = target if target.is_absolute() else BIN / target
+        for relative in targets:
+            parts = Path(relative).parts
+            if target.parts[-len(parts):] != parts:
+                continue
+            root = target.parents[len(parts) - 1]
+            # Ours if it points into a Lepton install, the release manager's
+            # home, or (dangling) where a removed install used to be.
+            if not target.exists() or is_lepton_dir(root) or parts[0] == "lepton-release-manager":
+                link.unlink()
+                removed.append(str(link))
+            break
+    return removed
+
+
 def set_default(entry):
-    """Point default.env and the ~/.local/bin links at this install (or nothing)."""
+    """Point default.env and the default links at this install (or nothing)."""
     default = CONFIG / "default.env"
+    remove_obsolete_commands()
     if entry is None:
         default.unlink(missing_ok=True)
-        for name in LINKS:
-            link = BIN / name
+        for link, _ in default_links():
             if link.is_symlink():
                 link.unlink()
         for directory in (DATA / "applications", HOME / "Desktop"):
@@ -439,12 +481,12 @@ def set_default(entry):
     if entry.get("env"):
         default.unlink(missing_ok=True)
         default.symlink_to(Path(entry["env"]).name)
-    BIN.mkdir(parents=True, exist_ok=True)
-    for name, relative in LINKS.items():
-        link, target = BIN / name, Path(entry["dir"]) / relative
+    for link, relative in default_links():
+        target = Path(entry["dir"]) / relative
         if link.is_symlink() or link.exists():
             link.unlink()
         if target.exists():
+            link.parent.mkdir(parents=True, exist_ok=True)
             link.symlink_to(target)
 
 
@@ -495,7 +537,7 @@ def remove(keys, execute):
         remaining = [e for e in discover() if e["kind"] == "install"]
         current = default_tool()
         removed_default = any(e["default"] for e in selected)
-        links_broken = any(link.is_symlink() and not link.exists() for link in (BIN / n for n in LINKS))
+        links_broken = any(link.is_symlink() and not link.exists() for link, _ in default_links())
         if removed_default or links_broken or current not in [e["id"] for e in remaining]:
             with_env = sorted((e for e in remaining if e.get("env")),
                               key=lambda e: Path(e["env"]).stat().st_mtime, reverse=True)
@@ -647,6 +689,8 @@ def main():
                         help="(installer) ask: install as new or replace an existing install")
     action.add_argument("--gui-choose-layout", action="store_true",
                         help="(installer) ask: Lepton's folder or Steam's compatibility-tool folder")
+    action.add_argument("--remove-obsolete-commands", action="store_true",
+                        help="(installer) remove lepton-* commands earlier versions put in ~/.local/bin")
     parser.add_argument("--json", action="store_true", help="With --list: machine-readable output")
     parser.add_argument("--execute", action="store_true", help="With --remove: actually remove")
     parser.add_argument("--exclude", action="append", default=[], help="With --gui: hide this tool ID")
@@ -686,6 +730,10 @@ def main():
         entry = lookup(discover(), args.check_free)
         if in_use(entry["dir"]):
             fail(entry["name"] + " is running (a game or test uses it); stop it first")
+        return 0
+    if args.remove_obsolete_commands:
+        for link in remove_obsolete_commands():
+            print("Removed old command: " + link)
         return 0
     if args.gui_choose_target:
         if not (args.new_id and args.new_name):

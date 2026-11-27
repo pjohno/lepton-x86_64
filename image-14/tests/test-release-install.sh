@@ -131,7 +131,7 @@ check(manager.is_file() and (share / "lepton-release-manager/lepton-manage-insta
 check((share / "lepton-release-manager/allowed_signers").is_file(), "release keys installed")
 entry = (share / "applications/lepton-release-manager.desktop").read_text()
 check("Name=Lepton: Install / Update / Repair" in entry and str(manager) in entry, "manager menu entry")
-check((home / ".local/bin/lepton-release-manager").resolve() == manager.resolve(), "manager command link")
+check(sorted(p.name for p in (home / ".local/bin").iterdir()) == ["leptron"], "leptron is the only command on PATH")
 for name in ("lepton-x86_64-add-game", "lepton-x86_64-gpu-check", "lepton-x86_64-manage-installs",
              "lepton-release-manager"):
     check((home / "Desktop" / (name + ".desktop")).is_file(), "desktop icon " + name)

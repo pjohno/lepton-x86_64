@@ -269,8 +269,8 @@ def latest(releases, prerelease):
 # ---------------------------------------------------------------- installs
 def manage_installs():
     """lepton-manage-installs: the copy next to this program (the stable
-    location), else the default install's command."""
-    for candidate in (HERE / "lepton-manage-installs", HOME / ".local/bin/lepton-manage-installs"):
+    location), else the default install's (a private link, not on PATH)."""
+    for candidate in (HERE / "lepton-manage-installs", DATA / "lepton-commands/lepton-manage-installs"):
         if candidate.is_file():
             return candidate
     return None

@@ -231,7 +231,8 @@ bash lepton-x86_64-TAG.install.sh --check --new && bash lepton-x86_64-TAG.instal
 bash ~/.local/share/lepton_x86_64_TAG/tests/runtime/run-apk.sh --gpu-check --execute
 ```
 
-The new install becomes the default for `~/.local/bin/lepton-*` and
+The new install becomes the default for `leptron`, the menu entries'
+tools in `~/.local/share/lepton-commands/` and
 `~/.config/lepton-x86_64/default.env`; other installs and their game data are
 not changed. Copy a packaged rootfs instead only to bundle on the test
 computer. Use `rsync -a` without `-X`: the rootfs extended attributes are the
@@ -427,7 +428,8 @@ bash image-14/scripts/transfer-deck-bundle.sh --bundle-id gapps-ndk-20261104 --d
 Each puts an **Install Lepton *ID*** icon on the Deck's desktop; continue with
 [INSTALL-STEAM-DECK.md, step 3](INSTALL-STEAM-DECK.md#3-install-steam-deck-desktop-mode).
 To update an existing install in place instead (its games keep working), add
-`--replace TOOL_ID`; `lepton-manage-installs --list` on the Deck shows the IDs.
+`--replace TOOL_ID`; `~/.local/share/lepton-commands/lepton-manage-installs --list` on the Deck shows
+the IDs.
 
 ## Or install on this computer (experimental)
 

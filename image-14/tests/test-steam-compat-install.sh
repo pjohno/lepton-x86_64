@@ -177,7 +177,7 @@ inst v0.2.0-alpha --into lepton_x86_64_v0_1_0_alpha --steam-compat || { cat "$wo
 not compgen -G "$home/.local/share/lepton_x86_64_v0_1_0_alpha.previous-*" > /dev/null
 [[ "$(envval lepton_x86_64_v0_1_0_alpha LEPTON_X86_LAYOUT)" == steam-compat ]]
 [[ "$(envval lepton_x86_64_v0_1_0_alpha LEPTON_X86_INSTALL_DIR)" == "$(realpath "$steam_dir")" ]]
-[[ "$(readlink -f "$home/.local/bin/lepton-add-game")" == "$(realpath "$steam_dir")/compat_tool/tools/lepton-add-game" ]]
+[[ "$(readlink -f "$home/.local/share/lepton-commands/lepton-add-game")" == "$(realpath "$steam_dir")/compat_tool/tools/lepton-add-game" && "$(ls -A "$home/.local/bin")" == leptron ]]
 [[ "$(sha256sum < "$steam/config/config.vdf")" == "$mapping_sum" ]] || fail 'game shortcut mapping changed'
 [[ "$(cat "$steam/steamapps/compatdata/2000000000/baked/save")" == 'level 7' ]] || fail 'game data changed'
 [[ "$(manage --list --json | python3 -c 'import json,sys; print(sum(e["id"] == "lepton_x86_64_v0_1_0_alpha" for e in json.load(sys.stdin)))')" == 1 ]]

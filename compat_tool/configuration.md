@@ -94,7 +94,7 @@ LEPTON_SHARED_FOLDERS=none %command%
 and with `lepton-play`:
 
 ```bash
-LEPTON_SHARED_FOLDERS="Documents,Books" lepton-play game.apk
+LEPTON_SHARED_FOLDERS="Documents,Books" ~/.local/share/lepton-commands/lepton-play game.apk
 ```
 
 Writing the value:

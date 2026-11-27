@@ -37,6 +37,8 @@ touch "$steam/compatibilitytools.d/lepton_x86_64_a.vdf" "$steam/compatibilitytoo
       "$share/applications/other.desktop" "$home/Desktop/lepton-install-a.desktop" "$home/Desktop/steam.desktop" \
       "$home/Downloads/lepton-x86_64-a.tar.gz" "$home/Downloads/lepton-x86_64-steamdeck-old.tar.gz" "$home/Downloads/holiday.jpg" "$home/Downloads/lepton-x86_64-notes.txt" "$home/.local/bin/other-tool"
 ln -s "$share/lepton_x86_64_a/compat_tool/tools/lepton-add-game" "$home/.local/bin/lepton-add-game"
+ln -s "$share/lepton_x86_64_a/compat_tool/tools/leptron" "$home/.local/bin/leptron"
+mkdir -p "$share/lepton-commands"; ln -s "$share/lepton_x86_64_a/compat_tool/tools/lepton-play" "$share/lepton-commands/lepton-play"
 # Lepton: Install / Update / Repair (outside the versioned installs).
 mkdir -p "$share/lepton-release-manager"; touch "$share/lepton-release-manager/lepton-release-manager" \
     "$share/applications/lepton-release-manager.desktop" "$home/Desktop/lepton-release-manager.desktop"
@@ -47,7 +49,8 @@ lepton_items=("$share/lepton_x86_64_a" "$share/lepton-x86_64-dev" "$share/lepton
     "$home/.config/lepton-x86_64" "$home/.local/bin/lepton-add-game" "$share/applications/lepton-x86_64-add-game.desktop"
     "$home/Desktop/lepton-install-a.desktop" "$home/Downloads/lepton-x86_64-a.tar.gz" "$home/Downloads/lepton-x86_64-steamdeck-old.tar.gz" "$home/Downloads/lepton-deck-bundles"
     "$share/lepton-release-manager" "$share/applications/lepton-release-manager.desktop"
-    "$home/Desktop/lepton-release-manager.desktop" "$home/.local/bin/lepton-release-manager")
+    "$home/Desktop/lepton-release-manager.desktop" "$home/.local/bin/lepton-release-manager"
+    "$home/.local/bin/leptron" "$share/lepton-commands")
 unrelated=("$share/leptonic-other" "$share/other-app" "$steam/compatibilitytools.d/proton_custom.vdf"
     "$share/applications/other.desktop" "$home/Desktop/steam.desktop" "$home/Downloads/holiday.jpg" "$home/Downloads/lepton-x86_64-notes.txt"
     "$home/.local/bin/other-tool" "$steam/steamapps/compatdata/456")

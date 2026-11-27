@@ -304,6 +304,9 @@ rm -f -- "$TEMP.meta"
 (( ${#meta[@]} == 7 )) || fail 'Invalid BUNDLE.json'
 TOOL_ID="${meta[0]}"; TOOL_NAME="${meta[1]}"; INSTALL_NAME="${meta[2]}"
 BUNDLE_ID="${meta[3]}"; HAS_GAPPS="${meta[4]}"; HAS_NDK="${meta[5]}"; HAS_WIDEVINE="${meta[6]}"
+# Lepton's own folders next to the installs; never an install's name.
+[[ "$INSTALL_NAME" != lepton-commands && "$INSTALL_NAME" != lepton-release-manager ]] ||
+    fail "Invalid install directory name in BUNDLE.json: $INSTALL_NAME"
 MANAGE="$TEMP/compat_tool/tools/lepton-manage-installs"
 [[ -f "$MANAGE" ]] || fail 'Bundle lacks lepton-manage-installs'
 manage() { python3 "$MANAGE" "$@"; }
@@ -634,35 +637,44 @@ mv -f -- "$env_file.tmp" "$env_file"
 ln -sfn -- "$TOOL_ID.env" "$CONFIG_DIR/default.env"
 pass "Settings: $env_file (now the default install)"
 
+# leptron is the only command put on the user's PATH. The menu entries and
+# tools reach this (the default) install's other programs through private
+# links, which lepton-manage-installs moves when the default changes.
 bin_dir="$HOME/.local/bin"
-mkdir -p -- "$bin_dir"
-ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game" "$bin_dir/lepton-add-game"
-ln -sfn -- "$DEST/tests/runtime/run-apk.sh" "$bin_dir/lepton-run-apk"
-ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game-gui" "$bin_dir/lepton-add-game-gui"
-ln -sfn -- "$DEST/compat_tool/tools/lepton-in-terminal" "$bin_dir/lepton-in-terminal"
-ln -sfn -- "$DEST/compat_tool/tools/lepton-manage-installs" "$bin_dir/lepton-manage-installs"
-ln -sfn -- "$DEST/compat_tool/tools/lepton-play" "$bin_dir/lepton-play"
+private_bin="$DATA_HOME/lepton-commands"
+mkdir -p -- "$private_bin"
+ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game" "$private_bin/lepton-add-game"
+ln -sfn -- "$DEST/tests/runtime/run-apk.sh" "$private_bin/lepton-run-apk"
+ln -sfn -- "$DEST/compat_tool/tools/lepton-add-game-gui" "$private_bin/lepton-add-game-gui"
+ln -sfn -- "$DEST/compat_tool/tools/lepton-in-terminal" "$private_bin/lepton-in-terminal"
+ln -sfn -- "$DEST/compat_tool/tools/lepton-manage-installs" "$private_bin/lepton-manage-installs"
+ln -sfn -- "$DEST/compat_tool/tools/lepton-play" "$private_bin/lepton-play"
 if [[ -x "$DEST/compat_tool/tools/leptron" ]]; then
+    mkdir -p -- "$bin_dir"
     ln -sfn -- "$DEST/compat_tool/tools/leptron" "$bin_dir/leptron"
-    pass "Android Library command: $bin_dir/leptron"
+    pass "Command: $bin_dir/leptron"
 fi
-pass "Commands: $bin_dir/lepton-add-game, $bin_dir/lepton-add-game-gui, $bin_dir/lepton-run-apk, $bin_dir/lepton-play"
+# Earlier versions linked lepton-* commands into ~/.local/bin; remove those
+# links (only links to Lepton installs, never other programs' files).
+python3 "$DEST/compat_tool/tools/lepton-manage-installs" --remove-obsolete-commands ||
+    info "Could not remove old lepton-* commands from $bin_dir"
+pass "Tools for the menu entries: $private_bin"
 
 # Menu (and desktop) entries: usable without a keyboard. They use the
-# ~/.local/bin links, so they always follow the default (latest) install.
+# private links, so they always follow the default (latest) install.
 apps="$DATA_HOME/applications"
 mkdir -p -- "$apps"
 if command -v konsole >/dev/null 2>&1; then
-    check_exec="konsole -e \"$bin_dir/lepton-in-terminal\" \"$bin_dir/lepton-run-apk\" --gpu-check --execute"; check_terminal=false
+    check_exec="konsole -e \"$private_bin/lepton-in-terminal\" \"$private_bin/lepton-run-apk\" --gpu-check --execute"; check_terminal=false
 else
-    check_exec="\"$bin_dir/lepton-in-terminal\" \"$bin_dir/lepton-run-apk\" --gpu-check --execute"; check_terminal=true
+    check_exec="\"$private_bin/lepton-in-terminal\" \"$private_bin/lepton-run-apk\" --gpu-check --execute"; check_terminal=true
 fi
 cat > "$apps/lepton-x86_64-add-game.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=Lepton: Add Android game
 Comment=Add an APK to Steam with the Lepton x86_64 compatibility tool
-Exec="$bin_dir/lepton-add-game-gui"
+Exec="$private_bin/lepton-add-game-gui"
 Icon=applications-games
 Terminal=false
 Categories=Game;
@@ -682,7 +694,7 @@ cat > "$apps/lepton-x86_64-manage-installs.desktop" <<DESKTOP
 Type=Application
 Name=Lepton: Remove installs
 Comment=Remove old Lepton x86_64 installs and backups
-Exec="$bin_dir/lepton-manage-installs" --gui
+Exec="$private_bin/lepton-manage-installs" --gui
 Icon=edit-delete
 Terminal=false
 Categories=Game;
@@ -715,7 +727,6 @@ if [[ -f "$manager_src" ]]; then
         done
         install -m 644 "$DEST/compat_tool/release-keys/allowed_signers" "$manager_home/.allowed_signers.new"
         mv -f -- "$manager_home/.allowed_signers.new" "$manager_home/allowed_signers"
-        ln -sfn -- "$manager_home/lepton-release-manager" "$bin_dir/lepton-release-manager"
         cat > "$apps/lepton-release-manager.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
@@ -734,7 +745,7 @@ DESKTOP
 fi
 if [[ "$HAS_GAPPS" == true ]]; then
     # Google games use saved profiles inside THIS install, so these icons point
-    # at its own copy (not the ~/.local/bin default links).
+    # at its own copy (not the default install's links).
     google_gui="$DEST/compat_tool/tools/lepton-google-game-gui"
     for kind in add sign-in; do
         entry="lepton-x86_64-google-$kind-$TOOL_ID.desktop"
@@ -875,8 +886,9 @@ Next steps (desktop icons or application menu > Games; no typing needed)
      then start Steam again once it reports success
   3. In the game's controller layout enable Touchscreen Native Support
   4. "Lepton: Install / Update / Repair": later versions, updates and repair
-Terminal equivalents: lepton-run-apk --gpu-check --execute,
-                      lepton-add-game GAME.apk (with Steam exited; in ~/.local/bin)
+In a terminal: leptron install GAME.apk, then (with Steam exited)
+              leptron add-to-steam PACKAGE; leptron --help lists the rest
+Graphics check in a terminal: $private_bin/lepton-run-apk --gpu-check --execute
 Installed in: $DEST ($DEST_LAYOUT layout)
 EOF
 if [[ "$GOOGLE_PLAY_HINT" == true ]]; then
@@ -884,7 +896,7 @@ if [[ "$GOOGLE_PLAY_HINT" == true ]]; then
 
 Google Play in Steam (optional; this is a GApps install):
   "Lepton: Add Google Play to Steam ($BUNDLE_ID)" (desktop icon or menu), or,
-  with Steam exited: lepton-add-game --google-play --tool-id $TOOL_ID
+  with Steam exited: $DEST/compat_tool/tools/lepton-add-game --google-play --tool-id $TOOL_ID
   (several Steam accounts: add --userdata ~/.steam/root/userdata/<number>)
 EOF
 fi

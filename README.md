@@ -219,7 +219,7 @@ that overrides them.
 
 ### Library and unmanaged apps
 
-Apps you add with **Lepton: Add Android game** or `lepton-add-game FILE.apk`
+Apps you add with **Lepton: Add Android game**
 keep working as before, as do Steam-distributed games and apps installed from
 Google Play. The library doesn't take over existing profiles: installing an
 APK you already play creates a new, separate profile. `leptron status`
