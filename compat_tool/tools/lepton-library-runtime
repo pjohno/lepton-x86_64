@@ -337,8 +337,10 @@ def profile_install(root, package, baked, context, obb):
     if result != "newer":
         print(f"Verified {package} {describe(chosen)} in {baked.parent}", file=sys.stderr)
     # For NDK preparation: where Android put the code, and its identity.
+    # Every installation, even of identical APKs, extracts fresh libraries
+    # into a new directory, so the directory is part of the identity.
     print(live["dir"])
-    print(hashlib.sha256(repr(sorted(live["code"].items())).encode()).hexdigest())
+    print(hashlib.sha256(repr((live["dir"], sorted(live["code"].items()))).encode()).hexdigest())
 
 
 def install_pending(root, package, baked):

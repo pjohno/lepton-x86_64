@@ -311,12 +311,28 @@ class LibraryTests(LibraryCase):
             self.install(self.apk("bad.apk", pkg="../etc"))
         path = self.home / "malformed.apk"
         path.write_text("plain text")
-        with self.assertRaises(zipfile.BadZipFile):
+        with self.assertRaisesRegex(ValueError, "malformed.apk is not a complete APK"):
             self.install(path)
         valid = self.apk("valid.apk").read_bytes()
         (self.home / "truncated.apk").write_bytes(valid[:len(valid) // 2])
-        with self.assertRaises(zipfile.BadZipFile):
+        with self.assertRaisesRegex(ValueError, "not a complete APK"):
             self.install(self.home / "truncated.apk")
+        # A damaged compressed member is refused, not a traceback.
+        damaged = self.home / "damaged.apk"
+        with zipfile.ZipFile(damaged, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("AndroidManifest.xml", json.dumps(dict(package=package, key="a", version=1, split="")))
+            archive.writestr("classes.dex", os.urandom(4096) + b"x" * 65536)
+        data = bytearray(damaged.read_bytes())
+        offset = data.find(b"x" * 64) - 2000
+        data[offset:offset + 64] = b"\xff" * 64
+        damaged.write_bytes(bytes(data))
+        with self.assertRaisesRegex(ValueError, "damaged.apk is damaged"):
+            self.install(damaged)
+        bundle = self.home / "damaged.apkm"
+        with zipfile.ZipFile(bundle, "w") as archive:
+            archive.write(damaged, "base.apk")
+        with self.assertRaisesRegex(ValueError, "base.apk in damaged.apkm is damaged"):
+            self.install(bundle)
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr("../bad", "no")
         with self.assertRaisesRegex(ValueError, "Unsafe archive"):
@@ -455,7 +471,8 @@ class FakeAndroid:
         pass
 
     def installed(self, package):
-        return self.code and {"code": self.code, "dir": "/data/app/~~x==/" + package + "-y=="}
+        # Android uses a new code directory for every installation.
+        return self.code and {"code": self.code, "dir": f"/data/app/~~x{len(self.installs)}==/{package}-y=="}
 
     def checked(self, *args, **kwargs):
         return ""
@@ -524,12 +541,18 @@ class ProfileTests(LibraryCase):
     def test_first_install_and_ndk_code_identity(self):
         self.install(self.apk("v1.apk"))
         code_dir, code_id = self.launch()
-        self.assertEqual(code_dir, f"/data/app/~~x==/{package}-y==")
+        self.assertEqual(code_dir, f"/data/app/~~x1==/{package}-y==")
         self.assertRegex(code_id, "^[0-9a-f]{64}$")
         self.assertEqual(self.receipt()["installed"]["code"]["version_code"], 1)
         self.assertEqual(len(self.android.installs), 1)
         self.assertEqual(self.launch(), [code_dir, code_id])  # nothing to do
         self.assertEqual(len(self.android.installs), 1)
+        # Reinstalling identical APKs gives freshly extracted libraries in a
+        # new directory: a new identity, so NDK preparation runs again.
+        self.cli("reinstall", package)
+        new_dir, new_id = self.launch()
+        self.assertEqual(len(self.android.installs), 2)
+        self.assertNotEqual((new_dir, new_id), (code_dir, code_id))
 
     def test_accepted_update_is_promoted(self):
         directory, _, apk, _ = self.install(self.apk("v1.apk"))

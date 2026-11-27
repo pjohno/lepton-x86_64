@@ -33,6 +33,7 @@ import tempfile
 import time
 import uuid
 import zipfile
+import zlib
 
 TOOLS = Path(__file__).resolve().parent
 PACKAGE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+")
@@ -351,14 +352,25 @@ def android_sdk():
         return 34
 
 
-def apk_metadata(path):
-    with zipfile.ZipFile(path) as archive:
+def open_archive(path, label):
+    try:
+        return zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, EOFError) as exc:
+        raise ValueError(f"{label} is not a complete APK or APKM (damaged or unfinished download?): {exc}") from exc
+
+
+def apk_metadata(path, label=None):
+    label = label or path.name
+    with open_archive(path, label) as archive:
         names = archive_entries(archive)
         if "AndroidManifest.xml" not in names:
-            raise ValueError(f"{path.name} has no AndroidManifest.xml")
-        damaged = archive.testzip()
+            raise ValueError(f"{label} has no AndroidManifest.xml")
+        try:
+            damaged = archive.testzip()
+        except (zipfile.BadZipFile, zlib.error, EOFError, OSError) as exc:
+            damaged = f"unreadable data ({exc})"
         if damaged is not None:
-            raise ValueError(f"{path.name} is damaged (bad data in {damaged})")
+            raise ValueError(f"{label} is damaged ({damaged}); download it again")
     data = manifest(path)
     package = data.get("package")
     if not isinstance(package, str) or not PACKAGE.fullmatch(package):
@@ -383,21 +395,25 @@ def apk_metadata(path):
     }
 
 
-def inspect(path, suffix):
+def inspect(path, suffix, label=None):
     """Metadata for an APK or APKM file, checked for internal consistency."""
+    label = label or path.name
     if suffix == ".apk":
-        entries = {"base.apk": apk_metadata(path)}
+        entries = {"base.apk": apk_metadata(path, label)}
     else:
-        with zipfile.ZipFile(path) as archive, tempfile.TemporaryDirectory() as tmp:
+        with open_archive(path, label) as archive, tempfile.TemporaryDirectory() as tmp:
             apks = sorted(name for name in archive_entries(archive) if name.lower().endswith(".apk"))
             if "base.apk" not in apks or any(not re.fullmatch(r"[A-Za-z0-9_.-]+\.apk", name) for name in apks):
                 raise ValueError("APKM requires base.apk and flat split APK filenames")
             entries = {}
             for name in apks:
                 dest = Path(tmp) / name
-                with archive.open(name) as src, dest.open("xb") as out:
-                    shutil.copyfileobj(src, out)
-                entries[name] = apk_metadata(dest)
+                try:
+                    with archive.open(name) as src, dest.open("xb") as out:
+                        shutil.copyfileobj(src, out)
+                except (zipfile.BadZipFile, zlib.error, EOFError) as exc:
+                    raise ValueError(f"{label} is damaged ({name}: {exc}); download it again") from exc
+                entries[name] = apk_metadata(dest, f"{name} in {label}")
                 dest.unlink()
     base = entries["base.apk"]
     if base["split"]:
@@ -645,7 +661,7 @@ def import_app(root, source, *, mode, replace=False, obbs=(), dry_run=False, ver
         stage = Path(scratch)
         candidate_file = stage / ("candidate" + suffix)
         copy_file(source, candidate_file)
-        incoming = inspect(candidate_file, suffix)
+        incoming = inspect(candidate_file, suffix, source.name)
         package = incoming["package"]
         files = obb_files(obbs, package)
         directory = root / package
